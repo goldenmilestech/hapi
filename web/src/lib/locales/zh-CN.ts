@@ -266,6 +266,7 @@ export default {
 
   // Session inactive
   'session.inactive.autoResume': '此会话已停止。发送消息即可恢复。',
+  'session.inactive.shareGuest': '共享会话已停止，请联系会话所有者恢复。',
   'session.inactive.cannotResume': '此会话已停止，无法恢复。',
 
   // Session header
@@ -328,6 +329,31 @@ export default {
   'session.action.copyReference': '复制引用',
   'session.action.fork': '分叉会话',
   'session.action.forkRunning': '当前轮次完成后才能分叉此会话。',
+  'session.action.share': '分享会话',
+  'shareLink.title': '共享会话',
+  'shareLink.error.expired': '分享链接无效或已过期，请向会话所有者索取新链接。',
+  'share.dialog.title': '分享此会话',
+  'share.dialog.description': '拿到链接的人可以打开这一个会话并继续与 agent 对话。链接有有效期，可随时撤销。',
+  'share.dialog.mode': '权限',
+  'share.mode.chat': '仅对话',
+  'share.mode.chat_approve': '对话 + 批准工具请求',
+  'share.dialog.ttl': '有效期',
+  'share.ttl.1h': '1 小时',
+  'share.ttl.24h': '24 小时',
+  'share.ttl.7d': '7 天',
+  'share.dialog.create': '创建分享链接',
+  'share.dialog.creating': '创建中…',
+  'share.dialog.guestHint': '访客只能在此会话中发消息。',
+  'share.dialog.link': '分享链接',
+  'share.dialog.copy': '复制',
+  'share.dialog.copied': '已复制',
+  'share.dialog.linkOnce': '链接仅展示这一次，请立即保存；不再需要时可在下方撤销。',
+  'share.dialog.existing': '已创建的链接',
+  'share.dialog.loading': '加载中…',
+  'share.dialog.none': '还没有分享链接。',
+  'share.dialog.expires': '过期时间 {time}',
+  'share.dialog.revoked': '已撤销',
+  'share.dialog.revoke': '撤销',
 
   // Dialogs
   'dialog.uri.title': '打开此链接？',

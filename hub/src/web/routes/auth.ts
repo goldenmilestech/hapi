@@ -1,11 +1,13 @@
 import { Hono } from 'hono'
 import { SignJWT } from 'jose'
 import { AuthRequestSchema } from '@hapi/protocol'
+import type { SessionShareInfo, SessionShareMode } from '@hapi/protocol/apiTypes'
 import { getConfiguration } from '../../configuration'
 import { constantTimeEquals } from '../../utils/crypto'
 import { parseAccessToken } from '../../utils/accessToken'
 import { validateTelegramInitData } from '../telegramInitData'
 import { getOrCreateOwnerId } from '../../config/ownerId'
+import { hashShareToken, isShareActive } from '../../store/sessionShares'
 import type { WebAppEnv } from '../middleware/auth'
 import type { Store } from '../../store'
 
@@ -24,6 +26,9 @@ export function createAuthRoutes(jwtSecret: Uint8Array, store: Store): Hono<WebA
         let firstName: string | undefined
         let lastName: string | undefined
         let namespace: string
+        let shareSessionId: string | undefined
+        let shareMode: SessionShareMode | undefined
+        let shareInfo: SessionShareInfo | undefined
 
         // Access Token authentication (CLI_API_TOKEN)
         if ('accessToken' in parsed.data) {
@@ -35,6 +40,28 @@ export function createAuthRoutes(jwtSecret: Uint8Array, store: Store): Hono<WebA
             userId = await getOrCreateOwnerId()
             firstName = 'Web User'
             namespace = parsedToken.namespace
+        } else if ('shareToken' in parsed.data) {
+            // Session share authentication: the opaque token is exchanged for a
+            // short-lived JWT scoped to one session. The token itself is never
+            // used as the API bearer, so revocation only has to flip the row.
+            const share = store.sessionShares.getByTokenHash(hashShareToken(parsed.data.shareToken))
+            if (!share || !isShareActive(share)) {
+                return c.json({ error: 'Invalid or expired share token' }, 401)
+            }
+            const session = store.sessions.getSessionByNamespace(share.sessionId, share.namespace)
+            if (!session) {
+                return c.json({ error: 'Shared session not found' }, 401)
+            }
+            userId = await getOrCreateOwnerId()
+            firstName = 'Share Guest'
+            namespace = share.namespace
+            shareSessionId = share.sessionId
+            shareMode = share.mode
+            shareInfo = {
+                sessionId: share.sessionId,
+                mode: share.mode,
+                expiresAt: share.expiresAt
+            }
         } else {
             const configuration = getConfiguration()
             if (!configuration.telegramEnabled || !configuration.telegramBotToken) {
@@ -60,10 +87,15 @@ export function createAuthRoutes(jwtSecret: Uint8Array, store: Store): Hono<WebA
             namespace = storedUser.namespace
         }
 
-        const token = await new SignJWT({ uid: userId, ns: namespace })
+        const claims: Record<string, unknown> = { uid: userId, ns: namespace }
+        if (shareSessionId) {
+            claims.sid = shareSessionId
+            claims.mode = shareMode
+        }
+        const token = await new SignJWT(claims)
             .setProtectedHeader({ alg: 'HS256' })
             .setIssuedAt()
-            .setExpirationTime('4h')
+            .setExpirationTime(shareSessionId ? '15m' : '4h')
             .sign(jwtSecret)
 
         return c.json({
@@ -73,7 +105,8 @@ export function createAuthRoutes(jwtSecret: Uint8Array, store: Store): Hono<WebA
                 username,
                 firstName,
                 lastName
-            }
+            },
+            ...(shareInfo ? { share: shareInfo } : {})
         })
     })
 

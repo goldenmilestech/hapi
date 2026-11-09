@@ -169,7 +169,7 @@ function MissionsIcon(props: { className?: string }) {
 }
 
 function SessionsPage() {
-    const { api, baseUrl, titleSuggestionAvailable = false } = useAppContext()
+    const { api, baseUrl, titleSuggestionAvailable = false, share } = useAppContext()
     const navigate = useNavigate()
     const router = useRouter()
     const pathname = useLocation({ select: location => location.pathname })
@@ -303,6 +303,16 @@ function SessionsPage() {
         const nextHref = `${currentPathname}${nextSearch ? `?${nextSearch}` : ''}${hash}`
         router.history.replace(nextHref, state)
     }, [router, setIsSidebarVisible, sidebarHidden])
+
+    // Share visitors get the conversation only: no session list, no settings,
+    // no way to navigate to a sibling session.
+    if (share) {
+        return (
+            <div className="h-full min-h-0 flex flex-col">
+                <Outlet />
+            </div>
+        )
+    }
 
     return (
         <>
@@ -1478,6 +1488,35 @@ const shareRoute = createRoute({
     component: SharePage,
 })
 
+/**
+ * Entry point for a session share link. The opaque token lives in the URL; the
+ * auth layer exchanges it for a session-scoped JWT, and this route forwards the
+ * visitor to the single conversation the token unlocks.
+ */
+function ShareLinkPage() {
+    const { share } = useAppContext()
+    if (!share) {
+        return (
+            <div className="h-full flex items-center justify-center p-4">
+                <LoadingState label="Authorizing share link..." className="text-sm" />
+            </div>
+        )
+    }
+    return (
+        <Navigate
+            to="/sessions/$sessionId"
+            params={{ sessionId: share.sessionId }}
+            replace
+        />
+    )
+}
+
+const shareLinkRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/s/$token',
+    component: ShareLinkPage,
+})
+
 export const routeTree = rootRoute.addChildren([
     indexRoute,
     sessionsRoute.addChildren([
@@ -1508,6 +1547,7 @@ export const routeTree = rootRoute.addChildren([
         settingsAboutRoute,
     ]),
     shareRoute,
+    shareLinkRoute,
 ])
 
 type RouterHistory = Parameters<typeof createRouter>[0]['history']

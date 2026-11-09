@@ -266,6 +266,7 @@ export default {
 
   // Session inactive
   'session.inactive.autoResume': 'This session is inactive. Send a message to resume.',
+  'session.inactive.shareGuest': 'This shared session is inactive. Ask the owner to resume it.',
   'session.inactive.cannotResume': 'This session is inactive and cannot be resumed.',
 
   // Session header
@@ -328,6 +329,31 @@ export default {
   'session.action.copyReference': 'Copy reference',
   'session.action.fork': 'Fork session',
   'session.action.forkRunning': 'Wait for the current turn to finish before forking this session.',
+  'session.action.share': 'Share conversation',
+  'shareLink.title': 'Shared conversation',
+  'shareLink.error.expired': 'This share link is invalid or has expired. Ask the owner for a new link.',
+  'share.dialog.title': 'Share this conversation',
+  'share.dialog.description': 'Anyone with the link can open this single conversation and keep chatting with the agent. Links expire and can be revoked at any time.',
+  'share.dialog.mode': 'Access',
+  'share.mode.chat': 'Chat only',
+  'share.mode.chat_approve': 'Chat + approve tool requests',
+  'share.dialog.ttl': 'Expires in',
+  'share.ttl.1h': '1 hour',
+  'share.ttl.24h': '24 hours',
+  'share.ttl.7d': '7 days',
+  'share.dialog.create': 'Create share link',
+  'share.dialog.creating': 'Creating…',
+  'share.dialog.guestHint': 'The guest can send messages in this conversation only.',
+  'share.dialog.link': 'Share link',
+  'share.dialog.copy': 'Copy',
+  'share.dialog.copied': 'Copied',
+  'share.dialog.linkOnce': 'This link is shown only once. Store it now; revoke it below when it is no longer needed.',
+  'share.dialog.existing': 'Active links',
+  'share.dialog.loading': 'Loading…',
+  'share.dialog.none': 'No share links yet.',
+  'share.dialog.expires': 'Expires {time}',
+  'share.dialog.revoked': 'Revoked',
+  'share.dialog.revoke': 'Revoke',
 
   // Dialogs
   'dialog.uri.title': 'Open this link?',

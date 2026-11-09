@@ -119,6 +119,14 @@ export const ClearOpencodeSessionCallbackRequestSchema = z.object({
 })
 export type ClearOpencodeSessionCallbackRequest = z.infer<typeof ClearOpencodeSessionCallbackRequestSchema>
 
+export type SessionShareMode = 'chat' | 'chat_approve'
+
+export type SessionShareInfo = {
+    sessionId: string
+    mode: SessionShareMode
+    expiresAt: number | null
+}
+
 export type AuthResponse = {
     token: string
     user: {
@@ -127,6 +135,11 @@ export type AuthResponse = {
         firstName?: string
         lastName?: string
     }
+    /**
+     * Present only when the token was issued from a session share link.
+     * Clients use it to render a single-session view.
+     */
+    share?: SessionShareInfo
 }
 
 export type SessionsResponse = { sessions: SessionSummary[] }
@@ -818,8 +831,35 @@ export type AgentAvailabilityResponse = z.infer<typeof AgentAvailabilityResponse
 
 export const AuthRequestSchema = z.union([
     z.object({ initData: z.string() }),
-    z.object({ accessToken: z.string() })
+    z.object({ accessToken: z.string() }),
+    z.object({ shareToken: z.string().min(1) })
 ])
+
+export const CreateSessionShareRequestSchema = z.object({
+    mode: z.enum(['chat', 'chat_approve']).optional(),
+    ttlHours: z.number().int().min(1).max(168).optional()
+})
+
+export type CreateSessionShareRequest = z.infer<typeof CreateSessionShareRequestSchema>
+
+export type SessionShareSummary = {
+    id: string
+    mode: SessionShareMode
+    createdAt: number
+    expiresAt: number | null
+    revokedAt: number | null
+}
+
+export type CreateSessionShareResponse = {
+    share: SessionShareSummary & {
+        token: string
+        url: string
+    }
+}
+
+export type SessionShareListResponse = {
+    shares: SessionShareSummary[]
+}
 
 export type AuthRequest = z.infer<typeof AuthRequestSchema>
 

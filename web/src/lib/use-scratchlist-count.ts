@@ -16,14 +16,14 @@ import { queryKeys } from '@/lib/query-keys'
  * inline because the list could be long and would compete with the
  * confirm action for attention.
  */
-export function useScratchlistCount(sessionId: string, api: ApiClient | null): number {
+export function useScratchlistCount(sessionId: string, api: ApiClient | null, enabled: boolean = true): number {
     const query = useQuery<{ entries: Array<unknown> }>({
         queryKey: queryKeys.scratchlist(sessionId),
         queryFn: async () => {
             if (!api) return { entries: [] }
             return await api.getScratchlist(sessionId)
         },
-        enabled: Boolean(api && sessionId),
+        enabled: enabled && Boolean(api && sessionId),
         staleTime: 30_000,
     })
     return query.data?.entries.length ?? 0

@@ -26,6 +26,10 @@ export function requireSession(
         const error = access.reason === 'access-denied' ? 'Session access denied' : 'Session not found'
         return c.json({ error }, status)
     }
+    const shareSessionId = c.get('sessionId')
+    if (shareSessionId && access.sessionId !== shareSessionId && sessionId !== shareSessionId) {
+        return c.json({ error: 'Share token does not grant access to this session' }, 403)
+    }
     if (options?.requireActive && !access.session.active) {
         // `code` lets the web client discriminate the inactive-session 409 from
         // other 4xx without string-matching the human message (which is i18n'd
