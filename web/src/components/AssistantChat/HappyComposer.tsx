@@ -22,6 +22,7 @@ import {
 } from 'react'
 import { useNarrowViewport } from '@/hooks/useNarrowViewport'
 import { isRichComposerMentionsEnabled, resolveComposerPlaceholderKey } from '@/lib/composerSegments'
+import { useOptionalAppContext } from '@/lib/app-context'
 import type { SessionMentionResolveResult } from '@/components/AssistantChat/RichComposerInput'
 import {
     RichComposerInput,
@@ -391,6 +392,7 @@ export function HappyComposer(props: {
     resolveSessionMentionTooltip?: (id: string, title: string) => SessionMentionResolveResult
 }) {
     const { t } = useTranslation()
+    const { share } = useOptionalAppContext() ?? {}
     const {
         sessionId,
         disabled = false,
@@ -2320,7 +2322,7 @@ export function HappyComposer(props: {
                                 />
                             )}
                         </div>
-                        {richMentionsEnabled && richComposerFueStatus === 'engaging' ? (
+                        {richMentionsEnabled && !share && richComposerFueStatus === 'engaging' ? (
                             <FueCallout
                                 title={t('richComposer.fueTitle')}
                                 body={t('richComposer.fueBody')}
@@ -2335,7 +2337,7 @@ export function HappyComposer(props: {
                         <ComposerButtons
                             canSend={canSend}
                             controlsDisabled={controlsDisabled}
-                            showSettingsButton={showSettingsButton}
+                            showSettingsButton={showSettingsButton && !share}
                             settingsButtonRef={settingsButtonRef}
                             settingsDisabled={modelEffortControlsDisabled}
                             modelValueButtonRef={modelValueButtonRef}
@@ -2343,7 +2345,7 @@ export function HappyComposer(props: {
                             onSettingsToggle={handleGearToggle}
                             expanded={isExpanded}
                             onExpandedToggle={handleExpandedToggle}
-                            showTerminalButton={showTerminalButton}
+                            showTerminalButton={showTerminalButton && !share}
                             terminalDisabled={terminalDisabled}
                             terminalLabel={terminalLabel}
                             onTerminal={onTerminal ?? (() => {})}
@@ -2355,28 +2357,28 @@ export function HappyComposer(props: {
                             switchDisabled={switchDisabled}
                             isSwitching={isSwitching}
                             onSwitch={handleSwitch}
-                            voiceEnabled={voiceEnabled}
-                            dictationEnabled={dictationActive}
+                            voiceEnabled={voiceEnabled && !share}
+                            dictationEnabled={share ? false : dictationActive}
                             voiceStatus={effectiveVoiceStatus}
                             voiceMicMuted={dictationActive ? false : voiceMicMuted}
                             onVoiceToggle={effectiveVoiceToggle ?? (() => {})}
                             onVoiceMicToggle={dictationActive ? undefined : onVoiceMicToggle}
                             onSend={handleSend}
                             pendingSchedule={pendingSchedule}
-                            onSchedule={handleUserSchedule}
-                            onClearSchedule={onUserClearSchedule}
+                            onSchedule={share ? undefined : handleUserSchedule}
+                            onClearSchedule={share ? undefined : onUserClearSchedule}
                             hasAttachments={blocksScheduling}
-                            modelValueLabel={modelValueLabel}
+                            modelValueLabel={share ? undefined : modelValueLabel}
                             modelValueDisabled={modelEffortControlsDisabled}
-                            modelValueOpen={showSettings && settingsSection !== 'effort'}
+                            modelValueOpen={!share && showSettings && settingsSection !== 'effort'}
                             onModelValueToggle={handleModelValueToggle}
-                            effortValueLabel={effortValueLabel}
+                            effortValueLabel={share ? undefined : effortValueLabel}
                             effortValueDisabled={modelEffortControlsDisabled}
-                            effortValueOpen={showSettings && settingsSection !== 'model'}
+                            effortValueOpen={!share && showSettings && settingsSection !== 'model'}
                             onEffortValueToggle={handleEffortValueToggle}
                             scratchlistMode={props.scratchlistMode}
                             scratchlistCount={props.scratchlistCount}
-                            onScratchlistToggle={props.onScratchlistToggle}
+                            onScratchlistToggle={share ? undefined : props.onScratchlistToggle}
                         />
                     </div>
                 </ComposerPrimitive.Root>

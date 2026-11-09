@@ -5,7 +5,7 @@ import { safeCopyToClipboard } from '@/lib/clipboard'
 import { buildSessionReferenceText } from '@/lib/sessionReference'
 import { usePlatform } from '@/hooks/usePlatform'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
-import { CopyIcon } from '@/components/icons'
+import { CopyIcon, ShareIcon } from '@/components/icons'
 
 type SessionActionMenuProps = {
     isOpen: boolean
@@ -18,6 +18,7 @@ type SessionActionMenuProps = {
     sessionGlobalPinned?: boolean
     onSetPinMode?: (mode: 'none' | 'project' | 'global') => void
     onExport?: () => void
+    onShare?: () => void
     onMarkUnread?: () => void
     onSyncCodex?: () => void
     onSyncPi?: () => void
@@ -199,6 +200,7 @@ export function SessionActionMenu(props: SessionActionMenuProps) {
         sessionGlobalPinned = false,
         onSetPinMode,
         onExport,
+        onShare,
         onMarkUnread,
         onSyncCodex,
         onSyncPi,
@@ -314,6 +316,18 @@ export function SessionActionMenu(props: SessionActionMenuProps) {
                     <CopyIcon className="h-[18px] w-[18px] text-[var(--app-hint)]" />
                     {t('session.action.copyReference')}
                 </button>
+
+                {onShare ? (
+                    <button
+                        type="button"
+                        role="menuitem"
+                        className={`${baseItemClassName} hover:bg-[var(--app-subtle-bg)]`}
+                        onClick={() => { onClose(); onShare() }}
+                    >
+                        <ShareIcon className="h-[18px] w-[18px] text-[var(--app-hint)]" />
+                        {t('session.action.share')}
+                    </button>
+                ) : null}
 
                 {onMarkUnread ? (
                     <button

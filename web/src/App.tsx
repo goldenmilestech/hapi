@@ -69,7 +69,7 @@ function AppInner() {
     const { t } = useTranslation()
     const { serverUrl, baseUrl, setServerUrl, clearServerUrl } = useServerUrl()
     const { authSource, isLoading: isAuthSourceLoading, setAccessToken } = useAuthSource(baseUrl)
-    const { token, api, isLoading: isAuthLoading, error: authError, needsBinding, bind } = useAuth(authSource, baseUrl)
+    const { token, api, share, isLoading: isAuthLoading, error: authError, needsBinding, bind } = useAuth(authSource, baseUrl)
     const [titleSuggestionAvailable, setTitleSuggestionAvailable] = useState(false)
     const goBack = useAppGoBack()
     const pathname = useLocation({ select: (location) => location.pathname })
@@ -396,11 +396,15 @@ function AppInner() {
         () => getAppSessionSseSubscription(selectedSessionId),
         [selectedSessionId]
     )
+    const shareMode = Boolean(share)
+    // A share JWT is scoped to one session; the namespace-wide stream would be
+    // rejected by the hub, so only the session-scoped subscription runs.
     const sseEnabled = Boolean(api && token)
+    const globalSseEnabled = sseEnabled && !shareMode
     const showReconnectingBanner = sseDisconnected && !isSyncing
 
     const { subscriptionId: globalSubscriptionId } = useSSE({
-        enabled: sseEnabled,
+        enabled: globalSseEnabled,
         token: token ?? '',
         baseUrl,
         subscription: globalEventSubscription,
@@ -424,7 +428,7 @@ function AppInner() {
     useVisibilityReporter({
         api,
         subscriptionId: globalSubscriptionId,
-        enabled: sseEnabled
+        enabled: globalSseEnabled
     })
 
     useVisibilityReporter({
@@ -497,6 +501,15 @@ function AppInner() {
             )
         }
 
+        if (authSource.type === 'share') {
+            return withPwaBanner(
+                <div className="p-4 space-y-2">
+                    <div className="text-base font-semibold">{t('shareLink.title')}</div>
+                    <div className="text-sm text-red-600">{authError ?? t('shareLink.error.expired')}</div>
+                </div>,
+            )
+        }
+
         // Telegram auth failed
         return withPwaBanner(
             <div className="p-4 space-y-3">
@@ -512,7 +525,7 @@ function AppInner() {
     }
 
     return (
-        <AppContextProvider value={{ api, token, baseUrl, titleSuggestionAvailable }}>
+        <AppContextProvider value={{ api, token, baseUrl, titleSuggestionAvailable, share }}>
             <VoiceProvider>
                 <PwaUpdateBannerWithStatusOffset
                     isSyncing={isSyncing}

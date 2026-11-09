@@ -2,17 +2,100 @@ import type { MiddlewareHandler } from 'hono'
 import { z } from 'zod'
 import { jwtVerify } from 'jose'
 
+export type ShareMode = 'chat' | 'chat_approve'
+
 export type WebAppEnv = {
     Variables: {
         userId: number
         namespace: string
+        /** Set only for session-share JWTs: the single session they may touch. */
+        sessionId?: string
+        shareMode?: ShareMode
     }
 }
 
 const jwtPayloadSchema = z.object({
     uid: z.number(),
-    ns: z.string()
+    ns: z.string(),
+    sid: z.string().optional(),
+    mode: z.enum(['chat', 'chat_approve']).optional()
 })
+
+/**
+ * Session share tokens are deliberately narrow. Anything not listed here is
+ * rejected before it reaches a route handler, so a share link cannot be used
+ * to reach another session, the terminal, git, settings or machine control.
+ */
+function isShareRequestAllowed(
+    method: string,
+    path: string,
+    sessionId: string,
+    mode: ShareMode | undefined,
+    querySessionId: string | undefined
+): boolean {
+    if (path === '/api/events') {
+        // A share subscription must name the shared session explicitly,
+        // otherwise the SSE manager would stream every session in the
+        // namespace.
+        return method === 'GET' && querySessionId === sessionId
+    }
+    if (path === '/api/health' || path === '/api/machines' || path === '/api/sessions' || path === '/api/hub-settings') {
+        return method === 'GET'
+    }
+    if (path === '/api/voice/backend' || path === '/api/voice/transcription/providers') {
+        return method === 'GET'
+    }
+    if (path === '/api/visibility') {
+        return method === 'POST'
+    }
+
+    const prefix = '/api/sessions/'
+    if (!path.startsWith(prefix)) {
+        return false
+    }
+    const rest = path.slice(prefix.length)
+    const slashIndex = rest.indexOf('/')
+    const rawId = slashIndex === -1 ? rest : rest.slice(0, slashIndex)
+    let requestSessionId: string
+    try {
+        requestSessionId = decodeURIComponent(rawId)
+    } catch {
+        return false
+    }
+    if (requestSessionId !== sessionId) {
+        return false
+    }
+
+    const subPath = slashIndex === -1 ? '' : rest.slice(slashIndex)
+    if (subPath === '' || subPath === '/') {
+        return method === 'GET'
+    }
+
+    const rules: Array<{ pattern: RegExp; methods: string[]; requireApprove?: boolean }> = [
+        { pattern: /^\/messages$/, methods: ['GET', 'POST'] },
+        { pattern: /^\/messages\/[^/]+$/, methods: ['DELETE'] },
+        { pattern: /^\/messages\/queued-state$/, methods: ['POST'] },
+        { pattern: /^\/messages\/[^/]+\/retry$/, methods: ['POST'] },
+        { pattern: /^\/messages\/[^/]+\/steer$/, methods: ['POST'] },
+        { pattern: /^\/slash-commands$/, methods: ['GET'] },
+        { pattern: /^\/skills$/, methods: ['GET'] },
+        { pattern: /^\/cursor-chat-store$/, methods: ['GET'] },
+        { pattern: /^\/read-state$/, methods: ['PUT'] },
+        { pattern: /^\/upload$/, methods: ['POST'] },
+        { pattern: /^\/upload\/delete$/, methods: ['POST'] },
+        {
+            pattern: /^\/permissions\/[^/]+\/(approve|deny)$/,
+            methods: ['POST'],
+            requireApprove: true
+        }
+    ]
+
+    return rules.some((rule) => (
+        rule.pattern.test(subPath)
+        && rule.methods.includes(method)
+        && (!rule.requireApprove || mode === 'chat_approve')
+    ))
+}
 
 export function createAuthMiddleware(jwtSecret: Uint8Array): MiddlewareHandler<WebAppEnv> {
     return async (c, next) => {
@@ -40,6 +123,22 @@ export function createAuthMiddleware(jwtSecret: Uint8Array): MiddlewareHandler<W
 
             c.set('userId', parsed.data.uid)
             c.set('namespace', parsed.data.ns)
+
+            if (parsed.data.sid) {
+                const sessionId = parsed.data.sid
+                c.set('sessionId', sessionId)
+                c.set('shareMode', parsed.data.mode)
+                if (!isShareRequestAllowed(
+                    c.req.method,
+                    path,
+                    sessionId,
+                    parsed.data.mode,
+                    c.req.query().sessionId
+                )) {
+                    return c.json({ error: 'Share token does not grant access to this endpoint' }, 403)
+                }
+            }
+
             await next()
             return
         } catch {

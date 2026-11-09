@@ -45,6 +45,7 @@ import { useHubScratchlist } from '@/lib/use-hub-scratchlist'
 import { useSessions } from '@/hooks/queries/useSessions'
 import { getSessionTitle } from '@/lib/sessionTitle'
 import { formatSessionMentionTooltip } from '@/lib/sessionReference'
+import { useOptionalAppContext } from '@/lib/app-context'
 import { classifySessionAttention, getSessionAttentionLabelKey } from '@/lib/sessionAttention'
 import { getSessionLastSeenAt } from '@/lib/sessionLastSeen'
 import { formatRelativeTime } from '@/lib/relativeTime'
@@ -677,6 +678,7 @@ function SessionChatInner(props: SessionChatProps) {
         setRewindForkFallback(null)
     }, [onForkConversation, rewindForkFallback])
     const sessionInactive = !props.session.active
+    const { share } = useOptionalAppContext() ?? {}
     const inactiveCanResume = inactiveSessionCanResume(
         props.session,
         props.messages.length,
@@ -717,7 +719,7 @@ function SessionChatInner(props: SessionChatProps) {
     // after a later explicit variant click and overwrite it.
     const enqueueCursorModelApply = useMemo(() => createSerialAsyncQueue(), [])
     const lastSyncedCursorModelRef = useRef<string | null | undefined>(undefined)
-    const scratchlist = useHubScratchlist(props.session.id, props.api)
+    const scratchlist = useHubScratchlist(props.session.id, props.api, !share)
     const queryClient = useQueryClient()
     const { sessions: allSessions } = useSessions(props.api)
     const resolveSessionMentionTooltip = useCallback((id: string, title: string) => {
@@ -1887,7 +1889,7 @@ function SessionChatInner(props: SessionChatProps) {
             {sessionInactive ? (
                 <div className="mx-auto w-full max-w-content bg-[var(--app-subtle-bg)] p-3 text-center text-sm text-[var(--app-hint)]">
                     {inactiveCanResume
-                        ? t('session.inactive.autoResume')
+                        ? t(share ? 'session.inactive.shareGuest' : 'session.inactive.autoResume')
                         : t('session.inactive.cannotResume')}
                 </div>
             ) : null}

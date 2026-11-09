@@ -3,6 +3,9 @@ import { Hono } from 'hono'
 import type { Session, SyncEngine } from '../../sync/syncEngine'
 import type { WebAppEnv } from '../middleware/auth'
 import { createSessionsRoutes } from './sessions'
+import { Store } from '../../store'
+
+const store = new Store(':memory:')
 
 function createSession(overrides?: Partial<Session>): Session {
     const baseMetadata = {
@@ -176,7 +179,7 @@ function createApp(session: Session, opts?: {
         c.set('namespace', 'default')
         await next()
     })
-    app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+    app.route('/api', createSessionsRoutes(() => engine as SyncEngine, store))
 
     return { app, applySessionConfigCalls }
 }
@@ -1637,7 +1640,7 @@ describe('sessions routes', () => {
             c.set('namespace', 'default')
             await next()
         })
-        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine, store))
 
         const limited = await app.request('/api/sessions?limit=2')
         expect(limited.status).toBe(200)
@@ -1669,7 +1672,7 @@ describe('sessions routes', () => {
             c.set('namespace', 'default')
             await next()
         })
-        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine, store))
 
         const response = await app.request('/api/sessions?limit=1&order=updatedAt')
         expect(response.status).toBe(200)

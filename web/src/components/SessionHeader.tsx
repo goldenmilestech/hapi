@@ -6,6 +6,7 @@ import { isTelegramApp } from '@/hooks/useTelegram'
 import { sessionModelMutationKey, useSessionActions } from '@/hooks/mutations/useSessionActions'
 import { SessionActionMenu } from '@/components/SessionActionMenu'
 import { SessionExportDialog } from '@/components/SessionExportDialog'
+import { SessionShareDialog } from '@/components/SessionShareDialog'
 import { RenameSessionDialog } from '@/components/RenameSessionDialog'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useScratchlistCount } from '@/lib/use-scratchlist-count'
@@ -24,6 +25,7 @@ import { useMachines } from '@/hooks/queries/useMachines'
 import { useMachineLabels } from '@/hooks/useMachineLabels'
 import { formatAbsoluteDateTime, formatRelativeTime } from '@/lib/relativeTime'
 import { useSessionHeaderMetadata } from '@/hooks/useSessionHeaderMetadata'
+import { useOptionalAppContext } from '@/lib/app-context'
 import { formatSessionHeaderTimestamp } from '@/lib/sessionHeaderTimestamp'
 import { selectMobileSessionHeaderSecondary } from '@/lib/sessionHeaderMobileMetadata'
 import { useMinuteTick } from '@/hooks/useMinuteTick'
@@ -157,6 +159,8 @@ export function SessionHeader(props: {
     const { t, locale } = useTranslation()
     const queryClient = useQueryClient()
     const { addToast } = useToast()
+    const { share } = useOptionalAppContext() ?? {}
+    const isShareGuest = Boolean(share)
     const { session, api, onSessionDeleted, onSessionReopened } = props
     const title = useMemo(() => getSessionTitle(session), [session])
     const worktreeBranch = session.metadata?.worktree?.branch?.trim() || null
@@ -219,6 +223,7 @@ export function SessionHeader(props: {
     const menuAnchorRef = useRef<HTMLButtonElement | null>(null)
     const [renameOpen, setRenameOpen] = useState(false)
     const [exportOpen, setExportOpen] = useState(false)
+    const [shareOpen, setShareOpen] = useState(false)
     const [archiveOpen, setArchiveOpen] = useState(false)
     const [deleteOpen, setDeleteOpen] = useState(false)
     const [isSyncingCodex, setIsSyncingCodex] = useState(false)
@@ -247,7 +252,7 @@ export function SessionHeader(props: {
     // delete-confirm copy so the operator knows what cascades when they
     // confirm. Read-only hook reuses the cache filled by SessionChat -
     // no extra network when both components are mounted.
-    const scratchlistCount = useScratchlistCount(session.id, api)
+    const scratchlistCount = useScratchlistCount(session.id, api, !isShareGuest)
 
     const handleDelete = async () => {
         await deleteSession()
@@ -372,6 +377,7 @@ export function SessionHeader(props: {
             <div className="bg-[var(--app-bg)] pt-[env(safe-area-inset-top)]">
                 <div className="mx-auto w-full max-w-content flex items-center gap-2 p-3">
                     {/* Back button */}
+                    {!isShareGuest ? (
                     <button
                         type="button"
                         onClick={props.onBack}
@@ -391,6 +397,7 @@ export function SessionHeader(props: {
                             <polyline points="15 18 9 12 15 6" />
                         </svg>
                     </button>
+                    ) : null}
 
                     {/* Session info - two lines: title and path */}
                     <div className="min-w-0 flex-1">
@@ -456,7 +463,7 @@ export function SessionHeader(props: {
                         </div>
                     </div>
 
-                    {props.onToggleFiles ? (
+                    {props.onToggleFiles && !isShareGuest ? (
                         <button
                             type="button"
                             onClick={props.onToggleFiles}
@@ -482,7 +489,7 @@ export function SessionHeader(props: {
                         </button>
                     ) : null}
 
-                    {props.onToggleTerminal ? (
+                    {props.onToggleTerminal && !isShareGuest ? (
                         <button
                             type="button"
                             onClick={props.onToggleTerminal}
@@ -495,6 +502,7 @@ export function SessionHeader(props: {
                         </button>
                     ) : null}
 
+                    {!isShareGuest ? (
                     <button
                         type="button"
                         onClick={handleMenuToggle}
@@ -508,9 +516,11 @@ export function SessionHeader(props: {
                     >
                         <MoreVerticalIcon />
                     </button>
+                    ) : null}
                 </div>
             </div>
 
+            {!isShareGuest ? (
             <SessionActionMenu
                 isOpen={menuOpen}
                 onClose={() => setMenuOpen(false)}
@@ -523,6 +533,7 @@ export function SessionHeader(props: {
                 onMarkUnread={() => markSessionUnread(session.id, session.updatedAt)}
                 onSetPinMode={api ? (mode) => void handleSetPinMode(mode) : undefined}
                 onExport={() => setExportOpen(true)}
+                onShare={api ? () => setShareOpen(true) : undefined}
                 onSyncCodex={api && codexSessionId ? handleSyncCodex : undefined}
                 onSyncPi={api && piSessionId && !session.active ? handleSyncPi : undefined}
                 onArchive={() => setArchiveOpen(true)}
@@ -533,6 +544,7 @@ export function SessionHeader(props: {
                 anchorPoint={menuAnchorPoint}
                 menuId={menuId}
             />
+            ) : null}
 
             {reopenError ? (
                 <ConfirmDialog
@@ -564,6 +576,15 @@ export function SessionHeader(props: {
                 sessionId={session.id}
                 api={api}
             />
+
+            {api ? (
+                <SessionShareDialog
+                    isOpen={shareOpen}
+                    onClose={() => setShareOpen(false)}
+                    sessionId={session.id}
+                    api={api}
+                />
+            ) : null}
 
             <ConfirmDialog
                 isOpen={archiveOpen}
