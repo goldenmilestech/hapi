@@ -1,0 +1,154 @@
+# CLAUDE.md — 内部 fork 维护与部署
+
+本仓库是 `tiann/hapi` 的私有 fork，**只做内部维护，不向上游提 PR**。
+上游代码通过 merge 进入，内部改动通过分支进入，部署只认冻结的 `release/*`。
+`AGENTS.md` 是上游文件，保持只读，不要把内部约定写进去。
+
+## 远端
+
+| remote | URL | 用途 |
+|---|---|---|
+| `origin` | `https://github.com/tiann/hapi.git` | 上游，只 fetch，不 push |
+| `fork` | `git@github.com:qlqj-frederick-dong/hapi.git` | 内部，唯一推送目标 |
+
+## 分支模型
+
+```text
+origin/main (tiann/hapi)
+      │  git merge origin/main（上游发版后，在 main 上做一次）
+      ▼
+fork/main  ← feat/* fix/* 本地 merge 合入（不开 PR）
+      │  git switch -c release/YYYYMMDD-N main
+      ▼
+release/YYYYMMDD-N   ← 切出即冻结，只接受热修 cherry-pick
+      │  构建 + 上传
+      ▼
+VPS  →  tag: deploy-YYYYMMDD-N
+```
+
+| 分支 | 生命周期 | 规则 |
+|---|---|---|
+| `main` | 永久 | 唯一集成基线 = 上游最新 + 全部内部定制；只放已验收代码 |
+| `feat/*` `fix/*` | ≤ 2 周 | 从 `main` 切；用 rebase 跟进 `main`；合回后删除 |
+| `release/*` | 长期保留 | 从 `main` 切出后冻结；不开发新特性，只 cherry-pick 热修 |
+| `hotfix/*` | 小时级 | 从当前 `release` 切；合回 `main` 并 cherry-pick 回 `release` |
+
+## 常规操作
+
+### 开新功能
+
+```bash
+git fetch fork
+git switch -c feat/<slug> fork/main
+# 开发、测试
+```
+
+分支存在超过两周时，先 `git rebase fork/main` 再继续，避免再次出现落后数百个提交的分支。
+
+### 合入 main
+
+```bash
+git switch main
+git merge --no-ff feat/<slug>
+bun run typecheck && bun run test
+git push fork main
+git branch -d feat/<slug>
+```
+
+### 部署
+
+每次部署从 `main` 新切一个 `release` 分支，不在旧 release 上继续提交。
+
+```bash
+git fetch fork
+git switch -c release/2026-11-10 fork/main
+
+# 完整构建（含 tunwg 下载 + web 构建 + 嵌入资源）
+bun run build:single-exe
+# 只重建 Linux 二进制（web 资源已生成时）
+(cd cli && bun run build:exe:allinone --target bun-linux-x64-baseline --outdir dist-exe)
+
+SHA=$(git rev-parse --short=8 HEAD)
+# 产物：dist-exe/bun-linux-x64-baseline/hapi（约 160 MB，gzip 后约 80 MB）
+gzip -c dist-exe/bun-linux-x64-baseline/hapi \
+  | ssh root@124.220.24.3 "gunzip > /usr/local/bin/hapi.new"
+
+ssh root@124.220.24.3 "
+  set -e
+  systemctl stop hapi-hub
+  cp /usr/local/bin/hapi /usr/local/bin/hapi.bak-\$(date +%Y%m%d-%H%M)
+  mv /usr/local/bin/hapi.new /usr/local/bin/hapi
+  chmod +x /usr/local/bin/hapi
+  echo '$SHA' > /etc/hapi/DEPLOYED_COMMIT
+  systemctl start hapi-hub
+  sleep 2
+  systemctl is-active hapi-hub
+  curl -sf http://172.30.0.1:3006/health
+"
+
+git tag deploy-2026-11-10-1 release/2026-11-10
+git push fork --tags
+```
+
+部署后必须确认 `/health` 返回正常，并记录产物 SHA 与 tag 的对应关系。
+
+### 热修
+
+```bash
+git switch -c hotfix/<slug> release/<current>
+# 修复、验证
+git switch release/<current> && git merge --no-ff hotfix/<slug>   # 重新构建部署
+git switch main && git cherry-pick <sha>                          # 主线同步修复
+```
+
+### 上游同步
+
+```bash
+git fetch origin
+git switch main
+git merge origin/main
+bun run typecheck && bun run test
+git push fork main
+```
+
+冲突只在 `main` 上解决一次。`main` 不要 rebase：它是共享基线，且 `release/*` 从它切出，改写 SHA 会让线上 commit 失去对应关系。
+
+## 部署环境
+
+| 项 | 值 |
+|---|---|
+| hub 主机 | `124.220.24.3`（腾讯云 Debian 13） |
+| 域名 | `hapi.goldenmilestech.com`（Traefik → `172.30.0.1:3006`） |
+| 二进制 | `/usr/local/bin/hapi` |
+| 服务 | systemd `hapi-hub.service`，参数 `hapi hub --no-relay` |
+| 部署记录 | `/etc/hapi/DEPLOYED_COMMIT`（本次构建的 git SHA） |
+| 备份 | `/usr/local/bin/hapi.bak-<时间戳>`，保留上一版即可 |
+| 数据 | `/home/hapi/.hapi`（SQLite + token） |
+
+排障顺序：`systemctl status hapi-hub` → `journalctl -u hapi-hub -n 100` → Traefik 路由 → DNS。
+
+## 禁止事项
+
+- 不向 `origin` 提 PR，不向 `origin` push。
+- 不从 `feat/*` 或 `main` 直接部署；部署只认 `release/*` 的冻结提交。
+- 不 rebase `main`，不 force-push `main` / `release/*` / 已上线的 tag。
+- 不把未验收的代码合进 `main`；实验性功能留在 `feat/*`。
+- 不在 `release/*` 上开发新特性。
+
+## 内部定制清单
+
+| 分支/提交 | 内容 | 主要改动面 |
+|---|---|---|
+| `feat/session-share` | 会话分享链接（带作用域的临时 token） | hub 分享接口 + web 分享页 |
+| `feat/auto-title-provider` | hub 用首条用户消息自动生成会话标题 | `hub/src/sync/titleSuggestion.ts`、`syncEngine.ts`、`socket/handlers/cli/sessionHandlers.ts`、`startHub.ts` |
+| `feat/btw-side-question` | `/btw` 侧问题（不打断主会话） | cli + web |
+
+新增定制时在合并进 `main` 的同一个提交里更新此表，上游同步时按表逐项验证。
+
+## 迁移状态（2026-11-10，完成后删除本节）
+
+- `fork/main` = 上游 0.34.4（`2161a9ff`），不含任何定制。
+- 三条定制分支都基于 `86212a6a`，落后 `main` 288 个提交，且各自带一个本地重复的 `Release version 0.30.7`（`0239edf3`，上游对应 `facb66ee`）。
+- 线上二进制 = 0.30.7 + session-share + auto-title。
+- 待办：按 session-share → auto-title → btw 的顺序 `rebase --onto main`（丢弃 `0239edf3`），逐个验证后合入 `main`，切 `release/2026-11-10` 重建为 0.34.4。
+- 0.30.7 → 0.34.4 跨度较大，auto-title 的注入点（`sessionHandlers.ts` 的 `socket.on('message')`）必须重新做端到端验证，不能只看编译通过。
