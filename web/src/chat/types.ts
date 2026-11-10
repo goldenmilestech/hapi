@@ -30,9 +30,15 @@ export type RoundSummary = {
     durationMs?: number
 }
 
+export type SideQuestionInfo = {
+    question: string
+    synthetic?: boolean
+    error?: string
+}
+
 export type AgentEvent =
     | { type: 'switch'; mode: 'local' | 'remote' }
-    | { type: 'message'; message: string }
+    | { type: 'message'; message: string; sideQuestion?: SideQuestionInfo }
     | { type: 'error'; message: string }
     | { type: 'title-changed'; title: string }
     | { type: 'limit-reached'; endsAt: number; limitType: string }
@@ -52,6 +58,26 @@ export type AgentEvent =
     | { type: 'thread-goal-cleared'; threadId?: string }
     | { type: 'abort-restore'; text: string }
     | ({ type: string } & Record<string, unknown>)
+
+/**
+ * Read `/btw` metadata off an event. The catch-all AgentEvent variant keeps
+ * `event.sideQuestion` typed as unknown, so validate the fields here once
+ * instead of casting at every render site.
+ */
+export function getSideQuestionInfo(event: AgentEvent): SideQuestionInfo | null {
+    if (event.type !== 'message') return null
+    const value = (event as { sideQuestion?: unknown }).sideQuestion
+    if (!value || typeof value !== 'object') return null
+
+    const info = value as Partial<SideQuestionInfo>
+    if (typeof info.question !== 'string') return null
+
+    return {
+        question: info.question,
+        ...(info.synthetic === true ? { synthetic: true } : {}),
+        ...(typeof info.error === 'string' ? { error: info.error } : {})
+    }
+}
 
 export type ToolResultPermission = {
     date: number

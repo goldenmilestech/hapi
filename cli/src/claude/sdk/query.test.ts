@@ -117,4 +117,101 @@ describe('Query', () => {
         child.stdout.end()
         child.emit('close', 0)
     })
+
+    it('sends side_question control requests and parses the answer', async () => {
+        const { Query } = await import('./query')
+        const stdin = new PassThrough()
+        const stdout = new PassThrough()
+        const query = new Query(stdin, stdout, new Promise(() => {}))
+
+        let written = ''
+        stdin.on('data', (chunk) => {
+            written += chunk.toString()
+        })
+
+        const answerPromise = query.askSideQuestion('what changed?', {
+            history: [{ question: 'previous?', response: 'previous answer' }]
+        })
+
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        const request = JSON.parse(written.trim()) as {
+            request_id: string
+            request: {
+                subtype: string
+                question: string
+                history: Array<{ question: string; response: string }>
+            }
+        }
+        expect(request.request).toEqual({
+            subtype: 'side_question',
+            question: 'what changed?',
+            history: [{ question: 'previous?', response: 'previous answer' }]
+        })
+
+        stdout.write(JSON.stringify({
+            type: 'control_response',
+            response: {
+                subtype: 'success',
+                request_id: request.request_id,
+                response: { response: 'side answer', synthetic: false }
+            }
+        }) + '\n')
+
+        await expect(answerPromise).resolves.toEqual({
+            response: 'side answer',
+            synthetic: false
+        })
+        stdout.end()
+    })
+
+    it('rejects side questions on an error control response', async () => {
+        const { Query } = await import('./query')
+        const stdin = new PassThrough()
+        const stdout = new PassThrough()
+        const query = new Query(stdin, stdout, new Promise(() => {}))
+
+        let written = ''
+        stdin.on('data', (chunk) => {
+            written += chunk.toString()
+        })
+
+        const answerPromise = query.askSideQuestion('what changed?')
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        const request = JSON.parse(written.trim()) as { request_id: string }
+
+        stdout.write(JSON.stringify({
+            type: 'control_response',
+            response: {
+                subtype: 'error',
+                request_id: request.request_id,
+                error: 'side question disabled'
+            }
+        }) + '\n')
+
+        await expect(answerPromise).rejects.toThrow('side question disabled')
+        stdout.end()
+    })
+
+    it('times out a side question that never receives a control response', async () => {
+        const { Query } = await import('./query')
+        const stdin = new PassThrough()
+        const stdout = new PassThrough()
+        const query = new Query(stdin, stdout, new Promise(() => {}))
+
+        await expect(query.askSideQuestion('question', { timeoutMs: 20 }))
+            .rejects.toThrow('timed out')
+        stdout.end()
+    })
+
+    it('rejects pending side questions when the process exits', async () => {
+        const { Query } = await import('./query')
+        const stdin = new PassThrough()
+        const stdout = new PassThrough()
+        const query = new Query(stdin, stdout, Promise.resolve())
+
+        const answerPromise = query.askSideQuestion('question')
+        stdout.end()
+
+        await expect(answerPromise).rejects.toThrow('exited before')
+    })
 })

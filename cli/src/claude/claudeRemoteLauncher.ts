@@ -489,6 +489,9 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                         claudeEnvVars: session.claudeEnvVars,
                         claudeArgs: session.claudeArgs,
                         onMessage,
+                        onSideQuestionHandlerChange: (handler) => {
+                            session.setSideQuestionHandler(handler);
+                        },
                         onFirstResult: (initialMessage) => {
                             applySessionTitleFallback(session.client, initialMessage);
                         },
@@ -499,6 +502,7 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                         onSessionReset: () => {
                             logger.debug('[remote]: Session reset');
                             session.clearSessionId();
+                            session.clearSideQuestionHistory();
                             // /clear discards the resume anchor along with the
                             // context. Without this, the flag would outlive the
                             // reset (claudeRemote() returns before spawning
@@ -675,6 +679,7 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
 
     protected async cleanup(): Promise<void> {
         this.clearAbortHandlers(this.session.client.rpcHandlerManager);
+        this.session.setSideQuestionHandler(null);
 
         if (this.handleSessionFound) {
             this.session.removeSessionFoundCallback(this.handleSessionFound);

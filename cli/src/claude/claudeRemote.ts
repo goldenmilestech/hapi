@@ -12,6 +12,7 @@ import { PermissionResult } from "./sdk/types";
 import { getHapiBlobsDir } from "@/constants/uploadPaths";
 import { getDefaultClaudeCodePath } from "./sdk/utils";
 import { filterCatalogAffectingClaudeArgs } from "./sdk/metadataExtractor";
+import type { SideQuestionHandler } from "./sideQuestion";
 
 export async function claudeRemote(opts: {
 
@@ -39,7 +40,9 @@ export async function claudeRemote(opts: {
     onMessage: (message: SDKMessage) => void,
     onFirstResult?: (initialMessage: string) => void,
     onCompletionEvent?: (message: string) => void,
-    onSessionReset?: () => void
+    onSessionReset?: () => void,
+    /** Registers the active query's side-question channel; null when disposed. */
+    onSideQuestionHandlerChange?: (handler: SideQuestionHandler | null) => void
 }) {
     const debugPrefix = '[claudeRemote][async-debug]';
 
@@ -223,6 +226,9 @@ export async function claudeRemote(opts: {
     const response = query({
         prompt: messages,
         options: sdkOptions,
+    });
+    opts.onSideQuestionHandlerChange?.((question, history) => {
+        return response.askSideQuestion(question, { history });
     });
 
     let nextMessageFetchInFlight = false;
@@ -413,6 +419,7 @@ export async function claudeRemote(opts: {
             throw e;
         }
     } finally {
+        opts.onSideQuestionHandlerChange?.(null);
         logger.debug(
             `${debugPrefix} finally ` +
             `(streamMessages=${streamMessageSeq}, results=${resultSeq}, nextFetches=${nextMessageFetchSeq}, inputEnded=${inputEnded})`

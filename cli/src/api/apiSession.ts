@@ -1090,6 +1090,16 @@ export class ApiSessionClient extends EventEmitter {
     } | {
         type: 'message'
         message: string
+        /**
+         * `/btw` side-question answer metadata. The event reuses the normal
+         * message shape so clients that do not know this field still render
+         * the answer text.
+         */
+        sideQuestion?: {
+            question: string
+            synthetic?: boolean
+            error?: string
+        }
     } | {
         type: 'error'
         message: string

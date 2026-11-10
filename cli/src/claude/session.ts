@@ -7,6 +7,12 @@ import type { SessionEffort, SessionModel } from '@/api/types';
 import type { EnhancedMode } from './loop';
 import type { PermissionMode } from './loop';
 import type { LocalLaunchExitReason } from '@/agent/localLaunchPolicy';
+import {
+    SIDE_QUESTION_HISTORY_LIMIT,
+    type SideQuestionAnswer,
+    type SideQuestionHandler,
+    type SideQuestionHistoryEntry
+} from './sideQuestion';
 
 type LocalLaunchFailure = {
     message: string;
@@ -26,6 +32,8 @@ export class Session extends AgentSessionBase<EnhancedMode> {
     readonly startingMode: 'local' | 'remote';
     localLaunchFailure: LocalLaunchFailure | null = null;
     private nativeSkillNames = new Set<string>();
+    private sideQuestionHandler: SideQuestionHandler | null = null;
+    private sideQuestionHistory: SideQuestionHistoryEntry[] = [];
 
     constructor(opts: {
         api: ApiClient;
@@ -122,6 +130,39 @@ export class Session extends AgentSessionBase<EnhancedMode> {
     clearSessionId = (): void => {
         this.sessionId = null;
         logger.debug('[Session] Session ID cleared');
+    };
+
+    setSideQuestionHandler = (handler: SideQuestionHandler | null): void => {
+        this.sideQuestionHandler = handler;
+    };
+
+    hasSideQuestionHandler = (): boolean => {
+        return this.sideQuestionHandler !== null;
+    };
+
+    /**
+     * Ask a `/btw` side question against the active Claude query.
+     * Successful, non-synthetic exchanges are kept so follow-up questions can
+     * refer to earlier answers without touching the main conversation.
+     */
+    askSideQuestion = async (question: string): Promise<SideQuestionAnswer | null> => {
+        const handler = this.sideQuestionHandler;
+        if (!handler) {
+            throw new Error('Side question is not available');
+        }
+
+        const answer = await handler(question, [...this.sideQuestionHistory]);
+        if (answer && !answer.synthetic) {
+            this.sideQuestionHistory = [
+                ...this.sideQuestionHistory,
+                { question, response: answer.response }
+            ].slice(-SIDE_QUESTION_HISTORY_LIMIT);
+        }
+        return answer;
+    };
+
+    clearSideQuestionHistory = (): void => {
+        this.sideQuestionHistory = [];
     };
 
     /**

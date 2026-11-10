@@ -12,6 +12,7 @@ import { safeStringify } from '@hapi/protocol'
 import { renderEventLabel } from '@/chat/presentation'
 import type { ChatBlock, CliOutputBlock, CodexReview, RoundSummary, UsageData } from '@/chat/types'
 import type { AgentEvent, ToolCallBlock } from '@/chat/types'
+import { getSideQuestionInfo } from '@/chat/types'
 import type { ToolGroupBlock, VisibleChatBlock } from '@/chat/toolGroups'
 import { visibleBlockRole } from '@/chat/toolGroups'
 import type { AttachmentMetadata, MessageStatus as HappyMessageStatus, Session } from '@/types/api'
@@ -32,7 +33,7 @@ export type AggregatedAssistantMeta = {
 }
 
 export type HappyChatMessageMetadata = {
-    kind: 'user' | 'assistant' | 'tool' | 'event' | 'cli-output' | 'codex-review' | 'compact-summary'
+    kind: 'user' | 'assistant' | 'tool' | 'event' | 'cli-output' | 'codex-review' | 'compact-summary' | 'side-question'
     status?: HappyMessageStatus
     localId?: string | null
     originalText?: string
@@ -593,6 +594,29 @@ function toThreadMessageLike(
     }
 
     if (block.kind === 'agent-event') {
+        // A `/btw` answer is its own card: keep it out of the surrounding
+        // assistant response group and out of the main conversation.
+        const sideQuestion = getSideQuestionInfo(block.event)
+        if (sideQuestion) {
+            const rawMessage = (block.event as { message?: unknown }).message
+            return {
+                role: 'system',
+                id: threadMessageId,
+                createdAt: new Date(timestamp),
+                content: [{
+                    type: 'text',
+                    text: typeof rawMessage === 'string' ? rawMessage : sideQuestion.error ?? ''
+                }],
+                metadata: {
+                    custom: {
+                        kind: 'side-question',
+                        event: block.event,
+                        invokedAt: block.invokedAt,
+                        model: block.model
+                    } satisfies HappyChatMessageMetadata
+                }
+            }
+        }
         // Pi compaction summaries carry a real payload; surface them as a
         // dedicated system message so the chat can render an independent
         // block instead of a small status line.
