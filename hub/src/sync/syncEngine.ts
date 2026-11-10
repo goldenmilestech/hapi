@@ -198,6 +198,8 @@ export class SyncEngine {
     private readonly scratchlistUploadTails = new Map<string, Promise<unknown>>()
     /** Coalesce duplicate clear requests so retries cannot spawn two fresh sessions. */
     private readonly opencodeClearTails = new Map<string, Promise<ClearOpencodeSessionResult>>()
+    /** Sessions with an automatic title generation in flight. */
+    private readonly autoTitleInFlightIds = new Set<string>()
     /** Serialize fork/rewind per session so concurrent native rollbacks cannot stack. */
     private readonly historyActionsInFlight = new Set<string>()
     /**
@@ -1933,6 +1935,30 @@ export class SyncEngine {
 
     async suggestSessionTitle(sessionId: string): Promise<string> {
         return await this.titleSuggestionService.suggestTitle(sessionId)
+    }
+
+    /**
+     * Best-effort automatic title for a session that does not have one yet.
+     * Called when a user message lands, so the title is generated while the
+     * first turn runs instead of waiting for the agent to call change_title.
+     * Every failure (provider not configured, empty conversation, rate limit,
+     * network) is swallowed: titling must never affect message ingestion.
+     */
+    async maybeAutoGenerateTitle(sessionId: string): Promise<void> {
+        if (this.autoTitleInFlightIds.has(sessionId)) {
+            return
+        }
+        this.autoTitleInFlightIds.add(sessionId)
+        try {
+            const title = await this.titleSuggestionService.suggestTitleIfMissing(sessionId)
+            if (title) {
+                await this.sessionCache.updateSessionSummary(sessionId, title)
+            }
+        } catch {
+            // Optional feature: keep the existing fallback title.
+        } finally {
+            this.autoTitleInFlightIds.delete(sessionId)
+        }
     }
 
     async updateSessionSummary(sessionId: string, text: string): Promise<void> {
