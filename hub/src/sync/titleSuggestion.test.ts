@@ -237,3 +237,46 @@ describe('TitleSuggestionService', () => {
         })
     })
 })
+
+describe('TitleSuggestionService.suggestTitleIfMissing', () => {
+    function makeSessionWithMetadata(tag: string, metadata: unknown): { store: Store; sessionId: string } {
+        const store = new Store(':memory:')
+        const session = store.sessions.getOrCreateSession(tag, metadata, null, 'default')
+        return { store, sessionId: session.id }
+    }
+
+    it('skips sessions that already carry a manual name or an agent title', async () => {
+        for (const metadata of [
+            { path: '/tmp/title-named', host: 'localhost', name: 'Manual title' },
+            { path: '/tmp/title-agent', host: 'localhost', summary: { text: 'Agent title', updatedAt: 1 } }
+        ]) {
+            const { store, sessionId } = makeSessionWithMetadata(
+                `title-${Math.random().toString(36).slice(2)}`,
+                metadata
+            )
+            let called = false
+            const service = new TitleSuggestionService(store, {
+                provider: { suggest: async () => { called = true; return 'Generated title' } }
+            })
+
+            await expect(service.suggestTitleIfMissing(sessionId)).resolves.toBeNull()
+            expect(called).toBe(false)
+        }
+    })
+
+    it('generates a title when the session has none yet', async () => {
+        const { store, sessionId } = makeSessionWithMetadata('title-missing', {
+            path: '/tmp/title-missing',
+            host: 'localhost'
+        })
+        store.messages.addMessage(sessionId, {
+            role: 'user',
+            content: { type: 'text', text: 'Help me finish the release flow' }
+        })
+        const service = new TitleSuggestionService(store, {
+            provider: { suggest: async () => 'Release flow' }
+        })
+
+        await expect(service.suggestTitleIfMissing(sessionId)).resolves.toBe('Release flow')
+    })
+})
