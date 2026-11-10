@@ -48,6 +48,7 @@ export type SocketServerDeps = {
     onAgentProgress?: (sessionId: string, at: number) => void
     onSweepImmediateQueued?: (sessionId: string, now: number) => void
     onMessagesConsumed?: (sessionId: string) => void
+    onUserMessage?: (sessionId: string) => void
 }
 
 export function createSocketServer(deps: SocketServerDeps): {
@@ -136,7 +137,8 @@ export function createSocketServer(deps: SocketServerDeps): {
         onSessionActivity: deps.onSessionActivity,
         onAgentProgress: deps.onAgentProgress,
         onSweepImmediateQueued: deps.onSweepImmediateQueued,
-        onMessagesConsumed: deps.onMessagesConsumed
+        onMessagesConsumed: deps.onMessagesConsumed,
+        onUserMessage: deps.onUserMessage
     }))
 
     terminalNs.use(async (socket, next) => {

@@ -376,6 +376,26 @@ export class TitleSuggestionService {
         }
     }
 
+    /**
+     * Automatic callers use this so a manual rename or an agent-authored title
+     * always wins: only sessions without any title are considered, and the
+     * storage layer is never asked to rewrite a title that already exists.
+     */
+    async suggestTitleIfMissing(sessionId: string): Promise<string | null> {
+        const stored = this.store.sessions.getSession(sessionId)
+        const metadata = stored?.metadata as
+            | { name?: unknown; summary?: { text?: unknown } }
+            | null
+            | undefined
+        const hasName = typeof metadata?.name === 'string' && metadata.name.trim().length > 0
+        const hasSummary = typeof metadata?.summary?.text === 'string'
+            && metadata.summary.text.trim().length > 0
+        if (hasName || hasSummary) {
+            return null
+        }
+        return await this.suggestTitle(sessionId)
+    }
+
     async suggestTitle(sessionId: string): Promise<string> {
         if (!this.provider) {
             throw new TitleSuggestionError(

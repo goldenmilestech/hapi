@@ -106,10 +106,12 @@ export type SessionHandlersDeps = {
     /** Drops the queued-thinking grace so synchronous CLI handlers (e.g. slash
      *  commands) don't leave the spinner stuck for the full grace window. */
     onMessagesConsumed?: (sessionId: string) => void
+    /** A user message landed; lets the hub auto-title a session that has none. */
+    onUserMessage?: (sessionId: string) => void
 }
 
 export function registerSessionHandlers(socket: CliSocketWithData, deps: SessionHandlersDeps): void {
-    const { store, resolveSessionAccess, emitAccessError, onSessionAlive, onSessionReady, onSessionEnd, onWebappEvent, onBackgroundTasks, onSessionActivity, onAgentProgress, onSweepImmediateQueued, onMessagesConsumed } = deps
+    const { store, resolveSessionAccess, emitAccessError, onSessionAlive, onSessionReady, onSessionEnd, onWebappEvent, onBackgroundTasks, onSessionActivity, onAgentProgress, onSweepImmediateQueued, onMessagesConsumed, onUserMessage } = deps
 
     socket.on('native-queue-message', data => {
         const parsed = z.object({ sid: z.string(), localId: z.string().min(1), text: z.string().nullable() }).safeParse(data)
@@ -198,6 +200,7 @@ export function registerSessionHandlers(socket: CliSocketWithData, deps: Session
 
         if (shouldRecordSessionActivity(content)) {
             onSessionActivity?.(sid, msg.createdAt)
+            onUserMessage?.(sid)
         }
 
         const todos = extractTodoWriteTodosFromMessageContent(content)
