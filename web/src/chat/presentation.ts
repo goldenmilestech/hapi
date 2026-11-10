@@ -1,4 +1,4 @@
-import type { AgentEvent } from '@/chat/types'
+import { getSideQuestionInfo, type AgentEvent } from '@/chat/types'
 
 function normalizeTimestamp(value: number): Date {
     const ms = value < 1_000_000_000_000 ? value * 1000 : value
@@ -255,6 +255,13 @@ export function getEventPresentation(event: AgentEvent): EventPresentation {
         return { icon: '⚠️', text: typeof event.message === 'string' ? event.message : 'Error' }
     }
     if (event.type === 'message') {
+        const sideQuestion = getSideQuestionInfo(event)
+        if (sideQuestion) {
+            return {
+                icon: null,
+                text: sideQuestion.error ? 'Side question failed' : 'Side question'
+            }
+        }
         return { icon: null, text: typeof event.message === 'string' ? event.message : 'Message' }
     }
     if (event.type === 'turn-duration') {

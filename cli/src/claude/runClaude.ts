@@ -5,7 +5,7 @@ import { claudeProcessModeKey, EnhancedMode, PermissionMode } from './loop';
 import { MessageQueue2 } from '@/utils/MessageQueue2';
 import { hashObject } from '@/utils/deterministicJson';
 import { classifyClaudeSlashCatalog, extractSDKMetadata } from '@/claude/sdk/metadataExtractor';
-import { parseSpecialCommand } from '@/parsers/specialCommands';
+import { parseSideQuestion, parseSpecialCommand } from '@/parsers/specialCommands';
 import { getEnvironmentInfo } from '@/ui/doctor';
 import { startHappyServer, toClaudeAllowedHapiMcpTools } from '@/claude/utils/startHappyServer';
 import { startHookServer } from '@/claude/utils/startHookServer';
@@ -331,7 +331,97 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
     type UserMessageArgs = Parameters<UserMessageHandler>;
     const deferredMessages: UserMessageArgs[] = [];
     let messagePipelineReady = false;
+
+    /**
+     * `/btw` bypasses the main message queue entirely: it is answered by the
+     * active Claude query's side-question channel, never by the conversation
+     * turn. Returns true when the message was handled here.
+     */
+    const handleSideQuestionMessage = (
+        message: UserMessageArgs[0],
+        localId?: string
+    ): boolean => {
+        const sideQuestion = parseSideQuestion(message.content.text);
+        if (!sideQuestion.isSideQuestion) {
+            return false;
+        }
+
+        const consume = () => {
+            if (localId) {
+                session.emitMessagesConsumed([localId], { clearQueuedThinkingGrace: true });
+            }
+        };
+        const fail = (text: string) => {
+            consume();
+            session.sendSessionEvent({
+                type: 'message',
+                message: text,
+                sideQuestion: {
+                    question: sideQuestion.question,
+                    error: text
+                }
+            });
+        };
+
+        if (!sideQuestion.question) {
+            fail('Usage: /btw <question>');
+            return true;
+        }
+        if (message.content.attachments && message.content.attachments.length > 0) {
+            fail('Side questions do not support attachments.');
+            return true;
+        }
+
+        const activeSession = currentSessionRef.current;
+        if (!activeSession?.hasSideQuestionHandler()) {
+            fail('Side question unavailable: no active Claude session. Send a normal message first.');
+            return true;
+        }
+
+        consume();
+        void (async () => {
+            try {
+                const answer = await activeSession.askSideQuestion(sideQuestion.question);
+                if (!answer) {
+                    session.sendSessionEvent({
+                        type: 'message',
+                        message: 'No answer available for this side question.',
+                        sideQuestion: {
+                            question: sideQuestion.question,
+                            error: 'No answer available'
+                        }
+                    });
+                    return;
+                }
+                session.sendSessionEvent({
+                    type: 'message',
+                    message: answer.response,
+                    sideQuestion: {
+                        question: sideQuestion.question,
+                        ...(answer.synthetic ? { synthetic: true } : {})
+                    }
+                });
+            } catch (error) {
+                const detail = error instanceof Error ? error.message : String(error);
+                logger.debug('[start] Side question failed', error);
+                session.sendSessionEvent({
+                    type: 'message',
+                    message: `Side question failed: ${detail}`,
+                    sideQuestion: {
+                        question: sideQuestion.question,
+                        error: detail
+                    }
+                });
+            }
+        })();
+        return true;
+    };
+
     const handleUserMessage: UserMessageHandler = (message, localId) => {
+        if (handleSideQuestionMessage(message, localId)) {
+            return;
+        }
+
         const sessionPermissionMode = currentSessionRef.current?.getPermissionMode();
         if (sessionPermissionMode && isPermissionModeAllowedForFlavor(sessionPermissionMode, 'claude')) {
             currentPermissionMode = sessionPermissionMode as PermissionMode;

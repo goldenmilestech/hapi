@@ -16,6 +16,7 @@ export type {
     SDKControlResponse,
     ControlRequest,
     InterruptRequest,
+    SideQuestionRequest,
     SDKControlRequest,
     CanCallToolCallback,
     PermissionResult

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { MessagePrimitive, useAuiState } from '@assistant-ui/react'
 import { getEventPresentation } from '@/chat/presentation'
-import type { AgentEvent } from '@/chat/types'
+import { getSideQuestionInfo, type AgentEvent } from '@/chat/types'
 import type { HappyChatMessageMetadata } from '@/lib/assistant-runtime'
 import { getConversationMessageAnchorId } from '@/chat/outline'
 import { MessageTimestamp } from '@/components/AssistantChat/messages/MessageTimestamp'
@@ -98,6 +98,13 @@ export function HappySystemMessage() {
         const custom = s.message.metadata.custom as Partial<HappyChatMessageMetadata> | undefined
         return custom?.kind === 'compact-summary' ? custom.event : undefined
     })
+    const sideQuestionEvent = useAuiState((s) => {
+        if (s.message.role !== 'system') return undefined
+        const custom = s.message.metadata.custom as Partial<HappyChatMessageMetadata> | undefined
+        if (custom?.kind !== 'side-question') return undefined
+        return custom.event
+    })
+    const sideQuestion = sideQuestionEvent ? getSideQuestionInfo(sideQuestionEvent) : undefined
 
     if (role !== 'system') return null
 
@@ -118,6 +125,39 @@ export function HappySystemMessage() {
                         <CodeBlock code={goalMessage} language="json" />
                     </details>
                 </section>
+            </MessagePrimitive.Root>
+        )
+    }
+
+    // `/btw` answers live beside the main thread, not inside it: render them
+    // as a distinct card so they are never mistaken for the agent's reply.
+    if (sideQuestion) {
+        const isError = Boolean(sideQuestion.error)
+        return (
+            <MessagePrimitive.Root id={getConversationMessageAnchorId(messageId)} className="scroll-mt-4 py-1">
+                <div
+                    className={`mx-auto max-w-[92%] rounded-lg border px-3 py-2 ${
+                        isError
+                            ? 'border-[var(--app-badge-error-border)] bg-[var(--app-badge-error-bg)]'
+                            : 'border-[var(--app-border)] bg-[var(--app-subtle-bg)]'
+                    }`}
+                >
+                    <div className="flex items-center gap-1.5 text-xs text-[var(--app-hint)]">
+                        <span className="font-medium">btw</span>
+                        {sideQuestion.synthetic ? (
+                            <span className="text-[10px]">fallback</span>
+                        ) : null}
+                        {isError ? (
+                            <span className="text-[10px] text-[var(--app-badge-error-text)]">failed</span>
+                        ) : null}
+                        <MessageTimestamp className="text-[10px]" />
+                    </div>
+                    {text ? (
+                        <div className="mt-1">
+                            <MarkdownRenderer standalone content={text} />
+                        </div>
+                    ) : null}
+                </div>
             </MessagePrimitive.Root>
         )
     }

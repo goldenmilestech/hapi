@@ -626,6 +626,9 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                         claudeArgs: session.claudeArgs,
                         onMessage,
                         onContextUsage: (usage) => sdkToLogConverter.applyContextUsage(usage.model, usage.maxTokens),
+                        onSideQuestionHandlerChange: (handler) => {
+                            session.setSideQuestionHandler(handler);
+                        },
                         onFirstResult: (initialMessage) => {
                             // SDK streams omit Claude Code's native ai-title; it is only in the transcript.
                             const sessionId = session.sessionId;
@@ -650,6 +653,7 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                         onSessionReset: () => {
                             logger.debug('[remote]: Session reset');
                             session.clearSessionId();
+                            session.clearSideQuestionHistory();
                             // /clear discards the resume anchor along with the
                             // context. Without this, the flag would outlive the
                             // reset (claudeRemote() returns before spawning
@@ -863,6 +867,7 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
     protected async cleanup(): Promise<void> {
         this.clearAbortHandlers(this.session.client.rpcHandlerManager);
         this.steerTarget = null;
+        this.session.setSideQuestionHandler(null);
 
         if (this.handleSessionFound) {
             this.session.removeSessionFoundCallback(this.handleSessionFound);

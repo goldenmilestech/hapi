@@ -14,6 +14,7 @@ import { PermissionResult } from "./sdk/types";
 import { getHapiBlobsDir } from "@/constants/uploadPaths";
 import { getDefaultClaudeCodePath } from "./sdk/utils";
 import { filterCatalogAffectingClaudeArgs } from "./sdk/metadataExtractor";
+import type { SideQuestionHandler } from "./sideQuestion";
 import { buildCompactCompletionEvent } from "./utils/compactCompletion";
 import { findLatestCompactSummary } from "./utils/compactSummaryLookup";
 
@@ -100,7 +101,9 @@ export async function claudeRemote(opts: {
     onCompletionEvent?: (message: string) => void,
     onSessionReset?: () => void,
     /** Open while a plain (non-command) turn runs; null otherwise. */
-    onSteerTargetChange?: (target: ClaudeSteerTarget | null) => void
+    onSteerTargetChange?: (target: ClaudeSteerTarget | null) => void,
+    /** Registers the active query's side-question channel; null when disposed. */
+    onSideQuestionHandlerChange?: (handler: SideQuestionHandler | null) => void
 }) {
     const debugPrefix = '[claudeRemote][async-debug]';
 
@@ -461,6 +464,9 @@ export async function claudeRemote(opts: {
         } finally {
             clearTimeout(timer);
         }
+    });
+    opts.onSideQuestionHandlerChange?.((question, history) => {
+        return response.askSideQuestion(question, { history });
     });
 
     let nextMessageFetchInFlight = false;
@@ -855,6 +861,7 @@ export async function claudeRemote(opts: {
             await Promise.allSettled([compactCompletion]);
         }
         opts.signal?.removeEventListener('abort', abortCompactCompletion);
+        opts.onSideQuestionHandlerChange?.(null);
         logger.debug(
             `${debugPrefix} finally ` +
             `(streamMessages=${streamMessageSeq}, results=${resultSeq}, nextFetches=${nextMessageFetchSeq}, inputEnded=${inputEnded})`

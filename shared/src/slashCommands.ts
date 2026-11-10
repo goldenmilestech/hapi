@@ -2,6 +2,7 @@ import type { SlashCommand } from './apiTypes'
 
 export const BUILTIN_SLASH_COMMANDS = {
     claude: [
+        { name: 'btw', description: 'Ask a quick side question without interrupting the main conversation', source: 'builtin' },
         { name: 'clear', description: 'Clear conversation history and free up context', source: 'builtin' },
         { name: 'compact', description: 'Clear conversation history but keep a summary in context', source: 'builtin' },
         { name: 'context', description: 'Visualize current context usage as a colored grid', source: 'builtin' },

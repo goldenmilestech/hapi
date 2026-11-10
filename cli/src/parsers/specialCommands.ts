@@ -109,6 +109,33 @@ export function parsePlan(message: string): PlanCommandResult {
     };
 }
 
+export interface SideQuestionCommandResult {
+    isSideQuestion: boolean;
+    question: string;
+}
+
+/**
+ * Parse Claude Code's `/btw` side-question command.
+ *
+ * Kept separate from parseSpecialCommand because the other agent flavors do
+ * not have a side-question channel and must not intercept the text.
+ */
+export function parseSideQuestion(message: string): SideQuestionCommandResult {
+    const trimmed = message.trim();
+    const match = /^\/btw(?![\w-])(?:\s+([\s\S]*))?$/i.exec(trimmed);
+    if (!match) {
+        return {
+            isSideQuestion: false,
+            question: ''
+        };
+    }
+
+    return {
+        isSideQuestion: true,
+        question: (match[1] ?? '').trim()
+    };
+}
+
 /**
  * Unified parser for special commands
  * Returns the type of command and original message if applicable
