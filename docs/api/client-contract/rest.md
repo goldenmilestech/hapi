@@ -52,6 +52,13 @@ apply client-side grouping and search ranking after receiving this response;
 `pendingRequests` (capped at 5, oldest-first) — do not derive counts from
 `pendingRequests.length`.
 
+Session `metadata` (and therefore `SessionSummary.metadata`) may include
+`missionId` and `parentSessionId` for the web Missions console. Both are
+informational grouping fields and are never authorization inputs. The hub
+records `parentSessionId` from a peer-spawn remit's mandated `## Parent` chip;
+workers created below a manager inherit the manager's `missionId`, which
+defaults to the root manager session id.
+
 ### Sessions — lifecycle
 
 Source: `hub/src/web/routes/sessions.ts`; request schemas in `shared/src/apiTypes.ts`.
@@ -65,6 +72,7 @@ Source: `hub/src/web/routes/sessions.ts`; request schemas in `shared/src/apiType
 | `DELETE /api/sessions/:id` | — | `{ok: true}`; 409 while active (archive first) |
 | `PATCH /api/sessions/:id` | `{name?, titleLocked?}` (at least one; name: 1–255 chars; lock: boolean) | `{ok: true}` (rename) |
 | `PATCH /api/sessions/:id/summary` | `{text, titleLocked?}` (text: 1–255 chars; lock: boolean) | `{ok: true}` |
+| `POST /api/sessions/:id/mission` | `{missionId?, parentSessionId?}` (each 1–128 chars, or `null` to clear; at least one field) | `{ok: true}` — sets Missions console grouping; `null` clears |
 | `PUT /api/sessions/:id/pin` | `{mode: 'none'\|'project'\|'global'}` | `{ok: true}` |
 | `POST /api/sessions/:id/switch` | `{}` | `{ok: true}` — hands terminal-controlled session over to remote control |
 | `POST /api/sessions/:id/clear` | `{}` | `{sessionId}` — shared sessions only; resume inactive sessions through the Runner first, then create a new root; navigate only the initiating view |
@@ -323,7 +331,7 @@ internal and must never be used by clients.
 |------|-------|------------------|
 | Codex Desktop import | `/api/codex/*` (`hub/src/web/routes/codexDesktop.ts`) | Desktop-import tooling |
 | Pi session import | `/api/pi/*`, `/api/sessions/:id/pi-*` (`hub/src/web/routes/piSessions.ts`, `sessions.ts`) | Import tooling (the `pi-models` catalog above is the one exception) |
-| Work graph | `/api/work-graph/*` (`hub/src/web/routes/workGraph.ts`) | Web-only feature |
+| Work graph | `/api/work-graph/*` (`hub/src/web/routes/workGraph.ts`) | Web-only feature. `POST /api/work-graph/events` also emits `work-graph-updated` on the session's SSE stream (see [sse.md](./sse.md)), so clients can refetch instead of polling. |
 | Web Push | `/api/push/*` (`hub/src/web/routes/push.ts`) | Browser Push API; natives use `/api/devices/register` (Android/iOS push contract) |
 | Hub settings write | `PUT /api/hub-settings` | Owner-only hub administration |
 | Telegram | `POST /api/bind` | Telegram Mini App binding only |

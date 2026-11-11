@@ -1335,6 +1335,90 @@ export class SessionCache {
     }
 
     /**
+     * Set or clear the Missions console grouping fields. `null` clears a field;
+     * an omitted field is left untouched. Emits a versioned metadata patch so
+     * open clients update without a full session refetch.
+     */
+    setSessionMission(
+        sessionId: string,
+        patch: { missionId?: string | null; parentSessionId?: string | null }
+    ): boolean {
+        for (let attempt = 0; attempt < METADATA_RETRY_ATTEMPTS; attempt += 1) {
+            const session = this.sessions.get(sessionId) ?? this.refreshSession(sessionId)
+            if (!session?.metadata) return false
+
+            // `null` is the store's explicit-clear sentinel. Do not `delete`:
+            // mergeSessionMetadata treats a missing key as "carry forward" and
+            // would resurrect the old value.
+            const next: Record<string, unknown> = { ...session.metadata }
+            if (patch.missionId !== undefined) next.missionId = patch.missionId
+            if (patch.parentSessionId !== undefined) next.parentSessionId = patch.parentSessionId
+
+            // Avoid a version bump and SSE churn when the write is a no-op.
+            const missionUnchanged = patch.missionId === undefined
+                || (patch.missionId === null
+                    ? session.metadata.missionId === undefined
+                    : session.metadata.missionId === patch.missionId)
+            const parentUnchanged = patch.parentSessionId === undefined
+                || (patch.parentSessionId === null
+                    ? session.metadata.parentSessionId === undefined
+                    : session.metadata.parentSessionId === patch.parentSessionId)
+            if (missionUnchanged && parentUnchanged) {
+                return true
+            }
+
+            const result = this.store.sessions.updateSessionMetadata(
+                sessionId,
+                next,
+                session.metadataVersion,
+                session.namespace,
+                { touchUpdatedAt: false }
+            )
+
+            if (result.result === 'error') return false
+            if (result.result === 'success') {
+                const parsed = MetadataSchema.safeParse(result.value)
+                if (!parsed.success) {
+                    this.refreshSession(sessionId)
+                    return true
+                }
+                session.metadata = parsed.data
+                session.metadataVersion = result.version
+                this.publisher.emit({
+                    type: 'session-updated',
+                    sessionId,
+                    namespace: session.namespace,
+                    data: { metadata: { version: result.version, value: parsed.data } } satisfies SessionPatch
+                })
+                return true
+            }
+
+            this.refreshSession(sessionId)
+        }
+
+        return false
+    }
+
+    /**
+     * Record peer-spawn lineage from a remit's `## Parent` chip. Explicit
+     * assignments win; this only fills an empty parent and derives the mission
+     * key from the parent's own mission (or the parent id for a root manager).
+     */
+    adoptRemitParent(sessionId: string, parentSessionId: string): boolean {
+        if (!parentSessionId || parentSessionId === sessionId) return false
+        const session = this.sessions.get(sessionId) ?? this.refreshSession(sessionId)
+        const parent = this.sessions.get(parentSessionId) ?? this.refreshSession(parentSessionId)
+        if (!session?.metadata || !parent?.metadata) return false
+        if (session.namespace !== parent.namespace) return false
+        if (session.metadata.parentSessionId) return false
+
+        return this.setSessionMission(sessionId, {
+            parentSessionId,
+            missionId: parent.metadata.missionId ?? parent.id
+        })
+    }
+
+    /**
      * Clear archive-related metadata on an archived session so it can be resumed.
      * - Removes `lifecycleState`, `archivedBy`, `archiveReason`, and stamps
      *   `lifecycleStateSince` so subsequent CLI lifecycle writes still win on time.

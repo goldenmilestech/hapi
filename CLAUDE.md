@@ -142,6 +142,8 @@ git push fork main
 | `feat/session-share` | 会话分享链接（带作用域的临时 token） | hub 分享接口 + web 分享页 |
 | `feat/auto-title-provider` | hub 用首条用户消息自动生成会话标题 | `hub/src/sync/titleSuggestion.ts`、`syncEngine.ts`、`socket/handlers/cli/sessionHandlers.ts`、`startHub.ts` |
 | `feat/btw-side-question` | `/btw` 侧问题（不打断主会话） | cli + web |
+| `main`（2026-11-11） | Missions 控制台：Manager/Worker 分组、审批收件箱、停止/归档操作、work-graph 时间线，以及 `work-graph-updated` SSE 实时刷新 | `web/src/routes/missions/`、`web/src/lib/missions.ts`、`hub/src/sync/syncEngine.ts`、`hub/src/web/routes/workGraph.ts`、`shared/src/schemas.ts` |
+| `main`（2026-11-11） | 会话列表完成圆点：回合结束且未读时显示，打开行后立即清除 | `web/src/components/SessionList.tsx`、`SessionRowSummary.tsx`、`web/src/lib/locales/` |
 
 新增定制时在合并进 `main` 的同一个提交里更新此表，上游同步时按表逐项验证。
 

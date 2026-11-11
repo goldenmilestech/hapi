@@ -314,7 +314,9 @@ function createWebApp(options: {
     app.route('/api', createDevicesRoutes(options.store))
     app.route('/api', createVoiceRoutes({ dataDir: configuration.dataDir }))
     // Path is intentionally NOT `/api/events` — that route is the SSE stream.
-    app.route('/api', createWorkGraphRoutes(options.store))
+    app.route('/api', createWorkGraphRoutes(options.store, {
+        onEventInserted: (event) => options.getSyncEngine()?.notifyWorkGraphUpdated(event)
+    }))
 
     // Skip static serving in relay mode, show helpful message on root
     if (options.relayMode) {

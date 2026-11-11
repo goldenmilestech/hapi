@@ -264,7 +264,14 @@ export function useSSE(options: {
         machines: boolean
         sessionIds: Set<string>
         scratchlistSessionIds: Set<string>
-    }>({ sessions: false, machines: false, sessionIds: new Set(), scratchlistSessionIds: new Set() })
+        workGraphSessionIds: Set<string>
+    }>({
+        sessions: false,
+        machines: false,
+        sessionIds: new Set(),
+        scratchlistSessionIds: new Set(),
+        workGraphSessionIds: new Set()
+    })
     const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
     const reconnectAttemptRef = useRef(0)
     // Set when a reconnect was due while the tab was hidden. Hidden tabs do
@@ -319,6 +326,7 @@ export function useSSE(options: {
             pendingInvalidationsRef.current.machines = false
             pendingInvalidationsRef.current.sessionIds.clear()
             pendingInvalidationsRef.current.scratchlistSessionIds.clear()
+            pendingInvalidationsRef.current.workGraphSessionIds.clear()
             if (reconnectTimerRef.current) {
                 clearTimeout(reconnectTimerRef.current)
                 reconnectTimerRef.current = null
@@ -405,6 +413,7 @@ export function useSSE(options: {
                 && !pending.machines
                 && pending.sessionIds.size === 0
                 && pending.scratchlistSessionIds.size === 0
+                && pending.workGraphSessionIds.size === 0
             ) {
                 return
             }
@@ -413,11 +422,13 @@ export function useSSE(options: {
             const shouldInvalidateMachines = pending.machines
             const sessionIds = Array.from(pending.sessionIds)
             const scratchlistSessionIds = Array.from(pending.scratchlistSessionIds)
+            const workGraphSessionIds = Array.from(pending.workGraphSessionIds)
 
             pending.sessions = false
             pending.machines = false
             pending.sessionIds.clear()
             pending.scratchlistSessionIds.clear()
+            pending.workGraphSessionIds.clear()
 
             const tasks: Array<Promise<unknown>> = []
             if (shouldInvalidateSessions) {
@@ -428,6 +439,9 @@ export function useSSE(options: {
             }
             for (const sessionId of scratchlistSessionIds) {
                 tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.scratchlist(sessionId) }))
+            }
+            for (const sessionId of workGraphSessionIds) {
+                tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.workGraphEvents(sessionId) }))
             }
             if (shouldInvalidateMachines) {
                 tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.machines }))
@@ -461,6 +475,11 @@ export function useSSE(options: {
 
         const queueScratchlistInvalidation = (sessionId: string) => {
             pendingInvalidationsRef.current.scratchlistSessionIds.add(sessionId)
+            scheduleInvalidationFlush()
+        }
+
+        const queueWorkGraphInvalidation = (sessionId: string) => {
+            pendingInvalidationsRef.current.workGraphSessionIds.add(sessionId)
             scheduleInvalidationFlush()
         }
 
@@ -776,6 +795,10 @@ export function useSSE(options: {
                 }
             }
 
+            if (event.type === 'work-graph-updated') {
+                queueWorkGraphInvalidation(event.sessionId)
+            }
+
             if (event.type === 'machine-agy-models-updated') {
                 void applyAgyCatalogAnnouncement(queryClient, event.machineId)
             }
@@ -923,6 +946,8 @@ export function useSSE(options: {
             pendingInvalidationsRef.current.sessions = false
             pendingInvalidationsRef.current.machines = false
             pendingInvalidationsRef.current.sessionIds.clear()
+            pendingInvalidationsRef.current.scratchlistSessionIds.clear()
+            pendingInvalidationsRef.current.workGraphSessionIds.clear()
             if (reconnectTimerRef.current) {
                 clearTimeout(reconnectTimerRef.current)
                 reconnectTimerRef.current = null

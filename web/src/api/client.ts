@@ -68,7 +68,7 @@ import type {
     UploadFileResponse
 } from '@hapi/protocol/apiTypes'
 import { fetchThroughAuthProxy } from '@/api/authProxy'
-import type { SessionReadState, SessionReadStateRequest, AgentFlavor, MessageDeliveryMode } from '@hapi/protocol'
+import type { SessionReadState, SessionReadStateRequest, AgentFlavor, MessageDeliveryMode, WorkGraphEvent } from '@hapi/protocol'
 import type { CancelMessageResponse, SteerQueuedMessageResponse } from '@hapi/protocol/schemas'
 import type { TranscriptionMode, TranscriptionProvider, TranscriptionProviderInfo } from '@hapi/protocol/voice'
 
@@ -340,6 +340,14 @@ export class ApiClient {
 
     async getSessions(): Promise<SessionsResponse> {
         return await this.request<SessionsResponse>('/api/sessions')
+    }
+
+    async getWorkGraphEvents(relatedSessionId: string, limit: number = 100): Promise<{ events: WorkGraphEvent[] }> {
+        const params = new URLSearchParams({
+            related_session_id: relatedSessionId,
+            limit: String(limit)
+        })
+        return await this.request<{ events: WorkGraphEvent[] }>(`/api/work-graph/events?${params.toString()}`)
     }
 
     async getHealth(): Promise<HubHealthResponse> {

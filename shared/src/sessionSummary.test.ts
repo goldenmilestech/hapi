@@ -69,6 +69,19 @@ describe('getPendingRequestKinds', () => {
 })
 
 describe('toSessionSummary', () => {
+    it('carries Missions grouping metadata', () => {
+        const summary = toSessionSummary(makeSession({
+            metadata: {
+                path: '/proj',
+                host: 'local',
+                missionId: 'mission-1',
+                parentSessionId: 'manager-1'
+            }
+        }))
+        expect(summary.metadata?.missionId).toBe('mission-1')
+        expect(summary.metadata?.parentSessionId).toBe('manager-1')
+    })
+
     it('carries createdAt for the fixed-order list sort', () => {
         expect(toSessionSummary(makeSession({ createdAt: 1_234 })).createdAt).toBe(1_234)
     })

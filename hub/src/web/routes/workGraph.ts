@@ -4,7 +4,8 @@ import {
     WORK_GRAPH_MAX_BODY_BYTES,
     WorkGraphEventCreateSchema,
     WorkGraphEventLinkCreateSchema,
-    principalMatchesAuthenticatedOwner
+    principalMatchesAuthenticatedOwner,
+    type WorkGraphEvent
 } from '@hapi/protocol'
 import type { Store } from '../../store'
 import {
@@ -23,7 +24,10 @@ const workGraphBodyLimit = bodyLimit({
  * Minimal HTTP surface for the A2A work-graph ledger (P1 / #1374).
  * Path is intentionally NOT `/api/events` — that route is the SSE stream.
  */
-export function createWorkGraphRoutes(store: Store): Hono<WebAppEnv> {
+export function createWorkGraphRoutes(
+    store: Store,
+    options?: { onEventInserted?: (event: WorkGraphEvent) => void }
+): Hono<WebAppEnv> {
     const app = new Hono<WebAppEnv>()
 
     app.post('/work-graph/events', workGraphBodyLimit, async (c) => {
@@ -47,6 +51,15 @@ export function createWorkGraphRoutes(store: Store): Hono<WebAppEnv> {
 
         try {
             const result = store.workGraph.insertEvent(namespace, parsed.data)
+            if (result.inserted) {
+                try {
+                    options?.onEventInserted?.(result.event)
+                } catch (error) {
+                    // A failed broadcast must not turn a committed ledger row
+                    // into an error response; polling remains the fallback.
+                    console.error('[work-graph] broadcast failed', error)
+                }
+            }
             return c.json({
                 event: result.event,
                 inserted: result.inserted

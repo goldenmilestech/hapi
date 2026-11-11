@@ -175,6 +175,27 @@ describe('useSSE connection liveness (mobile suspend/resume)', () => {
 
         unmount()
     })
+
+    it('invalidates the work-graph query for work-graph-updated', () => {
+        const { queryClient, unmount } = renderUseSSE()
+        const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
+
+        act(() => {
+            FakeEventSource.instances[0]?.simulateMessage({
+                type: 'work-graph-updated',
+                sessionId: 'session-1',
+                data: { eventId: 'event-1', eventType: 'work_ad' }
+            })
+        })
+        // Invalidation is batched on a 16ms timer.
+        act(() => { vi.advanceTimersByTime(20) })
+
+        expect(invalidate).toHaveBeenCalledWith({
+            queryKey: queryKeys.workGraphEvents('session-1')
+        })
+
+        unmount()
+    })
 })
 
 function makeSummary(overrides: Partial<SessionSummary> = {}): SessionSummary {

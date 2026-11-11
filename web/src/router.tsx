@@ -68,6 +68,9 @@ import { buildFileMentionSearchQuery } from '@/lib/file-search-query'
 import FilesPage from '@/routes/sessions/files'
 import FilePage from '@/routes/sessions/file'
 import TerminalPage from '@/routes/sessions/terminal'
+import MissionsLayout from '@/routes/missions/layout'
+import MissionsListPage from '@/routes/missions'
+import MissionDetailPage from '@/routes/missions/mission'
 import SettingsLayout from '@/routes/settings/layout'
 import SettingsHubPage from '@/routes/settings'
 import SettingsGeneralPage from '@/routes/settings/general'
@@ -139,6 +142,28 @@ function SettingsIcon(props: { className?: string }) {
         >
             <circle cx="12" cy="12" r="3" />
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+    )
+}
+
+function MissionsIcon(props: { className?: string }) {
+    return (
+        <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={props.className}
+        >
+            <circle cx="6" cy="6" r="2.5" />
+            <circle cx="18" cy="6" r="2.5" />
+            <circle cx="12" cy="18" r="2.5" />
+            <path d="M8.5 6h7M7.5 8.2l3.4 7.6M16.5 8.2l-3.4 7.6" />
         </svg>
     )
 }
@@ -309,9 +334,23 @@ function SessionsPage() {
                         onRefresh={handleRefresh}
                         isLoading={isLoading}
                         // Keep ranks: new 4, sort and filter 5, settings 6,
-                        // mark-all 7, browse 8. Higher sheds into More first (#2039).
+                        // mark-all 7, browse 8, missions 9. Higher sheds into More first (#2039).
                         renderHeader
                         toolbarExtras={[
+                            {
+                                id: 'missions',
+                                keep: 9,
+                                node: (
+                                    <button
+                                        type="button"
+                                        onClick={() => navigate({ to: '/missions' })}
+                                        className="p-1.5 rounded-full text-[var(--app-hint)] hover:text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)] transition-colors"
+                                        title={t('missions.title')}
+                                    >
+                                        <MissionsIcon className="h-5 w-5" />
+                                    </button>
+                                )
+                            },
                             ...(canBrowse ? [{
                                 id: 'browse',
                                 keep: 8,
@@ -1409,6 +1448,24 @@ const settingsUsageRoute = createRoute({
     component: SettingsUsagePage,
 })
 
+const missionsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/missions',
+    component: MissionsLayout,
+})
+
+const missionsIndexRoute = createRoute({
+    getParentRoute: () => missionsRoute,
+    path: '/',
+    component: MissionsListPage,
+})
+
+const missionDetailRoute = createRoute({
+    getParentRoute: () => missionsRoute,
+    path: '$missionId',
+    component: MissionDetailPage,
+})
+
 // Web Share Target landing route. Service worker (`web/src/sw.ts`)
 // intercepts the manifest's `POST /share` and 303-redirects here with an
 // IDB transfer id. `error=ingest` is set when the SW failed to write IDB.
@@ -1433,6 +1490,10 @@ export const routeTree = rootRoute.addChildren([
         ]),
     ]),
     browseRoute,
+    missionsRoute.addChildren([
+        missionsIndexRoute,
+        missionDetailRoute,
+    ]),
     settingsRoute.addChildren([
         settingsIndexRoute,
         settingsGeneralRoute,

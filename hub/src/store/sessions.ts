@@ -81,7 +81,11 @@ const HUB_OWNED_METADATA_FIELDS = [
     'codexResumePending',
     'titleSuggestionAutoAttemptedAt',
     'titleSuggestionTurn',
-    'promptTitle'
+    'promptTitle',
+    // Missions console grouping is hub-assigned (adoptRemitParent / the
+    // /mission route). CLI metadata snapshots omit it; preserve it.
+    'missionId',
+    'parentSessionId'
 ] as const
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

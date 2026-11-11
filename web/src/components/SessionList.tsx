@@ -100,6 +100,7 @@ import {
     getSessionManualUnreadAt,
     getUnreadSessionCount,
     markAllSessionsSeen,
+    markSessionSeen,
     markSessionUnread,
     useSessionLastSeenVersion
 } from '@/lib/sessionLastSeen'
@@ -1129,6 +1130,10 @@ const SessionItem = memo(function SessionItem(props: {
         },
         onClick: () => {
             if (!menuOpen) {
+                // Opening the row counts as having seen its result: the
+                // completion dot clears immediately instead of waiting for
+                // the transcript to be scrolled to the tail.
+                markSessionSeen(s.id, s.contentRevision ?? 0, s.readState?.version)
                 onSelect(s.id, targetMessageId, targetMessageQuery)
             }
         },

@@ -110,7 +110,7 @@ describe('SessionRowSummary background status', () => {
             </I18nProvider>
         )
 
-        expect(screen.queryByText('New activity')).not.toBeInTheDocument()
+        expect(screen.queryByTestId('session-completed')).toBeNull()
         expect(screen.getByText('Background demo')).toHaveClass('font-normal')
 
         markSessionUnread(session.id)
@@ -164,7 +164,7 @@ describe('SessionRowSummary background status', () => {
         expectUnread()
     })
 
-    it('shows the unread dot separately from the pulsing presence badge', () => {
+    it('hides the completion dot while the turn is still running', () => {
         const session = makeSummary({
             id: 'selected-thinking-unread',
             thinking: true,
@@ -184,14 +184,55 @@ describe('SessionRowSummary background status', () => {
             </I18nProvider>
         )
 
-        expectUnread()
-        const dots = container.querySelectorAll('.rounded-full')
-        expect(dots).toHaveLength(2)
-        expect(container.querySelector('[data-testid="session-unread"]')).toBeInTheDocument()
+        expect(screen.queryByTestId('session-completed')).toBeNull()
         expect(container.querySelector('[data-testid="session-presence"]')).toHaveClass('animate-pulse')
     })
 
-    it('shows unseen output from a running session', () => {
+    it('shows the completion dot next to a settled presence badge', () => {
+        const session = makeSummary({
+            id: 'settled-unread',
+            thinking: false,
+            backgroundTaskCount: 0,
+            updatedAt: 2_000,
+        })
+        markSessionSeen(session.id, 2_000)
+        markSessionUnread(session.id)
+
+        const { container } = render(
+            <I18nProvider>
+                <SessionRowSummary
+                    session={session}
+                    selected={true}
+                    showDetailedStatus={true}
+                    lastSeenVersion={0}
+                />
+            </I18nProvider>
+        )
+
+        expect(screen.getByTestId('session-completed')).toBeInTheDocument()
+        expect(container.querySelector('[data-testid="session-presence"]')).not.toHaveClass('animate-pulse')
+    })
+
+    it('shows the completion dot for unseen output of a disconnected session', () => {
+        const session = makeSummary({
+            id: 'disconnected-unread',
+            active: false,
+            thinking: true,
+            backgroundTaskCount: 0,
+            updatedAt: 2_000,
+        })
+        markSessionSeen(session.id, 1_000)
+
+        render(
+            <I18nProvider>
+                <SessionRowSummary session={session} showDetailedStatus={true} lastSeenVersion={0} />
+            </I18nProvider>
+        )
+
+        expect(screen.getByTestId('session-completed')).toBeInTheDocument()
+    })
+
+    it('shows unseen output from a background-only session', () => {
         const session = makeSummary({ id: 'running-unread', backgroundTaskCount: 1, updatedAt: 2_000 })
         markSessionSeen(session.id, 1_000)
 
@@ -205,13 +246,13 @@ describe('SessionRowSummary background status', () => {
         expect(container.querySelector('[data-testid="session-presence"]')).toHaveClass('bg-blue-400', 'animate-pulse')
     })
 
-    it('shows and clears the unread dot in standard session rows', () => {
+    it('shows and clears the completion dot in standard session rows', () => {
         const session = makeSummary({ id: 'standard-unread', backgroundTaskCount: 0, contentRevision: 5 })
         const view = render(<I18nProvider><SessionRowSummary session={session} showDetailedStatus={false} lastSeenVersion={0} /></I18nProvider>)
-        expect(screen.getByTestId('session-unread')).toBeInTheDocument()
+        expect(screen.getByTestId('session-completed')).toBeInTheDocument()
         markSessionSeen(session.id, 5)
         view.rerender(<I18nProvider><SessionRowSummary session={session} showDetailedStatus={false} lastSeenVersion={1} /></I18nProvider>)
-        expect(screen.queryByTestId('session-unread')).toBeNull()
+        expect(screen.queryByTestId('session-completed')).toBeNull()
     })
 
     it('shows pending requests as an amber symbol, not a dot', () => {
@@ -251,7 +292,7 @@ describe('SessionRowSummary background status', () => {
 })
 
 function expectUnread() {
-    expect(screen.getByText('New activity')).toHaveClass('sr-only')
+    expect(screen.getByTestId('session-completed')).toBeInTheDocument()
     expect(screen.getByText(/demo|Background/, { selector: '[title]' })).toHaveClass('font-semibold')
 }
 

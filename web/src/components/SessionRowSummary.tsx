@@ -168,6 +168,12 @@ export function SessionRowSummary(props: {
         : s.active && (s.pendingRequestsCount ?? 0) > 0
             ? (s.pendingRequestKinds?.length && !s.pendingRequestKinds.includes('permission') ? 'input' : 'permission')
             : null
+    // Completion marker: the turn is over (no agent work, nothing waiting on
+    // the operator) but its output has not been read yet. Rows are opened by
+    // tapping, which acknowledges the revision and clears the dot.
+    const showCompletedDot = isUnread
+        && !isRunning
+        && (s.pendingRequestsCount ?? 0) === 0
     const agentIcon = (
         <span className="relative inline-flex h-6 w-6 shrink-0 items-center justify-center">
             <AgentFlavorIcon flavor={s.metadata?.flavor} className="h-6 w-6" />
@@ -202,14 +208,6 @@ export function SessionRowSummary(props: {
                         >
                             {sessionName}
                         </div>
-                        {isUnread ? (
-                            <>
-                                <span data-testid="session-unread" className="h-2 w-2 shrink-0 rounded-full bg-blue-500" aria-hidden="true" />
-                                <span id={attention?.kind === 'unread' && nestedTooltips ? attentionId : undefined} className="sr-only">
-                                    {t('session.item.newActivity')}
-                                </span>
-                            </>
-                        ) : null}
                         {requestKind && urgentAttention && nestedTooltips && attentionId ? (
                             <SessionAttentionIndicator
                                 attention={attention}
@@ -261,6 +259,15 @@ export function SessionRowSummary(props: {
                             <span className="shrink-0 text-[var(--app-badge-warning-text)]">
                                 {t('session.item.pending')} {s.pendingRequestsCount}
                             </span>
+                        ) : null}
+                        {showCompletedDot ? (
+                            <span
+                                data-testid="session-completed"
+                                role="img"
+                                title={t('session.item.completed')}
+                                aria-label={t('session.item.completed')}
+                                className="h-2 w-2 shrink-0 rounded-full bg-[var(--app-badge-success-text)]"
+                            />
                         ) : null}
                         {timeLabel ? (
                             <span className={`min-w-0 truncate whitespace-nowrap tabular-nums ${

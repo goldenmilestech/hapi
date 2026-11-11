@@ -7,7 +7,7 @@
  * - No E2E encryption; data is stored as JSON in SQLite
  */
 
-import { type SessionReadStateRequest, isKnownFlavor, isLiveLifecycleState, isSteeringSupportedForSession, MACHINE_CAPABILITIES, type LocalResumeTarget, type ResumableSession, type SessionEndReason } from '@hapi/protocol'
+import { type SessionReadStateRequest, type WorkGraphEvent, extractParentSectionSessionId, isKnownFlavor, isLiveLifecycleState, isSteeringSupportedForSession, MACHINE_CAPABILITIES, type LocalResumeTarget, type ResumableSession, type SessionEndReason } from '@hapi/protocol'
 import {
     cliBinaryUpdatedOnDisk,
     isMachineCapabilitySkewed,
@@ -333,6 +333,26 @@ export class SyncEngine {
 
     subscribe(listener: SyncEventListener): () => void {
         return this.eventPublisher.subscribe(listener)
+    }
+
+    /**
+     * Tell clients that the work-graph ledger changed for a session. Rows
+     * without a `related_session_id` have no query to invalidate, so they are
+     * skipped instead of broadcasting an event nobody matches.
+     */
+    notifyWorkGraphUpdated(event: WorkGraphEvent): void {
+        if (!event.relatedSessionId) {
+            return
+        }
+        this.eventPublisher.emit({
+            type: 'work-graph-updated',
+            namespace: event.namespace,
+            sessionId: event.relatedSessionId,
+            data: {
+                eventId: event.id,
+                eventType: event.eventType
+            }
+        })
     }
 
     private resolveNamespace(event: SyncEvent): string | undefined {
@@ -689,7 +709,7 @@ export class SyncEngine {
             const session = this.getSession(event.sessionId)
             if (session) {
                 try {
-                    ingestNotifySummaryFromMessage({
+                    const result = ingestNotifySummaryFromMessage({
                         store: this.store,
                         namespace: session.namespace,
                         sessionId: session.id,
@@ -699,6 +719,9 @@ export class SyncEngine {
                         ownerUserId: this.hubOwnerUserId,
                         flavor: session.metadata?.flavor ?? null
                     })
+                    if (result?.inserted) {
+                        this.notifyWorkGraphUpdated(result.event)
+                    }
                 } catch (error) {
                     console.error('[work-graph] notify ingest failed', error)
                 }
@@ -1297,9 +1320,33 @@ export class SyncEngine {
         if (!this.sessionCache.getSession(sessionId)?.thinking) {
             this.automaticTitleSuggestionService.onTurnStarted(sessionId)
         }
+        // Only the first user message is a peer-spawn remit. Later messages may
+        // quote a Parent section; they must not rewrite lineage.
+        const sessionBefore = this.sessionCache.getSession(sessionId) ?? this.store.sessions.getSession(sessionId)
+        const hadUserMessage = sessionBefore?.lastUserMessageAt !== undefined
         const { actualSessionId, createdAt: activeTurnStartedAt } = await this.messageService.sendMessage(sessionId, payload)
         this.sessionCache.markMessageQueued(actualSessionId, Date.now(), activeTurnStartedAt)
         this.sessionCache.recordSessionActivity(actualSessionId, Date.now())
+
+        // Peer-spawn remits carry a mandated `## Parent` chip. Adopt it once so
+        // the Missions console can group workers without a second orchestrator
+        // API call. Best effort: lineage must never fail message delivery.
+        const parentSessionId = hadUserMessage ? null : extractParentSectionSessionId(payload.text)
+        if (parentSessionId) {
+            try {
+                this.sessionCache.adoptRemitParent(actualSessionId, parentSessionId)
+            } catch (error) {
+                console.error('[SyncEngine] Failed to adopt remit parent:', error)
+            }
+        }
+    }
+
+    /** Set or clear Missions console grouping on a session. */
+    setSessionMission(
+        sessionId: string,
+        patch: { missionId?: string | null; parentSessionId?: string | null }
+    ): boolean {
+        return this.sessionCache.setSessionMission(sessionId, patch)
     }
 
     async cancelQueuedMessage(

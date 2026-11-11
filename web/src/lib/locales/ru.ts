@@ -198,6 +198,7 @@ export default {
   'session.item.needsInput': 'Нужен ввод',
   'session.item.background': 'Выполняются фоновые задачи',
   'session.item.newActivity': 'Новая активность',
+  'session.item.completed': 'Завершено',
   'session.item.scheduledMessage': 'Ожидает отложенное сообщение',
   'session.item.scheduledMessages': 'Ожидает отложенных сообщений: {count}',
   'session.tooltip.permission.body': 'Одобрить:',

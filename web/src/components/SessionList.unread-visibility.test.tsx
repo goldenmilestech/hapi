@@ -137,6 +137,29 @@ describe('SessionList unread visibility setting off', () => {
     })
 })
 
+describe('SessionList completion dot', () => {
+    beforeEach(() => {
+        localStorage.clear()
+    })
+
+    it('clears the completion dot when the session row is opened', () => {
+        seedReads({ opened: 1000 })
+        renderSessionList([
+            makeSession({
+                id: 'opened',
+                active: true,
+                updatedAt: 2000,
+                contentRevision: 2000,
+                metadata: { path: '/work/live', name: 'Opened row' }
+            })
+        ])
+
+        expect(screen.getByTestId('session-completed')).toBeInTheDocument()
+        fireEvent.click(screen.getByRole('button', { name: /Opened row/ }))
+        expect(screen.queryByTestId('session-completed')).toBeNull()
+    })
+})
+
 describe('SessionList toolbar order', () => {
     beforeEach(() => {
         localStorage.clear()

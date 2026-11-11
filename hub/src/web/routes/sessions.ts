@@ -1,6 +1,7 @@
 import { compareSessionSummaries } from '@hapi/protocol'
 import {
     SessionReadStateRequestSchema,
+    SetSessionMissionRequestSchema,
     CursorMigrateToAcpRequestSchema,
     DeleteUploadRequestSchema,
     ForkConversationRequestSchema,
@@ -1057,6 +1058,43 @@ export function createSessionsRoutes(getSyncEngine: () => SyncEngine | null): Ho
             }
             return c.json({ error: message }, 500)
         }
+    })
+
+    app.post('/sessions/:id/mission', async (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) {
+            return engine
+        }
+
+        const sessionResult = requireSessionFromParam(c, engine)
+        if (sessionResult instanceof Response) {
+            return sessionResult
+        }
+
+        const body = await c.req.json().catch(() => null)
+        const parsed = SetSessionMissionRequestSchema.safeParse(body)
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid body: missionId or parentSessionId is required' }, 400)
+        }
+
+        if (parsed.data.parentSessionId) {
+            if (parsed.data.parentSessionId === sessionResult.sessionId) {
+                return c.json({ error: 'A session cannot be its own parent' }, 400)
+            }
+            const parentAccess = engine.resolveSessionAccess(
+                parsed.data.parentSessionId,
+                sessionResult.session.namespace
+            )
+            if (!parentAccess.ok) {
+                return c.json({ error: 'Parent session not found' }, 404)
+            }
+        }
+
+        const updated = engine.setSessionMission(sessionResult.sessionId, parsed.data)
+        if (!updated) {
+            return c.json({ error: 'Failed to update session mission' }, 409)
+        }
+        return c.json({ ok: true })
     })
 
     app.post('/sessions/:id/title-suggestion', async (c) => {

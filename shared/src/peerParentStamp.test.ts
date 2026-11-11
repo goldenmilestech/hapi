@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import {
     ParentStampError,
     ensureParentStamp,
+    extractParentSectionSessionId,
     extractParentSessionIdFromRemit,
     formatParentStampBlock,
     formatSessionChip,
@@ -141,6 +142,21 @@ describe('ensureParentStamp', () => {
         const result = ensureParentStamp('brief', undefined, { requireParent: false })
         expect(result.message).toBe('brief')
         expect(result.stamped).toBe(false)
+    })
+})
+
+describe('extractParentSectionSessionId', () => {
+    it('reads the chip under ## Parent', () => {
+        const message = `## Parent\n- Orchestrator chip: [Manager](/sessions/${PARENT_ID})\n\nDo the work.`
+        expect(extractParentSectionSessionId(message)).toBe(PARENT_ID)
+    })
+
+    it('does not adopt a free-form citation outside the Parent section', () => {
+        expect(extractParentSectionSessionId(`See [peer](/sessions/${PARENT_ID}) for context.`)).toBeNull()
+    })
+
+    it('returns null without a Parent section', () => {
+        expect(extractParentSectionSessionId('Do the work.')).toBeNull()
     })
 })
 

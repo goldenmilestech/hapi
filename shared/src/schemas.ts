@@ -74,6 +74,12 @@ export const MetadataSchema = z.object({
     // `name` or `summary` exists; it never blocks generated/native titles.
     promptTitle: z.string().optional(),
     machineId: z.string().optional(),
+    // Manager/Worker grouping for the Missions console. `missionId` is the
+    // stable grouping key (by convention the root manager session id);
+    // `parentSessionId` is the immediate peer-spawn parent. Both are
+    // informational only and never consulted for authorization.
+    missionId: z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9._:-]+$/).optional(),
+    parentSessionId: z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9._:-]+$/).optional(),
     claudeSessionId: z.string().optional(),
     // Parent HAPI session id when this session was created by message-level fork
     // (`claude --resume <id> --fork-session`). Lets the web list mark the new
@@ -644,6 +650,18 @@ export const SyncEventSchema = z.discriminatedUnion('type', [
     SessionChangedSchema.extend({
         type: z.literal('session-ended'),
         reason: SessionEndReasonSchema.optional()
+    }),
+    /**
+     * The work-graph ledger gained a row for this session. Clients that show
+     * the ledger (Missions console) refetch `GET /api/work-graph/events`
+     * instead of polling. `sessionId` is the row's `related_session_id`.
+     */
+    SessionChangedSchema.extend({
+        type: z.literal('work-graph-updated'),
+        data: z.object({
+            eventId: z.string().optional(),
+            eventType: z.string().optional()
+        }).optional()
     }),
     MachineChangedSchema.extend({
         type: z.literal('machine-updated'),

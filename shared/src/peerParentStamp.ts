@@ -118,6 +118,17 @@ export function parentSectionHasSessionChip(
 }
 
 /**
+ * Strict lineage read: only the mandated `## Parent` section, never a
+ * free-form citation elsewhere in the message. Used by the hub to adopt
+ * peer-spawn parentage without misreading ordinary session references.
+ */
+export function extractParentSectionSessionId(message: string): string | null {
+    const section = extractParentSection(message)
+    if (!section) return null
+    return extractSessionCitationIds(section)[0] ?? null
+}
+
+/**
  * Prefer the first `/sessions/<id>` under a `## Parent` heading when present;
  * otherwise the first citation in the remit (handoff UUID).
  */

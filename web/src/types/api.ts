@@ -105,6 +105,9 @@ export type SessionMetadataSummary = {
     os?: string
     summary?: { text: string; updatedAt: number }
     machineId?: string
+    /** Missions console grouping; mirrors MetadataSchema. */
+    missionId?: string
+    parentSessionId?: string
     tools?: string[]
     flavor?: string | null
     startingMode?: 'local' | 'remote' | 'pty' | null

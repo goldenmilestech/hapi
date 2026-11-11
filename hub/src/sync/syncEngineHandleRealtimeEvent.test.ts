@@ -318,4 +318,52 @@ describe('SyncEngine.handleRealtimeEvent notify → work-graph ingest', () => {
         expect(rows[0]!.summary?.length).toBe(WORK_GRAPH_MAX_SUMMARY)
         expect(rows[0]!.summary?.length).toBeLessThan(oversized.length)
     })
+
+    it('broadcasts work-graph-updated once for a captured row', () => {
+        const { engine, store } = makeEngine()
+        const events: SyncEvent[] = []
+        engine.subscribe((event) => events.push(event))
+        const session = store.sessions.getOrCreateSession(
+            'notify-wiring-broadcast',
+            { path: '/tmp', host: 'h', flavor: 'claude' },
+            null,
+            'default'
+        )
+        engine.handleRealtimeEvent({ type: 'session-updated', sessionId: session.id })
+
+        const message = {
+            id: 'msg-wire-broadcast',
+            seq: 1,
+            localId: null,
+            createdAt: 1_680_000_000_000,
+            content: {
+                role: 'agent',
+                content: {
+                    type: 'output',
+                    data: {
+                        type: 'assistant',
+                        message: {
+                            content: [{
+                                type: 'text',
+                                text: 'Done.\n\nAGENT_NOTIFY_SUMMARY {"status":"done","summary":"Broadcast me"}'
+                            }]
+                        }
+                    }
+                }
+            }
+        }
+
+        engine.handleRealtimeEvent({ type: 'message-received', sessionId: session.id, message })
+        // Replayed assistant row: the ledger row is idempotent, so the second
+        // capture must not wake every client again.
+        engine.handleRealtimeEvent({ type: 'message-received', sessionId: session.id, message })
+
+        const updated = events.filter((event) => event.type === 'work-graph-updated')
+        expect(updated).toHaveLength(1)
+        expect(updated[0]).toMatchObject({
+            namespace: 'default',
+            sessionId: session.id,
+            data: { eventType: 'work_ad' }
+        })
+    })
 })

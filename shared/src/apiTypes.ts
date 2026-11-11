@@ -441,6 +441,22 @@ export const UpdateSessionSummaryRequestSchema = z.object({
 
 export type UpdateSessionSummaryRequest = z.infer<typeof UpdateSessionSummaryRequestSchema>
 
+/**
+ * Missions console grouping. `null` clears a field; omitting it leaves the
+ * current value untouched. At least one field must be present.
+ */
+const missionKeySchema = z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9._:-]+$/)
+
+export const SetSessionMissionRequestSchema = z.object({
+    missionId: missionKeySchema.nullable().optional(),
+    parentSessionId: missionKeySchema.nullable().optional()
+}).refine(
+    (data) => data.missionId !== undefined || data.parentSessionId !== undefined,
+    { message: 'missionId or parentSessionId is required' }
+)
+
+export type SetSessionMissionRequest = z.infer<typeof SetSessionMissionRequestSchema>
+
 export const SessionTitleSuggestionResponseSchema = z.object({
     title: z.string().min(1).max(255)
 })

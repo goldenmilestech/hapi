@@ -93,6 +93,25 @@ describe('resume schemas', () => {
         })
     })
 
+    it('accepts work-graph-updated sync events with optional metadata', () => {
+        expect(SyncEventSchema.parse({
+            type: 'work-graph-updated',
+            sessionId: 'session-1',
+            data: { eventId: 'event-1', eventType: 'work_ad' }
+        })).toMatchObject({ sessionId: 'session-1' })
+
+        expect(SyncEventSchema.safeParse({
+            type: 'work-graph-updated',
+            sessionId: 'session-1'
+        }).success).toBe(true)
+
+        expect(SyncEventSchema.safeParse({
+            type: 'work-graph-updated',
+            sessionId: 'session-1',
+            data: { eventId: 1 }
+        }).success).toBe(false)
+    })
+
     it('validates structured session and machine update patches', () => {
         expect(SyncEventSchema.safeParse({
             type: 'session-updated',

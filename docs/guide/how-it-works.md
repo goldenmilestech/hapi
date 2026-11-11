@@ -59,6 +59,7 @@ A React-based PWA usable in a browser, as an installed PWA, or as a Telegram Min
 - **Terminal View** - Run commands on the working machine from your browser
 - **Voice Assistant** - Talk to your agent and approve permissions by voice (see [Voice input and assistant](./voice-assistant.md))
 - **Session References** - Copy a session reference or mention another conversation for context
+- **Missions** - Manager/Worker overview grouped by peer-spawn lineage, with worker status, task progress, inline approvals, worker stop/archive actions and a live work-graph activity timeline
 - **Remote Spawn** - Start new sessions on any connected machine
 
 ### Native apps
@@ -70,8 +71,8 @@ traffic uses the same REST + SSE client API; background notifications use
 FCM/APNs with the [native push contract](../api/native-companion-contract.md).
 
 The apps have their own navigation and rendering. Protocol fixture conformance
-does not imply web UI parity: the terminal, Work Graph and realtime voice
-controls remain web features. See [Native apps](./native-apps.md) for current
+does not imply web UI parity: the terminal, Work Graph, Missions and realtime
+voice controls remain web features. See [Native apps](./native-apps.md) for current
 capabilities, platform differences and install/pairing instructions.
 
 ## Data Flow

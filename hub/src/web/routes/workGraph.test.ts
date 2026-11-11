@@ -5,7 +5,7 @@ import type { WebAppEnv } from '../middleware/auth'
 import { createAuthMiddleware } from '../middleware/auth'
 import { Store } from '../../store'
 import { createWorkGraphRoutes } from './workGraph'
-import { PROTOCOL_VERSION, WORK_GRAPH_MAX_BODY_BYTES } from '@hapi/protocol'
+import { PROTOCOL_VERSION, WORK_GRAPH_MAX_BODY_BYTES, type WorkGraphEvent } from '@hapi/protocol'
 
 const JWT_SECRET = new TextEncoder().encode('test-secret')
 
@@ -18,7 +18,10 @@ async function authHeaders(namespace: string, userId = 1) {
     return { authorization: `Bearer ${token}` }
 }
 
-function createApp(store: Store) {
+function createApp(
+    store: Store,
+    options?: { onEventInserted?: (event: WorkGraphEvent) => void }
+) {
     const app = new Hono<WebAppEnv>()
     app.get('/health', (c) => c.json({
         status: 'ok',
@@ -26,7 +29,7 @@ function createApp(store: Store) {
         capabilities: { workGraph: true }
     }))
     app.use('/api/*', createAuthMiddleware(JWT_SECRET))
-    app.route('/api', createWorkGraphRoutes(store))
+    app.route('/api', createWorkGraphRoutes(store, options))
     return app
 }
 
@@ -159,6 +162,41 @@ describe('work-graph routes', () => {
         expect(secondJson.inserted).toBe(false)
         expect(secondJson.event.id).toBe(firstJson.event.id)
         expect(secondJson.event.summary).toBe('once')
+    })
+
+    it('notifies the listener once per inserted row', async () => {
+        const store = new Store(':memory:')
+        const inserted: WorkGraphEvent[] = []
+        const app = createApp(store, { onEventInserted: (event) => inserted.push(event) })
+        const headers = await authHeaders('default')
+        const body = {
+            source_kind: 'session',
+            source_ref: 'sess-1',
+            event_type: 'handoff',
+            related_session_id: 'sess-1',
+            summary: 'broadcast me',
+            idempotency_key: 'broadcast-once',
+            principal: { kind: 'human', id: '1' }
+        }
+
+        await app.request('/api/work-graph/events', {
+            method: 'POST',
+            headers: { ...headers, 'content-type': 'application/json' },
+            body: JSON.stringify(body)
+        })
+        // Replayed idempotency key: same row, no listener call.
+        await app.request('/api/work-graph/events', {
+            method: 'POST',
+            headers: { ...headers, 'content-type': 'application/json' },
+            body: JSON.stringify(body)
+        })
+
+        expect(inserted).toHaveLength(1)
+        expect(inserted[0]).toMatchObject({
+            relatedSessionId: 'sess-1',
+            eventType: 'handoff',
+            namespace: 'default'
+        })
     })
 
     it('rejects oversized POST bodies with 413', async () => {
