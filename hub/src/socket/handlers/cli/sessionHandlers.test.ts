@@ -541,6 +541,61 @@ describe('cli session handlers', () => {
             promptTitle: 'Fix the login bug'
         })
     })
+
+    it('drops an upload-path summary written by a legacy CLI', () => {
+        const store = new Store(':memory:')
+        const session = store.sessions.getOrCreateSession('legacy-path-summary', {
+            path: '/tmp/project',
+            promptTitle: 'Fix the login bug'
+        }, null, 'default')
+        const socket = new FakeSocket()
+        registerSessionHandlers(socket as unknown as CliSocketWithData, {
+            store,
+            resolveSessionAccess: () => ({ ok: true, value: session as StoredSession }),
+            emitAccessError: () => { throw new Error('unexpected access error') }
+        })
+
+        socket.trigger('update-metadata', {
+            sid: session.id,
+            expectedVersion: session.metadataVersion,
+            metadata: {
+                path: '/tmp/project',
+                summary: { text: '@/var/folders/dq/x/T/hapi-blobs/sid-a/1-image.png…', updatedAt: Date.now() }
+            }
+        }, () => {})
+
+        const metadata = store.sessions.getSessionByNamespace(session.id, 'default')?.metadata as Record<string, unknown>
+        expect(metadata).not.toHaveProperty('summary')
+        expect(metadata.promptTitle).toBe('Fix the login bug')
+    })
+
+    it('keeps the stored summary when a legacy CLI resends the upload path', () => {
+        const store = new Store(':memory:')
+        const session = store.sessions.getOrCreateSession('legacy-path-summary-kept', {
+            path: '/tmp/project',
+            summary: { text: 'Login redirect fix', updatedAt: Date.now() }
+        }, null, 'default')
+        const socket = new FakeSocket()
+        registerSessionHandlers(socket as unknown as CliSocketWithData, {
+            store,
+            resolveSessionAccess: () => ({ ok: true, value: session as StoredSession }),
+            emitAccessError: () => { throw new Error('unexpected access error') }
+        })
+
+        socket.trigger('update-metadata', {
+            sid: session.id,
+            expectedVersion: session.metadataVersion,
+            metadata: {
+                path: '/tmp/project',
+                summary: { text: '@/var/folders/dq/x/T/hapi-blobs/sid-a/1-image.png…', updatedAt: Date.now() }
+            }
+        }, () => {})
+
+        const metadata = store.sessions.getSessionByNamespace(session.id, 'default')?.metadata as {
+            summary?: { text?: string }
+        }
+        expect(metadata.summary?.text).toBe('Login redirect fix')
+    })
 })
 
 describe('cli session handlers auto title hook', () => {

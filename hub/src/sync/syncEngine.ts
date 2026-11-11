@@ -36,6 +36,7 @@ import { MachineCache, type Machine } from './machineCache'
 import { MessageService, type RetryIndeterminateMessageResult } from './messageService'
 import { createTitleSuggestionService, type TitleSuggestionService } from './titleSuggestion'
 import { createPromptTitle } from './promptTitle'
+import { isUsableTitleText } from './uploadPathTitle'
 import { selectForkTranscriptPrefix } from './forkTranscript'
 import { buildForkSessionSummary } from './forkSessionSummary'
 import { isMachineSpawnPreallocatedStub } from '../store/sessions'
@@ -317,6 +318,7 @@ export class SyncEngine {
         this.rpcGateway = new RpcGateway(io, rpcRegistry)
         this.sessionCache.closeTurnsLeftOpen()
         this.reloadAll()
+        this.sessionCache.repairLegacyUploadPathTitles()
         this.inactivityTimer = setInterval(() => this.expireInactive(), 5_000)
     }
 
@@ -4815,7 +4817,7 @@ export class SyncEngine {
 
     private recordPromptTitle(sessionId: string, content: unknown): void {
         const metadata = this.sessionCache.getSession(sessionId)?.metadata
-        if (!metadata || metadata.name?.trim() || metadata.summary?.text?.trim() || metadata.promptTitle) return
+        if (!metadata || metadata.name?.trim() || isUsableTitleText(metadata.summary?.text) || metadata.promptTitle) return
         const title = createPromptTitle(content)
         if (!title) return
         try {

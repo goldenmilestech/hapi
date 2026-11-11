@@ -7,6 +7,8 @@ import { clampAliveTime } from './aliveTime'
 import { EventPublisher } from './eventPublisher'
 import { extractTodoWriteTodosFromMessageContent, TodosSchema } from './todos'
 import { resolveSessionIdleTimeoutMs, shouldClearKeepaliveIdle, shouldMarkKeepaliveIdle } from './sessionIdle'
+import { createPromptTitle } from './promptTitle'
+import { isUploadPathTitle, isUsableTitleText } from './uploadPathTitle'
 
 const QUEUED_MESSAGE_THINKING_GRACE_MS = 15_000
 // A turn the hub closed when it restarted is picked up again if the agent
@@ -1223,7 +1225,7 @@ export class SessionCache {
             if (!session) return false
 
             const metadata = session.metadata
-            if (metadata?.name?.trim() || metadata?.summary?.text?.trim() || metadata?.titleSuggestionAutoAttemptedAt !== undefined) {
+            if (metadata?.name?.trim() || isUsableTitleText(metadata?.summary?.text) || metadata?.titleSuggestionAutoAttemptedAt !== undefined) {
                 return false
             }
 
@@ -1257,7 +1259,7 @@ export class SessionCache {
             if (!session) return false
 
             const metadata = session.metadata
-            if (metadata?.name?.trim() || metadata?.summary?.text?.trim()) {
+            if (metadata?.name?.trim() || isUsableTitleText(metadata?.summary?.text)) {
                 return false
             }
 
@@ -1296,7 +1298,7 @@ export class SessionCache {
             if (!session?.metadata) return false
 
             const metadata = session.metadata
-            if (metadata.name?.trim() || metadata.summary?.text?.trim() || metadata.promptTitle) {
+            if (metadata.name?.trim() || isUsableTitleText(metadata.summary?.text) || metadata.promptTitle) {
                 return false
             }
 
@@ -1332,6 +1334,83 @@ export class SessionCache {
         }
 
         return false
+    }
+
+    /**
+     * Legacy CLI releases (<= 0.30.x) wrote the raw first prompt into
+     * `summary.text`, so a message carrying an image was titled with the
+     * machine-local upload path. That summary hides the Hub-owned
+     * `promptTitle` and blocks generated titles: drop it and record the first
+     * prompt title instead. Runs once per Hub start over the loaded cache;
+     * later metadata writes are filtered on ingest by the CLI socket handler.
+     */
+    repairLegacyUploadPathTitles(): void {
+        for (const cached of this.getSessions()) {
+            if (!isUploadPathTitle(cached.metadata?.summary?.text)) continue
+            try {
+                this.repairLegacyUploadPathTitle(cached.id)
+            } catch (error) {
+                // A display-only title repair must never block Hub startup.
+                console.warn('[SessionCache] Failed to repair a legacy upload-path title', {
+                    sessionId: cached.id,
+                    error
+                })
+            }
+        }
+    }
+
+    private repairLegacyUploadPathTitle(sessionId: string): void {
+        for (let attempt = 0; attempt < METADATA_RETRY_ATTEMPTS; attempt += 1) {
+            const session = this.sessions.get(sessionId) ?? this.refreshSession(sessionId)
+            if (!session?.metadata) return
+
+            const metadata = session.metadata
+            if (!isUploadPathTitle(metadata.summary?.text)) return
+
+            const nextMetadata = { ...metadata }
+            delete nextMetadata.summary
+            if (!nextMetadata.promptTitle?.trim()) {
+                const promptTitle = this.firstPromptTitle(sessionId)
+                if (promptTitle) nextMetadata.promptTitle = promptTitle
+            }
+
+            const result = this.store.sessions.updateSessionMetadata(
+                sessionId,
+                nextMetadata,
+                session.metadataVersion,
+                session.namespace,
+                { touchUpdatedAt: false }
+            )
+
+            if (result.result === 'error') return
+            if (result.result === 'success') {
+                const parsed = MetadataSchema.safeParse(result.value)
+                if (!parsed.success) {
+                    this.refreshSession(sessionId)
+                    return
+                }
+                session.metadata = parsed.data
+                session.metadataVersion = result.version
+                this.publisher.emit({
+                    type: 'session-updated',
+                    sessionId,
+                    namespace: session.namespace,
+                    data: { metadata: { version: result.version, value: parsed.data } } satisfies SessionPatch
+                })
+                return
+            }
+
+            this.refreshSession(sessionId)
+        }
+    }
+
+    private firstPromptTitle(sessionId: string): string | null {
+        for (const message of this.store.messages.getFirstMessages(sessionId, 50)) {
+            if (message.invokedAt === null) continue
+            const title = createPromptTitle(message.content)
+            if (title) return title
+        }
+        return null
     }
 
     /**

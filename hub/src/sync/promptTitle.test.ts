@@ -22,6 +22,13 @@ describe('createPromptTitle', () => {
         expect(createPromptTitle(userText('   '))).toBeNull()
         expect(createPromptTitle({ role: 'agent', content: { type: 'text', text: 'working' } })).toBeNull()
     })
+
+    it('drops upload references instead of titling with the local path', () => {
+        expect(createPromptTitle(userText('@/var/folders/dq/x/T/hapi-blobs/sid-a/1-image.png'))).toBeNull()
+        expect(createPromptTitle(userText(
+            '@/var/folders/dq/x/T/hapi-blobs/sid-a/1-image.png\n\nfix the build'
+        ))).toBe('fix the build')
+    })
 })
 
 describe('prompt title', () => {

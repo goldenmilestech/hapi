@@ -7,6 +7,7 @@ import {
 import { isObject } from '@hapi/protocol'
 import type { Store, StoredMessage } from '../store'
 import { extractMessageEventType } from '../notifications/eventParsing'
+import { isUsableTitleText } from './uploadPathTitle'
 
 export const TITLE_SUGGESTION_MESSAGE_LIMIT = 200
 export const TITLE_SUGGESTION_MAX_INPUT_CHARS = 16_000
@@ -388,8 +389,9 @@ export class TitleSuggestionService {
             | null
             | undefined
         const hasName = typeof metadata?.name === 'string' && metadata.name.trim().length > 0
-        const hasSummary = typeof metadata?.summary?.text === 'string'
-            && metadata.summary.text.trim().length > 0
+        // A legacy CLI could store its raw prompt as the summary; for a message
+        // with an upload that is a local path, which must not block the title.
+        const hasSummary = isUsableTitleText(metadata?.summary?.text)
         if (hasName || hasSummary) {
             return null
         }

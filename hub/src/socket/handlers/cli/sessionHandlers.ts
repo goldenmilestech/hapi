@@ -10,6 +10,7 @@ import { extractTodoWriteTodosFromMessageContent } from '../../../sync/todos'
 import { extractTeamStateFromMessageContent, applyTeamStateDelta } from '../../../sync/teams'
 import { extractBackgroundTasks } from '../../../sync/backgroundTasks'
 import { shouldRecordSessionActivity } from '../../../sync/sessionActivity'
+import { isUploadPathTitle } from '../../../sync/uploadPathTitle'
 import type { CliSocketWithData } from '../../socketTypes'
 import type { SessionEndReason } from '@hapi/protocol'
 import type { AccessErrorReason, AccessResult } from './types'
@@ -85,6 +86,16 @@ function preserveHubOwnedMetadata(incoming: unknown, current: unknown): unknown 
     for (const key of HUB_OWNED_METADATA_KEYS) {
         if (Object.prototype.hasOwnProperty.call(existing, key)) next[key] = existing[key]
         else delete next[key]
+    }
+    // Legacy CLI releases (<= 0.30.x) wrote their raw first prompt as
+    // `summary.text`; for a message carrying an upload that value is the
+    // machine-local path. It would hide the Hub-owned prompt title and block
+    // generated titles, so keep whatever summary the row already has.
+    const incomingSummary = next.summary
+    if (incomingSummary && typeof incomingSummary === 'object' && !Array.isArray(incomingSummary)
+        && isUploadPathTitle((incomingSummary as Record<string, unknown>).text)) {
+        if (Object.prototype.hasOwnProperty.call(existing, 'summary')) next.summary = existing.summary
+        else delete next.summary
     }
     return next
 }
