@@ -35,6 +35,13 @@ export const MACHINE_CAPABILITIES = {
     StopRunner: RPC_METHODS.StopRunner,
     /** Read-only file/Git/search RPCs available on the long-lived runner. */
     WorkspaceFileAccess: 'workspace-file-access',
+    /**
+     * Fresh machine spawns honor the hub-preallocated `reservedSessionId`
+     * (stamp `--hapi-session-id`, adopt that row on create). Runners that
+     * predate the flag ignore it and mint their own row, so preallocating for
+     * them leaves an unadoptable stub and fails an otherwise successful spawn.
+     */
+    SpawnReservedSessionId: 'spawn-reserved-session-id',
 } as const
 
 export type MachineCapability =
@@ -47,6 +54,7 @@ export const CURRENT_MACHINE_CAPABILITIES: readonly MachineCapability[] = [
     MACHINE_CAPABILITIES.CursorChatStoreStatus,
     MACHINE_CAPABILITIES.StopRunner,
     MACHINE_CAPABILITIES.WorkspaceFileAccess,
+    MACHINE_CAPABILITIES.SpawnReservedSessionId,
 ]
 
 /**

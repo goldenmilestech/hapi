@@ -2726,25 +2726,33 @@ export class SyncEngine {
         if (!allocatedSessionId && namespace) {
             const machine = this.getMachineByNamespace(machineId, namespace)
                 ?? this.getMachine(machineId)
-            allocatedSessionId = randomUUID()
-            this.sessionCache.getOrCreateSession(
-                `machine-spawn:${allocatedSessionId}`,
-                {
-                    path: directory,
-                    host: machine?.metadata?.host ?? 'unknown',
-                    flavor: agent,
-                    machineId,
-                    startedBy: 'runner',
-                    startedFromRunner: true,
-                },
-                null,
-                namespace,
-                model,
-                effort,
-                modelReasoningEffort,
-                allocatedSessionId
-            )
-            preallocated = true
+            // Prealloc requires a runner that adopts `reservedSessionId`. Older
+            // runners ignore the field, mint their own row, and then trip the
+            // divergent-success guard below — an error for a session that was
+            // really created, plus a stub that can never be adopted. Capabilities
+            // are runner-owned metadata: child CLI bootstraps merge other fields
+            // over it but never clear the advertised set.
+            if (machine?.metadata?.capabilities?.includes(MACHINE_CAPABILITIES.SpawnReservedSessionId)) {
+                allocatedSessionId = randomUUID()
+                this.sessionCache.getOrCreateSession(
+                    `machine-spawn:${allocatedSessionId}`,
+                    {
+                        path: directory,
+                        host: machine?.metadata?.host ?? 'unknown',
+                        flavor: agent,
+                        machineId,
+                        startedBy: 'runner',
+                        startedFromRunner: true,
+                    },
+                    null,
+                    namespace,
+                    model,
+                    effort,
+                    modelReasoningEffort,
+                    allocatedSessionId
+                )
+                preallocated = true
+            }
         }
 
         let result: Awaited<ReturnType<RpcGateway['spawnSession']>>

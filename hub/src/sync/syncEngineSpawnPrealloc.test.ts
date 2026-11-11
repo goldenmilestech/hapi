@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'bun:test'
+import { MACHINE_CAPABILITIES } from '@hapi/protocol'
 import { Store } from '../store'
 import { RpcRegistry } from '../socket/rpcRegistry'
 import { SyncEngine } from './syncEngine'
+
+/** Machines are only preallocated for runners that can adopt the id. */
+const PREALLOC_MACHINE_METADATA = {
+    host: 'localhost',
+    platform: 'linux',
+    happyCliVersion: '0.1.0',
+    capabilities: [MACHINE_CAPABILITIES.SpawnReservedSessionId],
+}
 
 /**
  * #1911 Major: fresh machine spawns must preallocate a HAPI row id and pass it
@@ -20,7 +29,7 @@ describe('SyncEngine.spawnSession preallocates HAPI id for fresh machine spawns'
         try {
             engine.getOrCreateMachine(
                 'machine-prealloc',
-                { host: 'localhost', platform: 'linux', happyCliVersion: '0.1.0' },
+                PREALLOC_MACHINE_METADATA,
                 null,
                 'default'
             )
@@ -100,7 +109,7 @@ describe('SyncEngine.spawnSession preallocates HAPI id for fresh machine spawns'
         try {
             engine.getOrCreateMachine(
                 'machine-id-mismatch',
-                { host: 'localhost', platform: 'linux', happyCliVersion: '0.1.0' },
+                PREALLOC_MACHINE_METADATA,
                 null,
                 'default'
             )
@@ -148,7 +157,7 @@ describe('SyncEngine.spawnSession preallocates HAPI id for fresh machine spawns'
         try {
             engine.getOrCreateMachine(
                 'machine-codex-prealloc',
-                { host: 'localhost', platform: 'linux', happyCliVersion: '0.1.0' },
+                PREALLOC_MACHINE_METADATA,
                 null,
                 'default'
             )
@@ -226,7 +235,7 @@ describe('SyncEngine.spawnSession preallocates HAPI id for fresh machine spawns'
         try {
             engine.getOrCreateMachine(
                 'machine-reuse',
-                { host: 'localhost', platform: 'linux', happyCliVersion: '0.1.0' },
+                PREALLOC_MACHINE_METADATA,
                 null,
                 'default'
             )
@@ -294,7 +303,7 @@ describe('SyncEngine.spawnSession preallocates HAPI id for fresh machine spawns'
         try {
             engine.getOrCreateMachine(
                 'machine-fail',
-                { host: 'localhost', platform: 'linux', happyCliVersion: '0.1.0' },
+                PREALLOC_MACHINE_METADATA,
                 null,
                 'default'
             )
@@ -355,7 +364,7 @@ describe('SyncEngine.spawnSession preallocates HAPI id for fresh machine spawns'
         try {
             engine.getOrCreateMachine(
                 'machine-fail-alive',
-                { host: 'localhost', platform: 'linux', happyCliVersion: '0.1.0' },
+                PREALLOC_MACHINE_METADATA,
                 null,
                 'default'
             )
@@ -417,7 +426,7 @@ describe('SyncEngine.spawnSession preallocates HAPI id for fresh machine spawns'
         try {
             engine.getOrCreateMachine(
                 'machine-preexec',
-                { host: 'localhost', platform: 'linux', happyCliVersion: '0.1.0' },
+                PREALLOC_MACHINE_METADATA,
                 null,
                 'default'
             )
@@ -482,7 +491,7 @@ describe('SyncEngine.spawnSession preallocates HAPI id for fresh machine spawns'
         try {
             engine.getOrCreateMachine(
                 'machine-dir-approve',
-                { host: 'localhost', platform: 'linux', happyCliVersion: '0.1.0' },
+                PREALLOC_MACHINE_METADATA,
                 null,
                 'default'
             )
@@ -541,7 +550,7 @@ describe('SyncEngine.spawnSession preallocates HAPI id for fresh machine spawns'
         try {
             engine.getOrCreateMachine(
                 'machine-adopt',
-                { host: 'localhost', platform: 'linux', happyCliVersion: '0.1.0' },
+                PREALLOC_MACHINE_METADATA,
                 null,
                 'default'
             )
@@ -619,7 +628,7 @@ describe('SyncEngine.spawnSession preallocates HAPI id for fresh machine spawns'
         try {
             engine.getOrCreateMachine(
                 'machine-ambiguous',
-                { host: 'localhost', platform: 'linux', happyCliVersion: '0.1.0' },
+                PREALLOC_MACHINE_METADATA,
                 null,
                 'default'
             )
@@ -683,7 +692,7 @@ describe('SyncEngine.spawnSession preallocates HAPI id for fresh machine spawns'
         try {
             engine.getOrCreateMachine(
                 'machine-live-protect',
-                { host: 'localhost', platform: 'linux', happyCliVersion: '0.1.0' },
+                PREALLOC_MACHINE_METADATA,
                 null,
                 'default'
             )
@@ -738,6 +747,85 @@ describe('SyncEngine.spawnSession preallocates HAPI id for fresh machine spawns'
 
             expect(result.type).toBe('error')
             expect(store.sessions.getSession(allocatedId!)?.id).toBe(allocatedId)
+        } finally {
+            engine.stop()
+        }
+    })
+
+    it('skips prealloc for runners that do not advertise reservedSessionId', async () => {
+        // 0.30.x runners ignore reservedSessionId and mint their own row. The
+        // hub must not preallocate for them: the divergent-success guard would
+        // reject a spawn that actually succeeded and leave an unadoptable stub.
+        const store = new Store(':memory:')
+        const engine = new SyncEngine(
+            store,
+            {} as never,
+            new RpcRegistry(),
+            { broadcast() {} } as never
+        )
+
+        try {
+            engine.getOrCreateMachine(
+                'machine-legacy-runner',
+                { host: 'localhost', platform: 'linux', happyCliVersion: '0.30.7' },
+                null,
+                'default'
+            )
+            engine.handleMachineAlive({ machineId: 'machine-legacy-runner', time: Date.now() })
+
+            let forwardedExistingId: string | undefined
+            let forwardedReservedId: string | undefined
+            ;(engine as unknown as { rpcGateway: { spawnSession: unknown } }).rpcGateway.spawnSession =
+                async (
+                    _machineId: string,
+                    _directory: string,
+                    _agent?: string,
+                    _model?: string,
+                    _modelReasoningEffort?: string,
+                    _yolo?: boolean,
+                    _sessionType?: string,
+                    _worktreeName?: string,
+                    _resumeSessionId?: string,
+                    _effort?: string,
+                    _permissionMode?: string,
+                    _serviceTier?: string,
+                    existingSessionId?: string,
+                    _collaborationMode?: string,
+                    _copilotAgentMode?: string,
+                    _startingMode?: string,
+                    _forkSession?: boolean,
+                    reservedSessionId?: string
+                ) => {
+                    forwardedExistingId = existingSessionId
+                    forwardedReservedId = reservedSessionId
+                    // Legacy runner: the CLI created its own row.
+                    return { type: 'success' as const, sessionId: 'legacy-runner-created-id' }
+                }
+
+            const result = await engine.spawnSession(
+                'machine-legacy-runner',
+                '/tmp/project',
+                'claude',
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                'default'
+            )
+
+            expect(result).toEqual({ type: 'success', sessionId: 'legacy-runner-created-id' })
+            expect(forwardedExistingId).toBeUndefined()
+            expect(forwardedReservedId).toBeUndefined()
+            expect(engine.getSessions()).toHaveLength(0)
         } finally {
             engine.stop()
         }
