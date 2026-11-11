@@ -542,3 +542,35 @@ describe('cli session handlers', () => {
         })
     })
 })
+
+describe('cli session handlers auto title hook', () => {
+    it('notifies onUserMessage for human text but not for agent output', () => {
+        const store = new Store(':memory:')
+        const session = store.sessions.getOrCreateSession(
+            'auto-title-hook',
+            { path: '/tmp/auto-title-hook', host: 'localhost' },
+            null,
+            'default'
+        )
+        const socket = new FakeSocket()
+        const userMessages: string[] = []
+        registerSessionHandlers(socket as unknown as CliSocketWithData, {
+            store,
+            resolveSessionAccess: () => ({ ok: true, value: session }),
+            emitAccessError() {},
+            onUserMessage: sessionId => userMessages.push(sessionId)
+        })
+
+        socket.trigger('message', {
+            sid: session.id,
+            message: { role: 'user', content: { type: 'text', text: 'Help me ship the release' } }
+        })
+        socket.trigger('message', {
+            sid: session.id,
+            message: { role: 'agent', content: { type: 'output', data: { type: 'text', text: 'Working on it' } } }
+        })
+
+        expect(userMessages).toEqual([session.id])
+        store.close()
+    })
+})
