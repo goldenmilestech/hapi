@@ -2148,7 +2148,7 @@ export function SessionList(props: {
                                     {t('sessions.group.expand', { n: expandCount })}
                                 </button>
                             </div>
-                        ) : group.sessions.length > sessionPreviewLimit && (hiddenSessionCount > 0 || canShowFewerSessions) ? (
+                        ) : canCollapseToActive || (group.sessions.length > sessionPreviewLimit && (hiddenSessionCount > 0 || canShowFewerSessions)) ? (
                             <div className="ml-2.5 mr-2 my-1 flex gap-1.5">
                                 {canShowFewerSessions ? (
                                     <button

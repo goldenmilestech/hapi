@@ -1157,6 +1157,44 @@ describe('SessionList collapse behavior', () => {
         expect(screen.getByRole('button', { name: 'Expand 2' })).toBeInTheDocument()
     })
 
+    it('offers the active fold even when the group fits inside the preview limit', () => {
+        const sessions = [
+            makeSession({
+                id: 'session-active',
+                active: true,
+                updatedAt: 100,
+                metadata: { path: '/work/hapi', name: 'Live task', flavor: 'codex' },
+            }),
+            ...Array.from({ length: 2 }, (_, index) => makeSession({
+                id: `session-idle-${index + 1}`,
+                updatedAt: 90 - index,
+                metadata: {
+                    path: '/work/hapi',
+                    name: `Archived task ${index + 1}`,
+                    flavor: 'codex',
+                },
+            })),
+        ]
+
+        render(renderSessionList(sessions, null))
+
+        // The whole group is already previewed; the fold is still offered
+        // because the active rows and the archived rows are both on screen.
+        expect(screen.getByRole('button', { name: /Archived task 2/ })).toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Collapse to active' }))
+
+        expect(screen.getByRole('button', { name: /Live task/ })).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Archived task 1/ })).toBeNull()
+        expect(screen.queryByRole('button', { name: /Archived task 2/ })).toBeNull()
+        expect(screen.getByRole('button', { name: 'Expand 2' })).toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Expand 2' }))
+
+        expect(screen.getByRole('button', { name: /Archived task 1/ })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /Archived task 2/ })).toBeInTheDocument()
+    })
+
     it('keeps the open inactive session visible while collapsed to active', () => {
         localStorage.setItem('hapi-session-preview-limit', '3')
         const sessions = [
