@@ -44,6 +44,12 @@ export type MessagePosition = {
 
 export type SteerDeliveryState = 'queued' | 'dispatching' | 'indeterminate'
 
+function isAgentContent(content: unknown): boolean {
+    return typeof content === 'object'
+        && content !== null
+        && (content as { role?: unknown }).role === 'agent'
+}
+
 export class ImportedMessageConflictError extends Error {
     constructor(readonly localId: string) {
         super(`Imported message content changed for localId: ${localId}`)
@@ -177,7 +183,9 @@ export function addMessage(
     // client-provided createdAt when present) rather than server-now so getMessagesByPosition's
     // COALESCE(invoked_at, created_at) sort reflects the transcript's own jsonl order instead of
     // hub arrival order.
-    const invokedAt = localId ? null : stampedAt
+    // Agent output may carry a localId as a history locator (Claude transcript
+    // uuid); it never waits for an ack, so stamp it as invoked immediately.
+    const invokedAt = localId && !isAgentContent(content) ? null : stampedAt
 
     return db.transaction(() => {
         const previousHead = getNewestMessagePosition(db, sessionId)

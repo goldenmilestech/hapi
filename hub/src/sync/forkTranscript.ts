@@ -1,7 +1,8 @@
 /**
  * Select the HAPI transcript prefix to hydrate into a forked child session.
- * Historical fork excludes the boundary message and everything after it.
- * Current fork copies the full source transcript.
+ * Historical fork excludes the boundary message and everything after it,
+ * except when the boundary is an agent reply: forking from a reply includes
+ * that reply. Current fork copies the full source transcript.
  * Pending scheduled/queued rows (`invokedAt == null`) are never copied — they
  * are not part of the native history being forked and would otherwise fire on
  * both the source and the child.
@@ -16,7 +17,8 @@ export function selectForkTranscriptPrefix<T extends {
     seq: number
 }>(
     messages: T[],
-    messageLocalId?: string
+    messageLocalId?: string,
+    includeBoundary = false
 ): T[] {
     const ordered = messages.slice().sort((a, b) => {
         const byTime = (a.invokedAt ?? a.createdAt) - (b.invokedAt ?? b.createdAt)
@@ -30,7 +32,7 @@ export function selectForkTranscriptPrefix<T extends {
         if (cutoff < 0) {
             throw new Error('Fork boundary message not found')
         }
-        scoped = ordered.slice(0, cutoff)
+        scoped = ordered.slice(0, includeBoundary ? cutoff + 1 : cutoff)
     }
     return scoped.filter((message) => message.invokedAt != null)
 }

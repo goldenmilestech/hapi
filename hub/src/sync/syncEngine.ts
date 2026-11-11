@@ -1981,9 +1981,17 @@ export class SyncEngine {
 
         const flavor = this.resolveFlavor(source)
         const childId = randomUUID()
+        const sourceMessages = this.store.messages.getAllMessages(sessionId)
+        const boundary = messageLocalId
+            ? sourceMessages.find((message) => message.localId === messageLocalId)
+            : undefined
+        const includeBoundary = boundary != null
+            && typeof boundary.content === 'object'
+            && boundary.content !== null
+            && (boundary.content as { role?: unknown }).role === 'agent'
         let prefix
         try {
-            prefix = selectForkTranscriptPrefix(this.store.messages.getAllMessages(sessionId), messageLocalId)
+            prefix = selectForkTranscriptPrefix(sourceMessages, messageLocalId, includeBoundary)
         } catch (error) {
             return { type: 'error', message: error instanceof Error ? error.message : String(error) }
         }

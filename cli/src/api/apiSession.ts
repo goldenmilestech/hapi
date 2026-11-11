@@ -1028,10 +1028,20 @@ export class ApiSessionClient extends EventEmitter {
             }
         }
 
+        // Assistant rows double as native fork boundaries. Reuse the Claude
+        // transcript uuid as the hub localId so a later historical fork can
+        // resolve the boundary without a separate locator map.
+        const historyLocalId = body.type === 'assistant'
+            && typeof (body as { uuid?: unknown }).uuid === 'string'
+            && (body as { uuid: string }).uuid.length > 0
+            ? (body as { uuid: string }).uuid
+            : undefined
+
         this.emitOrQueue(() => {
             this.socket.emit('message', {
                 sid: this.sessionId,
                 message: content,
+                ...(historyLocalId ? { localId: historyLocalId } : {}),
                 ...(createdAt !== undefined ? { createdAt } : {})
             })
         })

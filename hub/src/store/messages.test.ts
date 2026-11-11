@@ -189,6 +189,25 @@ describe('cancelQueuedMessage', () => {
     })
 })
 
+describe('agent history locators', () => {
+    it('stamps agent messages with a localId as invoked immediately', () => {
+        const store = makeStore()
+        const session = makeSession(store, 'agent-history-locator')
+        const msg = store.messages.addMessage(
+            session.id,
+            {
+                role: 'agent',
+                content: { type: 'output', data: { type: 'assistant', uuid: 'claude-entry-1' } },
+                meta: { sentFrom: 'cli' }
+            },
+            'claude-entry-1'
+        )
+
+        expect(msg.invokedAt).not.toBeNull()
+        expect(store.messages.getUninvokedLocalMessages(session.id)).toHaveLength(0)
+    })
+})
+
 describe('recordMessagesConsumed', () => {
     it('rolls back the invocation transition when the session namespace cannot be verified', () => {
         const store = makeStore()

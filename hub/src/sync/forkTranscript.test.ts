@@ -22,6 +22,12 @@ describe('selectForkTranscriptPrefix', () => {
         ])
     })
 
+    it('keeps an agent reply boundary when forking from that reply', () => {
+        expect(selectForkTranscriptPrefix(messages, 'b', true).map((message) => message.text)).toEqual([
+            '1', '2', '3'
+        ])
+    })
+
     it('never copies pending scheduled rows', () => {
         expect(selectForkTranscriptPrefix(messages).some((message) => message.localId === 'pending')).toBe(false)
         expect(selectForkTranscriptPrefix(messages, 'pending').map((message) => message.text)).toEqual([

@@ -31,6 +31,10 @@ export function HappyAssistantMessage() {
         const custom = s.message.metadata.custom as Partial<HappyChatMessageMetadata> | undefined
         return custom?.sourceMessageIds
     })
+    const messageLocalId = useAuiState((s) => {
+        const custom = s.message.metadata.custom as Partial<HappyChatMessageMetadata> | undefined
+        return custom?.localId ?? null
+    })
     const isCliOutput = useAuiState((s) => {
         const custom = s.message.metadata.custom as Partial<HappyChatMessageMetadata> | undefined
         return custom?.kind === 'cli-output'
@@ -65,12 +69,23 @@ export function HappyAssistantMessage() {
     const metadata = { durationMs, usage, model: messageModel ?? null, turnCount, roundSummary }
 
     const history = ctx.metadata?.capabilities?.conversationHistory
+    const forkEnabled = !ctx.disabled || ctx.allowInactiveFork === true
     const showForkCurrent = Boolean(
         (history?.forkCurrent || ctx.allowInactiveFork)
         && ctx.isLatestCompletedBoundary?.(messageId)
-        && (!ctx.disabled || ctx.allowInactiveFork === true)
+        && forkEnabled
         && ctx.onForkConversation
     )
+    // Earlier replies branch off their own native transcript entry. The
+    // latest completed boundary keeps using the cheaper tail fork.
+    const showForkAtMessage = Boolean(
+        history?.forkAtMessage
+        && messageLocalId
+        && ctx.isLatestCompletedBoundary?.(messageId) === false
+        && forkEnabled
+        && ctx.onForkConversation
+    )
+    const showFork = showForkCurrent || showForkAtMessage
 
     const rootClass = toolOnly
         ? 'py-1 min-w-0 max-w-full overflow-x-hidden'
@@ -93,9 +108,13 @@ export function HappyAssistantMessage() {
                 copyText={copyText || undefined}
                 metadata={metadata}
                 messageElementId={elementId}
-                showFork={showForkCurrent}
+                showFork={showFork}
                 historyActionPending={ctx.historyActionPending}
-                onFork={showForkCurrent ? () => ctx.onForkConversation!() : undefined}
+                onFork={showFork
+                    ? () => showForkAtMessage && messageLocalId
+                        ? ctx.onForkConversation!(messageLocalId)
+                        : ctx.onForkConversation!()
+                    : undefined}
             />
         </MessagePrimitive.Root>
     )

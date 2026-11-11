@@ -641,6 +641,7 @@ function toThreadMessageLike(
             metadata: {
                 custom: {
                     kind: 'assistant',
+                    localId: block.localId,
                     invokedAt: block.invokedAt,
                     durationMs: block.durationMs,
                     usage: block.usage,
