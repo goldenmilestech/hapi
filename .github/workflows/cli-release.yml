@@ -1,0 +1,97 @@
+name: CLI Build (internal)
+
+# Fork-only counterpart to release.yml. Upstream's Release workflow publishes
+# to the @twsxtd npm scope with Trusted Publishing, which this fork cannot do —
+# the failure aborts packaging and the GitHub Release never gets created.
+# This workflow only builds and attaches binaries, so the fork can produce CLI
+# builds (and the Linux hub binary) without owning the npm scope or the
+# Homebrew tap.
+on:
+    workflow_dispatch:
+        inputs:
+            release_tag:
+                description: 'Release tag (defaults to cli-YYYYMMDD-<short sha>)'
+                required: false
+                type: string
+            create_release:
+                description: 'Create a GitHub Release with the built binaries'
+                required: false
+                type: boolean
+                default: true
+    push:
+        tags:
+            - 'cli-*'
+
+permissions:
+    contents: write
+
+concurrency:
+    group: cli-build-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: oven-sh/setup-bun@v2
+            - run: bun install --frozen-lockfile
+
+            # Same build the upstream release uses: web assets, tunwg, then
+            # cross-compiled single executables for every supported target.
+            - run: bun run build:single-exe:all
+
+            - name: Package release artifacts
+              run: |
+                  cd cli/dist-exe
+                  mkdir -p ../release-artifacts
+
+                  for dir in bun-*/; do
+                      target="${dir%/}"
+                      # bun-darwin-arm64 -> hapi-darwin-arm64
+                      name="hapi-${target#bun-}"
+                      name="${name/windows/win32}"
+
+                      if [[ "$target" == *"windows"* ]]; then
+                          zip -j "../release-artifacts/${name}.zip" "$target"/hapi.exe
+                      else
+                          tar -czvf "../release-artifacts/${name}.tar.gz" -C "$target" hapi
+                      fi
+                  done
+
+                  cd ../release-artifacts
+                  sha256sum * > checksums.txt
+                  ls -lh
+
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: hapi-cli-${{ github.sha }}
+                  path: cli/release-artifacts/*
+                  retention-days: 14
+
+            - name: Resolve release tag
+              id: tag
+              run: |
+                  if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+                      echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+                  elif [[ -n "${{ inputs.release_tag }}" ]]; then
+                      echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "tag=cli-$(date -u +%Y%m%d)-${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+                  fi
+
+            - name: Create Release
+              if: github.event_name == 'push' || inputs.create_release
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  TAG: ${{ steps.tag.outputs.tag }}
+              run: |
+                  if gh release view "$TAG" >/dev/null 2>&1; then
+                      gh release upload "$TAG" cli/release-artifacts/* --clobber
+                  else
+                      gh release create "$TAG" \
+                          --title "CLI build $TAG" \
+                          --notes "Built from ${GITHUB_SHA} (${GITHUB_REF_NAME})." \
+                          --prerelease \
+                          cli/release-artifacts/*
+                  fi
