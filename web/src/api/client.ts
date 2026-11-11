@@ -3,6 +3,9 @@ import type {
     AuthResponse,
     CreateSessionShareRequest,
     CreateSessionShareResponse,
+    RecoverSessionShareResponse,
+    RenewSessionShareRequest,
+    RenewSessionShareResponse,
     SessionShareListResponse,
     CodexLocalSessionsResponse,
     CodexDuplicateSessionsResponse,
@@ -537,6 +540,24 @@ export class ApiClient {
     async listSessionShares(sessionId: string): Promise<SessionShareListResponse> {
         return await this.request<SessionShareListResponse>(
             `/api/sessions/${encodeURIComponent(sessionId)}/share`
+        )
+    }
+
+    async renewSessionShare(
+        sessionId: string,
+        shareId: string,
+        body: RenewSessionShareRequest = {}
+    ): Promise<RenewSessionShareResponse> {
+        return await this.request<RenewSessionShareResponse>(
+            `/api/sessions/${encodeURIComponent(sessionId)}/share/${encodeURIComponent(shareId)}`,
+            { method: 'PATCH', body: JSON.stringify(body) }
+        )
+    }
+
+    async recoverSessionShare(sessionId: string, shareId: string): Promise<RecoverSessionShareResponse> {
+        return await this.request<RecoverSessionShareResponse>(
+            `/api/sessions/${encodeURIComponent(sessionId)}/share/${encodeURIComponent(shareId)}/recover`,
+            { method: 'POST' }
         )
     }
 

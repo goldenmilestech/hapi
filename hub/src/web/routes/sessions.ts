@@ -33,17 +33,23 @@ import { RPC_TARGET_MISSING_ERROR_CODE } from '@hapi/protocol/rpcMethods'
 import type { SlashCommand } from '@hapi/protocol/apiTypes'
 import {
     CreateSessionShareRequestSchema,
+    RenewSessionShareRequestSchema,
     type SessionShareSummary
 } from '@hapi/protocol/apiTypes'
 import { Hono, type Context } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
-import { randomBytes } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import type { SyncEngine, Session } from '../../sync/syncEngine'
 import { RpcTargetMissingError } from '../../sync/rpcGateway'
 import type { WebAppEnv } from '../middleware/auth'
 import type { Store } from '../../store'
 import { hashShareToken, type SessionShareRecord } from '../../store/sessionShares'
 import { getConfiguration } from '../../configuration'
+import {
+    deriveSessionShareToken,
+    getOrCreateShareTokenSecret
+} from '../../config/shareTokenSecret'
+import { constantTimeEquals } from '../../utils/crypto'
 import { loadScratchlistAttachmentLimitsFromEnv } from '../../config/scratchlistAttachmentLimits'
 import { validateScratchlistAttachmentsForWrite, scratchlistSessionBytesBeforeForPut } from '../../scratchlistAttachments/validate'
 import { TitleSuggestionError } from '../../sync/titleSuggestion'
@@ -91,7 +97,11 @@ function estimateBase64Bytes(base64: string): number {
     return Math.floor((len * 3) / 4) - padding
 }
 
-export function createSessionsRoutes(getSyncEngine: () => SyncEngine | null, store: Store): Hono<WebAppEnv> {
+export function createSessionsRoutes(
+    getSyncEngine: () => SyncEngine | null,
+    store: Store,
+    options?: { shareTokenSecret?: Uint8Array }
+): Hono<WebAppEnv> {
     const app = new Hono<WebAppEnv>()
 
     app.get('/sessions', (c) => {
@@ -1877,15 +1887,57 @@ export function createSessionsRoutes(getSyncEngine: () => SyncEngine | null, sto
     )
 
     // --- Session share links ---
-    // The opaque token is returned exactly once, at creation time. Only its
-    // SHA-256 digest is stored, and every exchange re-checks the session and
-    // the row so revocation takes effect on the next token refresh.
-    const toShareSummary = (share: SessionShareRecord): SessionShareSummary => ({
+    // Tokens are derived from the share id and a hub-local secret, so the owner
+    // can be shown the same link again after the creating dialog closes. Only
+    // the SHA-256 digest is persisted, and every exchange re-checks the session
+    // and the row so revocation takes effect on the next token refresh.
+    let shareTokenSecretPromise: Promise<Uint8Array> | null = null
+    const resolveShareTokenSecret = (): Promise<Uint8Array> => {
+        if (!shareTokenSecretPromise) {
+            const pending = options?.shareTokenSecret
+                ? Promise.resolve(options.shareTokenSecret)
+                : getOrCreateShareTokenSecret(getConfiguration().dataDir)
+            shareTokenSecretPromise = pending.catch((error) => {
+                shareTokenSecretPromise = null
+                throw error
+            })
+        }
+        return shareTokenSecretPromise
+    }
+
+    const resolveShareOrigin = (c: Context<WebAppEnv>): string => {
+        const headerOrigin = c.req.header('origin')
+        if (headerOrigin) {
+            return headerOrigin.replace(/\/$/, '')
+        }
+        const configuration = getConfiguration()
+        // publicUrl defaults to http://localhost:<port>, which must not leak
+        // into links. Only trust it when an operator configured it explicitly.
+        if (configuration.sources.publicUrl !== 'default' && configuration.publicUrl) {
+            return configuration.publicUrl.replace(/\/$/, '')
+        }
+        // Same-origin GET fetches do not send Origin; the request URL carries
+        // the host the browser used (Traefik forwards the public Host header).
+        return new URL(c.req.url).origin
+    }
+
+    const recoverShareToken = async (share: SessionShareRecord): Promise<string | null> => {
+        const secret = await resolveShareTokenSecret()
+        const candidate = deriveSessionShareToken(secret, share.id)
+        return constantTimeEquals(hashShareToken(candidate), share.tokenHash) ? candidate : null
+    }
+
+    const toShareSummary = (
+        share: SessionShareRecord,
+        token: string | null,
+        origin: string
+    ): SessionShareSummary => ({
         id: share.id,
         mode: share.mode,
         createdAt: share.createdAt,
         expiresAt: share.expiresAt,
-        revokedAt: share.revokedAt
+        revokedAt: share.revokedAt,
+        url: token ? `${origin}/s/${token}` : null
     })
 
     app.post('/sessions/:id/share', async (c) => {
@@ -1902,8 +1954,10 @@ export function createSessionsRoutes(getSyncEngine: () => SyncEngine | null, sto
         }
 
         const ttlHours = parsed.data.ttlHours ?? 24
-        const token = randomBytes(32).toString('base64url')
+        const shareId = randomUUID()
+        const token = deriveSessionShareToken(await resolveShareTokenSecret(), shareId)
         const share = store.sessionShares.create({
+            id: shareId,
             sessionId: sessionResult.sessionId,
             namespace: c.get('namespace'),
             tokenHash: hashShareToken(token),
@@ -1911,29 +1965,99 @@ export function createSessionsRoutes(getSyncEngine: () => SyncEngine | null, sto
             expiresAt: Date.now() + ttlHours * 60 * 60 * 1000
         })
 
-        const configuredOrigin = getConfiguration().publicUrl
-        const origin = (c.req.header('origin') || configuredOrigin || '').replace(/\/$/, '')
-
         return c.json({
             share: {
-                ...toShareSummary(share),
-                token,
-                url: `${origin}/s/${token}`
+                ...toShareSummary(share, token, resolveShareOrigin(c)),
+                token
             }
         })
     })
 
-    app.get('/sessions/:id/share', (c) => {
+    app.get('/sessions/:id/share', async (c) => {
         const engine = requireSyncEngine(c, getSyncEngine)
         if (engine instanceof Response) return engine
 
         const sessionResult = requireSessionFromParam(c, engine)
         if (sessionResult instanceof Response) return sessionResult
 
-        const shares = store.sessionShares
-            .listBySession(sessionResult.sessionId, c.get('namespace'))
-            .map(toShareSummary)
+        const origin = resolveShareOrigin(c)
+        const shares = await Promise.all(
+            store.sessionShares
+                .listBySession(sessionResult.sessionId, c.get('namespace'))
+                .map(async (share) => toShareSummary(share, await recoverShareToken(share), origin))
+        )
         return c.json({ shares })
+    })
+
+    app.patch('/sessions/:id/share/:shareId', async (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) return engine
+
+        const sessionResult = requireSessionFromParam(c, engine)
+        if (sessionResult instanceof Response) return sessionResult
+
+        const body = await c.req.json().catch(() => null)
+        const parsed = RenewSessionShareRequestSchema.safeParse(body ?? {})
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid body', issues: parsed.error.flatten() }, 400)
+        }
+
+        const shareId = c.req.param('shareId')
+        const sessionId = sessionResult.sessionId
+        const namespace = c.get('namespace')
+        const ttlHours = parsed.data.ttlHours ?? 24
+        const updated = store.sessionShares.updateExpiresAt(
+            shareId,
+            sessionId,
+            namespace,
+            Date.now() + ttlHours * 60 * 60 * 1000
+        )
+        if (!updated) {
+            const existing = store.sessionShares.getById(shareId, sessionId, namespace)
+            if (existing && existing.revokedAt !== null) {
+                return c.json({ error: 'Share is revoked' }, 409)
+            }
+            return c.json({ error: 'Share not found' }, 404)
+        }
+
+        return c.json({
+            share: toShareSummary(updated, await recoverShareToken(updated), resolveShareOrigin(c))
+        })
+    })
+
+    // Legacy rows were issued with random tokens that cannot be recomputed.
+    // Rewriting the hash to the derived token makes the link retrievable again;
+    // the previously issued link stops working immediately.
+    app.post('/sessions/:id/share/:shareId/recover', async (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) return engine
+
+        const sessionResult = requireSessionFromParam(c, engine)
+        if (sessionResult instanceof Response) return sessionResult
+
+        const shareId = c.req.param('shareId')
+        const sessionId = sessionResult.sessionId
+        const namespace = c.get('namespace')
+        const existing = store.sessionShares.getById(shareId, sessionId, namespace)
+        if (!existing) {
+            return c.json({ error: 'Share not found' }, 404)
+        }
+        if (existing.revokedAt !== null) {
+            return c.json({ error: 'Share is revoked' }, 409)
+        }
+
+        const token = deriveSessionShareToken(await resolveShareTokenSecret(), shareId)
+        const tokenHash = hashShareToken(token)
+        const share = constantTimeEquals(tokenHash, existing.tokenHash)
+            ? existing
+            : store.sessionShares.updateTokenHash(shareId, sessionId, namespace, tokenHash)
+        if (!share) {
+            return c.json({ error: 'Share is revoked' }, 409)
+        }
+
+        return c.json({
+            share: toShareSummary(share, token, resolveShareOrigin(c))
+        })
     })
 
     app.delete('/sessions/:id/share/:shareId', (c) => {

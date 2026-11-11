@@ -842,17 +842,38 @@ export const CreateSessionShareRequestSchema = z.object({
 
 export type CreateSessionShareRequest = z.infer<typeof CreateSessionShareRequestSchema>
 
+export const RenewSessionShareRequestSchema = z.object({
+    ttlHours: z.number().int().min(1).max(168).optional()
+})
+
+export type RenewSessionShareRequest = z.infer<typeof RenewSessionShareRequestSchema>
+
 export type SessionShareSummary = {
     id: string
     mode: SessionShareMode
     createdAt: number
     expiresAt: number | null
     revokedAt: number | null
+    /**
+     * Full share URL. Null when the hub cannot recover the token, which is the
+     * case for links issued before tokens became derivable from the share id.
+     */
+    url: string | null
 }
 
 export type CreateSessionShareResponse = {
     share: SessionShareSummary & {
         token: string
+        url: string
+    }
+}
+
+export type RenewSessionShareResponse = {
+    share: SessionShareSummary
+}
+
+export type RecoverSessionShareResponse = {
+    share: SessionShareSummary & {
         url: string
     }
 }

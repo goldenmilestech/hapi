@@ -139,7 +139,7 @@ git push fork main
 
 | 分支/提交 | 内容 | 主要改动面 |
 |---|---|---|
-| `feat/session-share-v034`（2026-11-11 已合入 `main`） | 会话分享链接（带作用域的临时 token） | hub 分享接口 + web 分享页 |
+| `feat/session-share-v034`（2026-11-11 已合入 `main`） | 会话分享链接（带作用域的临时 token；token 由 share id 推导，可在弹窗中再次查看/复制并续期，旧随机 token 记录可恢复） | hub 分享接口 + web 分享页 |
 | `feat/auto-title-provider-v034`（2026-11-11 已合入 `main`） | hub 用首条用户消息自动生成会话标题 | `hub/src/sync/titleSuggestion.ts`、`syncEngine.ts`、`socket/handlers/cli/sessionHandlers.ts`、`startHub.ts` |
 | `feat/btw-side-question-v034`（2026-11-11 已合入 `main`） | `/btw` 侧问题（不打断主会话） | cli + web |
 | `main`（2026-11-11） | Missions 控制台：Manager/Worker 分组、审批收件箱、停止/归档操作、work-graph 时间线，以及 `work-graph-updated` SSE 实时刷新 | `web/src/routes/missions/`、`web/src/lib/missions.ts`、`hub/src/sync/syncEngine.ts`、`hub/src/web/routes/workGraph.ts`、`shared/src/schemas.ts` |
