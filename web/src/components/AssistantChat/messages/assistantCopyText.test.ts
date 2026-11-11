@@ -14,6 +14,15 @@ describe('getAssistantCopyText', () => {
         expect(getAssistantCopyText(parts)).toBe('First paragraph.\n\nSecond paragraph.')
     })
 
+    it('preserves fenced code blocks verbatim so copy keeps complete code', () => {
+        const text = '修复如下：\n\n```ts\nconst add = (a: number, b: number) => a + b\n```\n\n完成后运行类型检查。'
+        const parts = [
+            { type: 'text', text }
+        ] satisfies ThreadAssistantMessagePart[]
+
+        expect(getAssistantCopyText(parts)).toBe(text)
+    })
+
     it('returns empty string when no assistant text exists', () => {
         const parts = [
             { type: 'reasoning', text: 'Thinking' },
