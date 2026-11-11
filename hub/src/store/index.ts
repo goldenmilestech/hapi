@@ -54,7 +54,7 @@ export {
     WorkGraphValidationError
 } from './workGraph'
 
-const SCHEMA_VERSION: number = 31
+const SCHEMA_VERSION: number = 32
 const REQUIRED_TABLES = [
     'sessions',
     'machines',
@@ -382,6 +382,7 @@ export class Store {
             28: () => this.migrateFromV28ToV29(),
             29: () => this.migrateFromV29ToV30(),
             30: () => this.migrateFromV30ToV31(),
+            31: () => this.migrateFromV31ToV32(),
         })
 
         if (currentVersion === 0) {
@@ -419,6 +420,7 @@ export class Store {
             this.migrateFromV26ToV30()
             this.migrateFromV29ToV30()
             this.migrateFromV30ToV31()
+            this.migrateFromV31ToV32()
             this.setUserVersion(SCHEMA_VERSION)
             return
         }
@@ -460,6 +462,7 @@ export class Store {
                 model TEXT,
                 model_reasoning_effort TEXT,
                 effort TEXT,
+                context_limit INTEGER,
                 service_tier TEXT,
                 todos TEXT,
                 todos_updated_at INTEGER,
@@ -1216,6 +1219,15 @@ export class Store {
     private migrateFromV30ToV31(): void {
         createMessageContentSearchTable(this.db)
         if (this.getMessageColumnNames().size > 0) rebuildMessageContentSearch(this.db)
+    }
+
+    /** v31→v32: per-session context ceiling (native auto-compact window). */
+    private migrateFromV31ToV32(): void {
+        const columns = this.getSessionColumnNames()
+        if (columns.size === 0) return
+        if (!columns.has('context_limit')) {
+            this.db.exec('ALTER TABLE sessions ADD COLUMN context_limit INTEGER')
+        }
     }
 
     private getSessionColumnNames(): Set<string> {

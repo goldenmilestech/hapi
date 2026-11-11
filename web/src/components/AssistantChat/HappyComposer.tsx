@@ -313,6 +313,12 @@ export function HappyComposer(props: {
     contextSize?: number
     contextCacheRead?: number
     contextWindow?: number | null
+    /** Per-session context ceiling; see StatusBar.contextLimit. */
+    contextLimit?: number | null
+    onContextLimitChange?: (contextLimit: number | null) => Promise<void> | void
+    /** Send the flavor's compact command from the context popover. */
+    onCompact?: () => void
+    compactDisabled?: boolean
     /** Model for the context-window heuristic; see StatusBar.contextModel. */
     contextModel?: string | null
     controlledByUser?: boolean
@@ -436,6 +442,10 @@ export function HappyComposer(props: {
         contextSize,
         contextCacheRead,
         contextWindow,
+        contextLimit,
+        onContextLimitChange,
+        onCompact,
+        compactDisabled,
         contextModel,
         controlledByUser = false,
         agentFlavor,
@@ -2345,6 +2355,10 @@ export function HappyComposer(props: {
                         contextSize={contextSize}
                         contextCacheRead={contextCacheRead}
                         contextWindow={contextWindow}
+                        contextLimit={contextLimit}
+                        onContextLimitChange={onContextLimitChange}
+                        onCompact={onCompact}
+                        compactDisabled={compactDisabled}
                         contextModel={contextModel}
                         model={model}
                         modelReasoningEffort={modelReasoningEffort}

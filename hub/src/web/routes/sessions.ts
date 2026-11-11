@@ -17,6 +17,7 @@ import {
     ScratchlistEntryCreateRequestSchema,
     ScratchlistEntryUpdateRequestSchema,
     SessionCollaborationModeRequestSchema,
+    SessionContextLimitRequestSchema,
     SessionCopilotAgentModeRequestSchema,
     SessionEffortRequestSchema,
     SessionModelReasoningEffortRequestSchema,
@@ -1015,6 +1016,35 @@ export function createSessionsRoutes(
             return c.json({ ok: true })
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Failed to apply effort'
+            return c.json({ error: message }, 409)
+        }
+    })
+
+    app.post('/sessions/:id/context-limit', async (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) {
+            return engine
+        }
+
+        // Inactive sessions accept the setting too: it is a persisted
+        // preference that the next process reads at bootstrap, so requiring a
+        // live process here would make the popover unusable on history rows.
+        const sessionResult = requireSessionFromParam(c, engine)
+        if (sessionResult instanceof Response) {
+            return sessionResult
+        }
+
+        const body = await c.req.json().catch(() => null)
+        const parsed = SessionContextLimitRequestSchema.safeParse(body)
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid body' }, 400)
+        }
+
+        try {
+            await engine.setSessionContextLimit(sessionResult.sessionId, parsed.data.contextLimit)
+            return c.json({ ok: true })
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to set context limit'
             return c.json({ error: message }, 409)
         }
     })

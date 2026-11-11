@@ -201,6 +201,7 @@ export class RpcGateway {
             model?: { provider: string; modelId: string } | string | null
             modelReasoningEffort?: string | null
             effort?: string | null
+            contextLimit?: number | null
             collaborationMode?: CodexCollaborationMode
             copilotAgentMode?: CopilotAgentMode
         }

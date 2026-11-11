@@ -19,7 +19,7 @@ const TURN_RECOVERY_WINDOW_MS = 10 * 60_000
 // snapshot. Cap retries so genuine concurrent contention still surfaces to the
 // HTTP caller as 409 instead of spinning forever.
 const METADATA_RETRY_ATTEMPTS = 5
-type RuntimeConfigKey = 'permissionMode' | 'model' | 'modelReasoningEffort' | 'effort' | 'serviceTier' | 'collaborationMode' | 'copilotAgentMode'
+type RuntimeConfigKey = 'permissionMode' | 'model' | 'modelReasoningEffort' | 'effort' | 'contextLimit' | 'serviceTier' | 'collaborationMode' | 'copilotAgentMode'
 
 export class SessionCache {
     private readonly sessions: Map<string, Session> = new Map()
@@ -277,6 +277,7 @@ export class SessionCache {
             model: stored.model,
             modelReasoningEffort: stored.modelReasoningEffort,
             effort: stored.effort,
+            contextLimit: stored.contextLimit ?? null,
             serviceTier: stored.serviceTier,
             permissionMode: existing?.permissionMode ?? metadata?.preferredPermissionMode,
             collaborationMode: existing?.collaborationMode,
@@ -942,6 +943,7 @@ export class SessionCache {
             model?: { provider: string; modelId: string } | string | null
             modelReasoningEffort?: string | null
             effort?: string | null
+            contextLimit?: number | null
             serviceTier?: string | null
             collaborationMode?: CodexCollaborationMode
             copilotAgentMode?: CopilotAgentMode
@@ -1005,6 +1007,18 @@ export class SessionCache {
             }
             session.effort = config.effort
             this.markRuntimeConfigUpdated(sessionId, 'effort', appliedAt)
+        }
+        if (config.contextLimit !== undefined) {
+            if (config.contextLimit !== (session.contextLimit ?? null)) {
+                const updated = this.store.sessions.setSessionContextLimit(sessionId, config.contextLimit, session.namespace, {
+                    touchUpdatedAt: false
+                })
+                if (!updated) {
+                    throw new Error('Failed to update session context limit')
+                }
+            }
+            session.contextLimit = config.contextLimit
+            this.markRuntimeConfigUpdated(sessionId, 'contextLimit', appliedAt)
         }
         if (config.serviceTier !== undefined) {
             if (config.serviceTier !== session.serviceTier) {

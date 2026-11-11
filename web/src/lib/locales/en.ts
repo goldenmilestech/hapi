@@ -1313,6 +1313,11 @@ export default {
   'misc.contextUsed': 'Used: {value} ({percent}%)',
   'misc.contextUsedTokens': 'Used: {value}',
   'misc.contextRemaining': 'Remaining: {value} ({percent}%)',
+  'misc.contextLimit': 'Limit',
+  'misc.contextLimitSave': 'Save',
+  'misc.contextLimitAuto': 'Auto',
+  'misc.contextAutoCompactHint': 'Auto-compacts near the limit',
+  'misc.compactContext': 'Compact context',
 
   // Web Share Target picker
   'share.title': 'Share to HAPI',

@@ -2,6 +2,7 @@ import type { BackgroundTask, CodexCollaborationMode, PermissionMode } from '@ha
 import type { Store, StoredMachine, StoredSession } from '../../../store'
 import type { RpcRegistry } from '../../rpcRegistry'
 import type { SyncEvent } from '../../../sync/syncEngine'
+import type { AgentContextUsage } from '../../../sync/contextUsage'
 import type { TerminalRegistry } from '../../terminalRegistry'
 import type { CliSocketWithData, SocketServer } from '../../socketTypes'
 import type { AccessErrorReason, AccessResult } from './types'
@@ -54,6 +55,7 @@ export type CliHandlersDeps = {
     onSweepImmediateQueued?: (sessionId: string, now: number) => void
     onMessagesConsumed?: (sessionId: string) => void
     onUserMessage?: (sessionId: string) => void
+    onAgentContextUsage?: (sessionId: string, usage: AgentContextUsage) => void
 }
 
 // resolveSessionAccess runs on EVERY cli socket event (message stream deltas,
@@ -85,7 +87,7 @@ const SESSION_ACCESS_CACHE_TTL_MS = 1_000
 const SESSION_ACCESS_CACHE_MAX_SESSIONS = 64
 
 export function registerCliHandlers(socket: CliSocketWithData, deps: CliHandlersDeps): void {
-    const { io, store, rpcRegistry, terminalRegistry, onSessionAlive, onSessionReady, onSessionEnd, onMachineAlive, onWebappEvent, onBackgroundTasks, onSessionActivity, onAgentProgress, onSweepImmediateQueued, onMessagesConsumed, onUserMessage } = deps
+    const { io, store, rpcRegistry, terminalRegistry, onSessionAlive, onSessionReady, onSessionEnd, onMachineAlive, onWebappEvent, onBackgroundTasks, onSessionActivity, onAgentProgress, onSweepImmediateQueued, onMessagesConsumed, onUserMessage, onAgentContextUsage } = deps
     const terminalNamespace = io.of('/terminal')
     const namespace = typeof socket.data.namespace === 'string' ? socket.data.namespace : null
 
@@ -184,7 +186,8 @@ export function registerCliHandlers(socket: CliSocketWithData, deps: CliHandlers
         onAgentProgress,
         onSweepImmediateQueued,
         onMessagesConsumed,
-        onUserMessage
+        onUserMessage,
+        onAgentContextUsage
     })
     registerMachineHandlers(socket, {
         store,

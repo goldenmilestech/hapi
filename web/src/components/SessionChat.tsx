@@ -66,7 +66,7 @@ import {
     type ComposerSendIntent,
 } from '@/lib/messageDelivery'
 import type { MessageDeliveryMode } from '@hapi/protocol'
-import { hasActiveSteeringTurn } from '@hapi/protocol'
+import { getCompactCommandForFlavor, hasActiveSteeringTurn } from '@hapi/protocol'
 import { AGY_MODEL_LABELS, AGY_MODEL_PRESETS, getAgyModelChoices, splitAgyModelSelection, getClaudeEffortLevelsForModel, resolveClaudeEffortForModel } from '@hapi/protocol'
 import { getClaudeCatalogOptions } from '@/components/AssistantChat/modelOptions'
 import { createAttachmentAdapter } from '@/lib/attachmentAdapter'
@@ -1429,6 +1429,7 @@ function SessionChatInner(props: SessionChatProps) {
         setModel,
         setModelReasoningEffort,
         setEffort,
+        setContextLimit,
         setServiceTier
     } = useSessionActions(
         props.api,
@@ -1891,6 +1892,31 @@ function SessionChatInner(props: SessionChatProps) {
             console.error('Failed to set service tier:', e)
         }
     }, [setServiceTier, props.onRefresh, haptic])
+
+    const handleContextLimitChange = useCallback(async (contextLimit: number | null) => {
+        try {
+            await setContextLimit(contextLimit)
+            haptic.notification('success')
+            props.onRefresh()
+        } catch (e) {
+            haptic.notification('error')
+            console.error('Failed to set context limit:', e)
+            throw e
+        }
+    }, [setContextLimit, props.onRefresh, haptic])
+
+    const compactCommand = useMemo(() => getCompactCommandForFlavor(agentFlavor), [agentFlavor])
+    // Bypass the composer/scratchlist routing on purpose: a compact command is
+    // a session-control action, never a parked note. props.onSend still owns
+    // inactive-session resume, so this works from history rows too.
+    const handleCompact = useCallback(async () => {
+        if (!compactCommand || props.isSending) return
+        const accepted = await props.onSend(compactCommand, undefined, null, 'queue')
+        if (accepted) {
+            haptic.notification('success')
+            setForceScrollToken((token) => token + 1)
+        }
+    }, [compactCommand, props.isSending, props.onSend, haptic])
 
     // Abort handler
     const handleAbort = useCallback(async () => {
@@ -2360,6 +2386,10 @@ function SessionChatInner(props: SessionChatProps) {
                         contextSize={reduced.latestUsage?.contextSize}
                         contextCacheRead={reduced.latestUsage?.cacheRead}
                         contextWindow={reduced.latestUsage?.contextWindow ?? piContextWindow}
+                        contextLimit={props.session.contextLimit}
+                        onContextLimitChange={handleContextLimitChange}
+                        onCompact={compactCommand ? () => { void handleCompact() } : undefined}
+                        compactDisabled={props.isSending}
                         contextModel={reduced.latestUsage?.model ?? props.session.model}
                         controlledByUser={controlledByUser}
                         onCollaborationModeChange={

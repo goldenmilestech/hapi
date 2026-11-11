@@ -19,6 +19,7 @@ export type StoredSession = {
     model: string | null
     modelReasoningEffort: string | null
     effort: string | null
+    contextLimit?: number | null
     serviceTier: string | null
     todos: unknown | null
     todosUpdatedAt: number | null

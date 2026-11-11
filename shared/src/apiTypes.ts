@@ -9,6 +9,7 @@ import {
     SessionSchema
 } from './schemas'
 import { AgentFlavorSchema } from './modes'
+import { CONTEXT_LIMIT_MAX_TOKENS, CONTEXT_LIMIT_MIN_TOKENS } from './contextLimit'
 import {
     PeerSpawnDefaultsSchema,
     ResolvedPeerSpawnDefaultsSchema
@@ -424,6 +425,13 @@ export const SessionEffortRequestSchema = z.object({
 })
 
 export type SessionEffortRequest = z.infer<typeof SessionEffortRequestSchema>
+
+export const SessionContextLimitRequestSchema = z.object({
+    /** Tokens; null restores the model's native window. */
+    contextLimit: z.number().int().min(CONTEXT_LIMIT_MIN_TOKENS).max(CONTEXT_LIMIT_MAX_TOKENS).nullable()
+})
+
+export type SessionContextLimitRequest = z.infer<typeof SessionContextLimitRequestSchema>
 
 // Fast mode is an explicit two-way choice. `'standard'` (not `null`) is the
 // stored sentinel for an explicit Fast-off so it stays distinct from

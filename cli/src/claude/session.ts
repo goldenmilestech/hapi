@@ -36,6 +36,8 @@ export class Session extends AgentSessionBase<EnhancedMode> {
     /** Epoch ms of the latest local UserPromptSubmit hook; older interrupt markers are stale. */
     localTurnStartedAt = 0;
     private nativeSkillNames = new Set<string>();
+    /** Per-session auto-compact ceiling; null = the model's native window. */
+    private contextLimit: number | null = null;
     private permissionModeListener: ((mode: PermissionMode) => void) | null = null;
     private sideQuestionHandler: SideQuestionHandler | null = null;
     private sideQuestionHistory: SideQuestionHistoryEntry[] = [];
@@ -60,6 +62,7 @@ export class Session extends AgentSessionBase<EnhancedMode> {
         permissionMode?: PermissionMode;
         model?: SessionModel;
         effort?: SessionEffort;
+        contextLimit?: number | null;
     }) {
         super({
             api: opts.api,
@@ -93,7 +96,16 @@ export class Session extends AgentSessionBase<EnhancedMode> {
         this.permissionMode = opts.permissionMode;
         this.model = opts.model;
         this.effort = opts.effort;
+        this.contextLimit = opts.contextLimit ?? null;
     }
+
+    getContextLimit = (): number | null => {
+        return this.contextLimit;
+    };
+
+    setContextLimit = (contextLimit: number | null): void => {
+        this.contextLimit = contextLimit;
+    };
 
     setPermissionMode = (mode: PermissionMode): void => {
         this.permissionMode = mode;

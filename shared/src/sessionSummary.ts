@@ -110,6 +110,8 @@ export type SessionSummary = {
     model: string | null
     modelReasoningEffort?: string | null
     effort: string | null
+    /** Per-session context ceiling in tokens; null means the native window. */
+    contextLimit?: number | null
 }
 
 // Re-exported as a standalone derivation so SSE patch handlers can recompute
@@ -272,6 +274,7 @@ export function toSessionSummary(session: Session): SessionSummary {
         nextScheduledAt: null,
         model: session.model,
         modelReasoningEffort: session.modelReasoningEffort,
-        effort: session.effort
+        effort: session.effort,
+        contextLimit: session.contextLimit ?? null
     }
 }

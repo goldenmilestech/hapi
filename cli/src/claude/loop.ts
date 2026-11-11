@@ -15,6 +15,8 @@ export interface EnhancedMode {
     permissionMode: PermissionMode;
     model?: string;
     effort?: string;
+    /** Per-session auto-compact ceiling in tokens; undefined/null = native. */
+    contextLimit?: number | null;
     fallbackModel?: string;
     customSystemPrompt?: string;
     appendSystemPrompt?: string;
@@ -27,12 +29,17 @@ export interface EnhancedMode {
  * 'auto' are enforced inside Claude itself (not emulated via canCallTool like
  * acceptEdits/bypassPermissions), so switching to/from them needs a matching
  * --permission-mode flag. Effort is left out: it can change live.
+ *
+ * The auto-compact ceiling is a spawn-time env var (see utils/contextLimit),
+ * so it belongs here too: a change parks the next message and restarts the
+ * process with --resume, exactly like a model switch.
  */
 export function claudeProcessModeKey(mode: EnhancedMode) {
     return {
         agentEnforcedMode: mode.permissionMode === 'plan' || mode.permissionMode === 'auto' ? mode.permissionMode : null,
         model: mode.model,
         fallbackModel: mode.fallbackModel,
+        contextLimit: mode.contextLimit ?? null,
         customSystemPrompt: mode.customSystemPrompt,
         appendSystemPrompt: mode.appendSystemPrompt,
         allowedTools: mode.allowedTools,
@@ -44,6 +51,7 @@ interface LoopOptions {
     path: string
     model?: SessionModel
     effort?: SessionEffort
+    contextLimit?: number | null
     permissionMode?: PermissionMode
     startingMode?: 'local' | 'remote'
     startedBy?: 'runner' | 'terminal'
@@ -86,7 +94,8 @@ export async function loop(opts: LoopOptions) {
         localHookSettingsPath: opts.localHookSettingsPath,
         permissionMode: opts.permissionMode ?? 'default',
         model: opts.model,
-        effort: opts.effort
+        effort: opts.effort,
+        contextLimit: opts.contextLimit
     });
 
     await runLocalRemoteSession({

@@ -9,6 +9,7 @@ import type { SyncEvent } from '../../../sync/syncEngine'
 import { extractTodoWriteTodosFromMessageContent } from '../../../sync/todos'
 import { extractTeamStateFromMessageContent, applyTeamStateDelta } from '../../../sync/teams'
 import { extractBackgroundTasks } from '../../../sync/backgroundTasks'
+import { extractAgentContextUsage, type AgentContextUsage } from '../../../sync/contextUsage'
 import { shouldRecordSessionActivity } from '../../../sync/sessionActivity'
 import { isUploadPathTitle } from '../../../sync/uploadPathTitle'
 import type { CliSocketWithData } from '../../socketTypes'
@@ -119,10 +120,12 @@ export type SessionHandlersDeps = {
     onMessagesConsumed?: (sessionId: string) => void
     /** A user message landed; lets the hub auto-title a session that has none. */
     onUserMessage?: (sessionId: string) => void
+    /** Latest context usage from a freshly stored agent message (auto-compact). */
+    onAgentContextUsage?: (sessionId: string, usage: AgentContextUsage) => void
 }
 
 export function registerSessionHandlers(socket: CliSocketWithData, deps: SessionHandlersDeps): void {
-    const { store, resolveSessionAccess, emitAccessError, onSessionAlive, onSessionReady, onSessionEnd, onWebappEvent, onBackgroundTasks, onSessionActivity, onAgentProgress, onSweepImmediateQueued, onMessagesConsumed, onUserMessage } = deps
+    const { store, resolveSessionAccess, emitAccessError, onSessionAlive, onSessionReady, onSessionEnd, onWebappEvent, onBackgroundTasks, onSessionActivity, onAgentProgress, onSweepImmediateQueued, onMessagesConsumed, onUserMessage, onAgentContextUsage } = deps
 
     socket.on('native-queue-message', data => {
         const parsed = z.object({ sid: z.string(), localId: z.string().min(1), text: z.string().nullable() }).safeParse(data)
@@ -208,6 +211,13 @@ export function registerSessionHandlers(socket: CliSocketWithData, deps: Session
         // something, so it refreshes the keepalive-idle clock. Only human
         // turns additionally bump `updatedAt` (list ordering).
         onAgentProgress?.(sid, msg.createdAt)
+
+        // Fresh (non-replay) agent output: feed the hub-side auto-compact
+        // watcher for flavors without a native threshold setting.
+        if (onAgentContextUsage) {
+            const usage = extractAgentContextUsage(content)
+            if (usage) onAgentContextUsage(sid, usage)
+        }
 
         if (shouldRecordSessionActivity(content)) {
             onSessionActivity?.(sid, msg.createdAt)

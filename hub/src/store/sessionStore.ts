@@ -11,6 +11,7 @@ import {
     getSessionByNamespace,
     getSessions,
     getSessionsByNamespace,
+    setSessionContextLimit,
     setSessionEffort,
     setSessionModel,
     setSessionModelReasoningEffort,
@@ -116,6 +117,10 @@ export class SessionStore {
 
     setSessionEffort(id: string, effort: string | null, namespace: string, options?: { touchUpdatedAt?: boolean }): boolean {
         return setSessionEffort(this.db, id, effort, namespace, options)
+    }
+
+    setSessionContextLimit(id: string, contextLimit: number | null, namespace: string, options?: { touchUpdatedAt?: boolean }): boolean {
+        return setSessionContextLimit(this.db, id, contextLimit, namespace, options)
     }
 
     setSessionServiceTier(id: string, serviceTier: string | null, namespace: string, options?: { touchUpdatedAt?: boolean }): boolean {

@@ -417,6 +417,13 @@ export const SessionSchema = z.object({
     modelReasoningEffort: z.string().nullable().optional().default(null),
     effort: z.string().nullable().optional().default(null),
     serviceTier: z.string().nullable().optional().default(null),
+    /**
+     * Per-session context ceiling in tokens. Null/absent means the model's
+     * native window. Claude sessions apply it as Claude Code's
+     * autoCompactWindow; other flavors use it for the displayed gauge and for
+     * hub-side auto-compaction.
+     */
+    contextLimit: z.number().int().positive().nullable().optional(),
     permissionMode: PermissionModeSchema.optional(),
     collaborationMode: CodexCollaborationModeSchema.optional(),
     copilotAgentMode: CopilotAgentModeSchema.optional()
@@ -478,6 +485,7 @@ export const SessionPatchSchema = z.object({
     modelReasoningEffort: z.string().nullable().optional(),
     effort: z.string().nullable().optional(),
     serviceTier: z.string().nullable().optional(),
+    contextLimit: z.number().int().positive().nullable().optional(),
     permissionMode: PermissionModeSchema.optional(),
     collaborationMode: CodexCollaborationModeSchema.optional(),
     copilotAgentMode: CopilotAgentModeSchema.optional(),

@@ -80,6 +80,9 @@ export function applySessionDetailPatch(session: Session, patch: SessionPatch): 
     if (patch.model !== undefined) assign('model', patch.model)
     if (patch.modelReasoningEffort !== undefined) assign('modelReasoningEffort', patch.modelReasoningEffort)
     if (patch.effort !== undefined) assign('effort', patch.effort)
+    if (Object.prototype.hasOwnProperty.call(patch, 'contextLimit')) {
+        assign('contextLimit', patch.contextLimit ?? null)
+    }
     if (Object.prototype.hasOwnProperty.call(patch, 'serviceTier')) {
         assign('serviceTier', patch.serviceTier ?? null)
     }
