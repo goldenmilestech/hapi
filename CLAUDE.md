@@ -139,18 +139,16 @@ git push fork main
 
 | 分支/提交 | 内容 | 主要改动面 |
 |---|---|---|
-| `feat/session-share` | 会话分享链接（带作用域的临时 token） | hub 分享接口 + web 分享页 |
-| `feat/auto-title-provider` | hub 用首条用户消息自动生成会话标题 | `hub/src/sync/titleSuggestion.ts`、`syncEngine.ts`、`socket/handlers/cli/sessionHandlers.ts`、`startHub.ts` |
-| `feat/btw-side-question` | `/btw` 侧问题（不打断主会话） | cli + web |
+| `feat/session-share-v034`（2026-11-11 已合入 `main`） | 会话分享链接（带作用域的临时 token） | hub 分享接口 + web 分享页 |
+| `feat/auto-title-provider-v034`（2026-11-11 已合入 `main`） | hub 用首条用户消息自动生成会话标题 | `hub/src/sync/titleSuggestion.ts`、`syncEngine.ts`、`socket/handlers/cli/sessionHandlers.ts`、`startHub.ts` |
+| `feat/btw-side-question-v034`（2026-11-11 已合入 `main`） | `/btw` 侧问题（不打断主会话） | cli + web |
 | `main`（2026-11-11） | Missions 控制台：Manager/Worker 分组、审批收件箱、停止/归档操作、work-graph 时间线，以及 `work-graph-updated` SSE 实时刷新 | `web/src/routes/missions/`、`web/src/lib/missions.ts`、`hub/src/sync/syncEngine.ts`、`hub/src/web/routes/workGraph.ts`、`shared/src/schemas.ts` |
 | `main`（2026-11-11） | 会话列表完成圆点：回合结束且未读时显示，打开行后立即清除 | `web/src/components/SessionList.tsx`、`SessionRowSummary.tsx`、`web/src/lib/locales/` |
 
 新增定制时在合并进 `main` 的同一个提交里更新此表，上游同步时按表逐项验证。
 
-## 迁移状态（2026-11-10，完成后删除本节）
+## 迁移记录
 
-- `fork/main` = 上游 0.34.4（`2161a9ff`），不含任何定制。
-- 三条定制分支都基于 `86212a6a`，落后 `main` 288 个提交，且各自带一个本地重复的 `Release version 0.30.7`（`0239edf3`，上游对应 `facb66ee`）。
-- 线上二进制 = 0.30.7 + session-share + auto-title。
-- 待办：按 session-share → auto-title → btw 的顺序 `rebase --onto main`（丢弃 `0239edf3`），逐个验证后合入 `main`，切 `release/2026-11-10` 重建为 0.34.4。
-- 0.30.7 → 0.34.4 跨度较大，auto-title 的注入点（`sessionHandlers.ts` 的 `socket.on('message')`）必须重新做端到端验证，不能只看编译通过。
+- 2026-11-11：三条 0.30.7 定制分支已按 session-share → auto-title → btw 的顺序 cherry-pick 到上游 0.34.4 基线并合入 `main`，旧的 0.30.7 分支仅作历史保留，不再合入。
+- 2026-11-11：`main` 直接新增 Missions 控制台（含 `work-graph-updated` SSE）和会话列表完成圆点，见上表。
+- auto-title 的注入点（`sessionHandlers.ts` 的 `socket.on('message')`）已随合入适配到 0.34.4；后续上游同步时仍需按定制清单做端到端验证。
