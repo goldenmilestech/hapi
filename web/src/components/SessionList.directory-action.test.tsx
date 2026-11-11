@@ -1115,6 +1115,96 @@ describe('SessionList collapse behavior', () => {
         expect(screen.getByRole('button', { name: 'Expand 2' })).toBeInTheDocument()
     })
 
+    it('collapses a mostly archived group to its active sessions and expands back', () => {
+        localStorage.setItem('hapi-session-preview-limit', '2')
+        const sessions = [
+            makeSession({
+                id: 'session-active',
+                active: true,
+                updatedAt: 100,
+                metadata: { path: '/work/hapi', name: 'Live task', flavor: 'codex' },
+            }),
+            ...Array.from({ length: 4 }, (_, index) => makeSession({
+                id: `session-idle-${index + 1}`,
+                updatedAt: 90 - index,
+                metadata: {
+                    path: '/work/hapi',
+                    name: `Archived task ${index + 1}`,
+                    flavor: 'codex',
+                },
+            })),
+        ]
+
+        render(renderSessionList(sessions, null))
+
+        expect(screen.getByRole('button', { name: /Live task/ })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /Archived task 1/ })).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Archived task 2/ })).toBeNull()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Collapse to active' }))
+
+        expect(screen.getByRole('button', { name: /Live task/ })).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Archived task 1/ })).toBeNull()
+        expect(screen.queryByRole('button', { name: /Archived task 2/ })).toBeNull()
+        expect(screen.queryByRole('button', { name: 'Collapse to active' })).toBeNull()
+        expect(screen.getByRole('button', { name: 'Expand 1' })).toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Expand 1' }))
+
+        expect(screen.getByRole('button', { name: /Archived task 1/ })).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Archived task 2/ })).toBeNull()
+        expect(screen.getByRole('button', { name: 'Collapse to active' })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Expand 2' })).toBeInTheDocument()
+    })
+
+    it('keeps the open inactive session visible while collapsed to active', () => {
+        localStorage.setItem('hapi-session-preview-limit', '3')
+        const sessions = [
+            makeSession({
+                id: 'session-active',
+                active: true,
+                updatedAt: 100,
+                metadata: { path: '/work/hapi', name: 'Live task', flavor: 'codex' },
+            }),
+            ...Array.from({ length: 3 }, (_, index) => makeSession({
+                id: `session-idle-${index + 1}`,
+                updatedAt: 90 - index,
+                metadata: {
+                    path: '/work/hapi',
+                    name: `Archived task ${index + 1}`,
+                    flavor: 'codex',
+                },
+            })),
+        ]
+
+        render(renderSessionList(sessions, 'session-idle-2'))
+        fireEvent.click(screen.getByRole('button', { name: 'Collapse to active' }))
+
+        expect(screen.getByRole('button', { name: /Live task/ })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /Archived task 2/ })).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Archived task 1/ })).toBeNull()
+        expect(screen.queryByRole('button', { name: /Archived task 3/ })).toBeNull()
+    })
+
+    it('does not offer the active fold when every session is already active', () => {
+        localStorage.setItem('hapi-session-preview-limit', '1')
+        const sessions = Array.from({ length: 3 }, (_, index) => makeSession({
+            id: `session-active-${index + 1}`,
+            active: true,
+            updatedAt: 100 - index,
+            metadata: {
+                path: '/work/hapi',
+                name: `Live task ${index + 1}`,
+                flavor: 'codex',
+            },
+        }))
+
+        render(renderSessionList(sessions, null))
+
+        expect(screen.queryByRole('button', { name: 'Collapse to active' })).toBeNull()
+        expect(screen.getByRole('button', { name: 'Expand 1' })).toBeInTheDocument()
+    })
+
     it('does not offer a no-op collapse when required sessions exceed the preview limit', () => {
         localStorage.setItem('hapi-session-preview-limit', '2')
         const sessions = Array.from({ length: 4 }, (_, index) => makeSession({
