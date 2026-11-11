@@ -49,11 +49,13 @@ describe('SessionRowSummary background status', () => {
         localStorage.clear()
     })
 
-    it('marks running and background work on the presence badge, without spinners', () => {
+    it('marks running and background work on both the presence badge and a spinner', () => {
         const background = renderSummary(false).container
         const backgroundBadge = background.querySelector('[data-testid="session-presence"]')
         expect(backgroundBadge).toHaveClass('bg-blue-400', 'animate-pulse')
-        expect(background.querySelector('svg.animate-spin-slow')).toBeNull()
+        const backgroundSpinner = background.querySelector('svg.animate-spin-slow')
+        expect(backgroundSpinner).not.toBeNull()
+        expect(backgroundSpinner).toHaveClass('text-blue-400')
         cleanup()
 
         const thinking = render(
@@ -63,6 +65,9 @@ describe('SessionRowSummary background status', () => {
         ).container
         expect(thinking.querySelector('[data-testid="session-presence"]'))
             .toHaveClass('bg-[var(--app-badge-success-text)]', 'animate-pulse')
+        const thinkingSpinner = thinking.querySelector('svg.animate-spin-slow')
+        expect(thinkingSpinner).not.toBeNull()
+        expect(thinkingSpinner).not.toHaveClass('text-blue-400')
         expect(screen.queryByText('Running', { exact: true })).not.toBeInTheDocument()
         cleanup()
 
@@ -72,6 +77,7 @@ describe('SessionRowSummary background status', () => {
             </I18nProvider>
         ).container
         expect(idle.querySelector('[data-testid="session-presence"]')).not.toHaveClass('animate-pulse')
+        expect(idle.querySelector('svg.animate-spin-slow')).toBeNull()
     })
 
     it('does not dim disconnected rows or show them a presence badge', () => {
