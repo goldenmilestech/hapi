@@ -71,14 +71,21 @@ jobs:
 
             - name: Resolve release tag
               id: tag
+              env:
+                  INPUT_TAG: ${{ inputs.release_tag }}
               run: |
                   if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
-                      echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-                  elif [[ -n "${{ inputs.release_tag }}" ]]; then
-                      echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+                      TAG="$GITHUB_REF_NAME"
+                  elif [[ -n "$INPUT_TAG" ]]; then
+                      TAG="$INPUT_TAG"
                   else
-                      echo "tag=cli-$(date -u +%Y%m%d)-${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+                      TAG="cli-$(date -u +%Y%m%d)-${GITHUB_SHA::8}"
                   fi
+                  if [[ "$TAG" != cli-* ]]; then
+                      echo "::error::Internal builds must use a cli-* tag (got $TAG); v* tags belong to the upstream release workflow"
+                      exit 1
+                  fi
+                  echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
             - name: Create Release
               if: github.event_name == 'push' || inputs.create_release
