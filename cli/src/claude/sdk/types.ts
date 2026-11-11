@@ -109,6 +109,8 @@ export interface SDKControlResponse extends SDKMessage {
         request_id: string
         subtype: 'success' | 'error'
         error?: string
+        /** Success payload; shape depends on the request subtype. */
+        response?: unknown
     }
 }
 
@@ -145,6 +147,19 @@ export interface CanUseToolRequest extends ControlRequest {
     subtype: 'can_use_tool'
     tool_name: string
     input: unknown
+}
+
+/**
+ * Claude Code's side-question channel. The CLI validates every history entry
+ * as `{ question, response }` strings, so send exactly that shape.
+ */
+export interface SideQuestionRequest extends ControlRequest {
+    subtype: 'side_question'
+    question: string
+    history?: Array<{
+        question: string
+        response: string
+    }>
 }
 
 export interface CanUseToolControlRequest {

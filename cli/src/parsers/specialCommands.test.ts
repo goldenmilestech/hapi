@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseCompact, parseClear, parsePlan, parseSpecialCommand } from './specialCommands';
+import { parseCompact, parseClear, parsePlan, parseSideQuestion, parseSpecialCommand } from './specialCommands';
 
 describe('parseCompact', () => {
     it('should parse /compact command with argument', () => {
@@ -129,5 +129,35 @@ describe('parseSpecialCommand', () => {
         expect(parseSpecialCommand('/compactor').type).toBeNull();
         expect(parseSpecialCommand('/clearing').type).toBeNull();
         expect(parseSpecialCommand('/planner').type).toBeNull();
+    });
+});
+
+describe('parseSideQuestion', () => {
+    it('parses /btw with a question', () => {
+        expect(parseSideQuestion('/btw what changed in this PR?')).toEqual({
+            isSideQuestion: true,
+            question: 'what changed in this PR?'
+        });
+    });
+
+    it('parses mixed-case /btw and multi-line questions', () => {
+        expect(parseSideQuestion('  /BTW 第一行\n第二行  ')).toEqual({
+            isSideQuestion: true,
+            question: '第一行\n第二行'
+        });
+    });
+
+    it('parses a bare /btw with an empty question', () => {
+        expect(parseSideQuestion('/btw')).toEqual({
+            isSideQuestion: true,
+            question: ''
+        });
+    });
+
+    it('does not parse other commands or lookalike words', () => {
+        expect(parseSideQuestion('/btwx something').isSideQuestion).toBe(false);
+        expect(parseSideQuestion('/btw-other something').isSideQuestion).toBe(false);
+        expect(parseSideQuestion('please /btw this').isSideQuestion).toBe(false);
+        expect(parseSideQuestion('hello world').isSideQuestion).toBe(false);
     });
 });

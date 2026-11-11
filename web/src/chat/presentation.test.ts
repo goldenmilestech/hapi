@@ -349,3 +349,28 @@ describe('formatMessageTimestamp', () => {
         expect(result).toContain('2025')
     })
 })
+
+describe('getEventPresentation — side questions', () => {
+    it('labels a successful side-question event', () => {
+        expect(getEventPresentation({
+            type: 'message',
+            message: 'The answer',
+            sideQuestion: { question: 'What changed?' }
+        })).toEqual({ icon: null, text: 'Side question' })
+    })
+
+    it('labels a failed side-question event', () => {
+        expect(getEventPresentation({
+            type: 'message',
+            message: 'Side question failed: no active session',
+            sideQuestion: { question: 'What changed?', error: 'no active session' }
+        })).toEqual({ icon: null, text: 'Side question failed' })
+    })
+
+    it('keeps ordinary message events unchanged', () => {
+        expect(getEventPresentation({
+            type: 'message',
+            message: 'Context was reset'
+        })).toEqual({ icon: null, text: 'Context was reset' })
+    })
+})

@@ -11,12 +11,12 @@ import {
     type QueryOptions,
     type QueryPrompt,
     type SDKMessage,
-    type ControlResponseHandler,
     type SDKControlRequest,
     type ControlRequest,
     type SetPermissionModeRequest,
     type ApplyFlagSettingsRequest,
     type SDKControlResponse,
+    type SideQuestionRequest,
     type CanCallToolCallback,
     type CanUseToolControlRequest,
     type CanUseToolControlResponse,
@@ -32,14 +32,26 @@ import type { Writable } from 'node:stream'
 import { logger } from '@/ui/logger'
 import type { ClaudePermissionMode } from '@hapi/protocol/types'
 import { appendMcpConfigArg } from '../utils/mcpConfig'
+import {
+    parseSideQuestionAnswer,
+    SIDE_QUESTION_TIMEOUT_MS,
+    type SideQuestionAnswer,
+    type SideQuestionHistoryEntry
+} from '../sideQuestion'
 
 const DEFAULT_PROMPT_FAILURE_CLEANUP_TIMEOUT_MS = 3_000
+
+type PendingControlResponse = {
+    resolve: (response: SDKControlResponse['response']) => void
+    reject: (error: Error) => void
+    timer: ReturnType<typeof setTimeout> | null
+}
 
 /**
  * Query class manages Claude Code process interaction
  */
 export class Query implements AsyncIterableIterator<SDKMessage> {
-    private pendingControlResponses = new Map<string, ControlResponseHandler>()
+    private pendingControlResponses = new Map<string, PendingControlResponse>()
     private cancelControllers = new Map<string, AbortController>()
     private sdkMessages: AsyncIterableIterator<SDKMessage>
     private inputStream = new Stream<SDKMessage>()
@@ -70,6 +82,7 @@ export class Query implements AsyncIterableIterator<SDKMessage> {
         }
         this.promptFailure = error
         this.cleanupControllers()
+        this.rejectPendingControlResponses(error)
         return true
     }
 
@@ -124,11 +137,7 @@ export class Query implements AsyncIterableIterator<SDKMessage> {
                         }
 
                         if (message.type === 'control_response') {
-                            const controlResponse = message as SDKControlResponse
-                            const handler = this.pendingControlResponses.get(controlResponse.response.request_id)
-                            if (handler) {
-                                handler(controlResponse.response)
-                            }
+                            this.handleControlResponse(message as SDKControlResponse)
                             continue
                         } else if (message.type === 'control_request') {
                             await this.handleControlRequest(message as unknown as CanUseToolControlRequest)
@@ -154,6 +163,9 @@ export class Query implements AsyncIterableIterator<SDKMessage> {
             if (!hadError && !this.inputStream.hasTerminalError) {
                 this.inputStream.done()
             }
+            this.rejectPendingControlResponses(
+                new Error('Claude process exited before the control request completed')
+            )
             this.cleanupControllers()
             rl.close()
         }
@@ -226,9 +238,53 @@ export class Query implements AsyncIterableIterator<SDKMessage> {
     }
 
     /**
+     * Ask Claude a side question against the active session.
+     *
+     * Side questions run on Claude's separate side channel: they see the
+     * current context and recent side-question history, cannot call tools, and
+     * never enter the main conversation.
+     */
+    async askSideQuestion(
+        question: string,
+        options?: {
+            history?: readonly SideQuestionHistoryEntry[]
+            timeoutMs?: number
+        }
+    ): Promise<SideQuestionAnswer | null> {
+        if (!this.childStdin) {
+            throw new Error('Side question requires --input-format stream-json')
+        }
+
+        const history = options?.history ?? []
+        const sideQuestionRequest: SideQuestionRequest = {
+            subtype: 'side_question',
+            question,
+            ...(history.length > 0
+                ? {
+                    history: history.map((entry) => ({
+                        question: entry.question,
+                        response: entry.response
+                    }))
+                }
+                : {})
+        }
+        const controlResponse = await this.request(
+            sideQuestionRequest,
+            this.childStdin,
+            options?.timeoutMs ?? SIDE_QUESTION_TIMEOUT_MS
+        )
+
+        return parseSideQuestionAnswer(controlResponse.response)
+    }
+
+    /**
      * Send control request to Claude process
      */
-    private request(request: ControlRequest, childStdin: Writable): Promise<SDKControlResponse['response']> {
+    private request(
+        request: ControlRequest,
+        childStdin: Writable,
+        timeoutMs?: number
+    ): Promise<SDKControlResponse['response']> {
         const requestId = Math.random().toString(36).substring(2, 15)
         const sdkRequest: SDKControlRequest = {
             request_id: requestId,
@@ -237,17 +293,70 @@ export class Query implements AsyncIterableIterator<SDKMessage> {
         }
 
         return new Promise((resolve, reject) => {
-            this.pendingControlResponses.set(requestId, (response) => {
-                this.pendingControlResponses.delete(requestId)
-                if (response.subtype === 'success') {
-                    resolve(response)
-                } else {
-                    reject(new Error(response.error))
-                }
-            })
+            const pending: PendingControlResponse = {
+                resolve,
+                reject,
+                timer: null
+            }
 
-            childStdin.write(JSON.stringify(sdkRequest) + '\n')
+            if (timeoutMs !== undefined && timeoutMs > 0) {
+                pending.timer = setTimeout(() => {
+                    if (this.pendingControlResponses.delete(requestId)) {
+                        reject(new Error(`Control request timed out: ${request.subtype}`))
+                    }
+                }, timeoutMs)
+            }
+
+            this.pendingControlResponses.set(requestId, pending)
+
+            if (!childStdin.writable) {
+                this.pendingControlResponses.delete(requestId)
+                if (pending.timer) {
+                    clearTimeout(pending.timer)
+                }
+                reject(new Error('Claude process stdin is not writable'))
+                return
+            }
+
+            try {
+                childStdin.write(JSON.stringify(sdkRequest) + '\n')
+            } catch (error) {
+                this.pendingControlResponses.delete(requestId)
+                if (pending.timer) {
+                    clearTimeout(pending.timer)
+                }
+                reject(error instanceof Error ? error : new Error(String(error)))
+            }
         })
+    }
+
+    private handleControlResponse(controlResponse: SDKControlResponse): void {
+        const requestId = controlResponse.response.request_id
+        const pending = this.pendingControlResponses.get(requestId)
+        if (!pending) {
+            return
+        }
+
+        this.pendingControlResponses.delete(requestId)
+        if (pending.timer) {
+            clearTimeout(pending.timer)
+        }
+
+        if (controlResponse.response.subtype === 'success') {
+            pending.resolve(controlResponse.response)
+        } else {
+            pending.reject(new Error(controlResponse.response.error ?? 'Control request failed'))
+        }
+    }
+
+    private rejectPendingControlResponses(error: Error): void {
+        for (const pending of this.pendingControlResponses.values()) {
+            if (pending.timer) {
+                clearTimeout(pending.timer)
+            }
+            pending.reject(error)
+        }
+        this.pendingControlResponses.clear()
     }
 
     /**
