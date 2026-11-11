@@ -25,6 +25,7 @@ import { normalizeClaudeSessionEffort } from './effort';
 import { normalizeHookPermissionMode } from './utils/hookPermissionMode'
 import { applyContextLimitEnv, normalizeClaudeContextLimit } from './utils/contextLimit';
 import { getInvokedCwd } from '@/utils/invokedCwd';
+import { forkClaudeTranscriptAtMessage } from './historyFork';
 import {
     CLAUDE_CONVERSATION_HISTORY,
     toConversationHistoryCapabilities
@@ -285,15 +286,28 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
     }))
 
     session.rpcHandlerManager.registerHandler(RPC_METHODS.ForkConversation, async (payload: unknown) => {
-        if (payload && typeof payload === 'object' && 'messageLocalId' in payload && (payload as { messageLocalId?: unknown }).messageLocalId) {
-            throw new Error('Historical fork is not supported for Claude')
-        }
+        const messageLocalId = payload
+            && typeof payload === 'object'
+            && typeof (payload as { messageLocalId?: unknown }).messageLocalId === 'string'
+            && (payload as { messageLocalId: string }).messageLocalId.length > 0
+            ? (payload as { messageLocalId: string }).messageLocalId
+            : null
         const nativeSessionId = currentSessionRef.current?.sessionId
             ?? session.getMetadata()?.claudeSessionId
             ?? sessionInfo.metadata?.claudeSessionId
             ?? null
         if (!nativeSessionId) {
             throw new Error('Claude session id is not ready')
+        }
+        if (messageLocalId) {
+            // Historical fork: copy the native transcript up to the selected
+            // reply and resume the copy under a new session id.
+            const forkedSessionId = forkClaudeTranscriptAtMessage({
+                workingDirectory,
+                sourceSessionId: nativeSessionId,
+                boundaryUuid: messageLocalId
+            })
+            return { nativeSessionId: forkedSessionId, forkSession: false as const }
         }
         return { nativeSessionId, forkSession: true as const }
     })

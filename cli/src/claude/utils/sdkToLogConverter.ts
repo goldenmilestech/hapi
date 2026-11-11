@@ -265,7 +265,13 @@ export class SDKToLogConverter {
             return null
         }
 
-        const uuid = randomUUID()
+        // Prefer Claude's own transcript uuid when the SDK provides it. The
+        // on-disk transcript uses the same id, which lets historical fork
+        // resolve a hub message back to its native entry without a side map.
+        const sourceUuid = (sdkMessage as { uuid?: unknown }).uuid
+        const uuid = typeof sourceUuid === 'string' && sourceUuid.length > 0
+            ? sourceUuid
+            : randomUUID()
         const timestamp = new Date().toISOString()
         let parentUuid = this.lastUuid;
         let isSidechain = false;
