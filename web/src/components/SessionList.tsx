@@ -1115,8 +1115,9 @@ const SessionItem = memo(function SessionItem(props: {
         }
     }
 
-    const supportsCurrentFork = s.active && s.metadata?.flavor === 'codex'
-        && s.metadata?.conversationHistory?.forkCurrent === true
+    // Current-point fork is native to every runtime that advertises it (Claude
+    // --fork-session, Codex, Grok, Pi); archived fork is still Codex-only.
+    const supportsCurrentFork = s.active && s.metadata?.conversationHistory?.forkCurrent === true
     const supportsArchivedFork = !s.active && s.metadata?.flavor === 'codex'
         && s.metadata?.lifecycleState === 'archived'
         && Boolean(s.metadata.agentSessionId && s.metadata.machineId)

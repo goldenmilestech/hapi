@@ -299,25 +299,53 @@ describe('SessionList fork session action', () => {
         expect(screen.queryByRole('dialog')).toBeNull()
     })
 
-    it('hides Fork session for locally controlled sessions', () => {
-        const session = {
-            ...makeSession({
-                id: 'locally-controlled',
-                active: true,
-                metadata: {
-                    path: '/work/local',
-                    name: 'Locally controlled session',
-                    flavor: 'claude',
-                    conversationHistory: { forkCurrent: true },
-                },
-            }),
-            agentState: { controlledByUser: true, requests: {} },
-        } as SessionSummary
+    it('forks an active Claude session that advertises current-fork support', async () => {
+        const forkConversation = vi.fn(async () => ({ sessionId: 'claude-child' }))
+        const onSelect = vi.fn()
+        const session = makeSession({
+            id: 'claude-source',
+            active: true,
+            updatedAt: Date.now(),
+            metadata: {
+                path: '/work/claude',
+                name: 'Claude source',
+                flavor: 'claude',
+                conversationHistory: { forkCurrent: true },
+            },
+        })
+        renderWithProviders(<SessionList sessions={[session]} selectedSessionId={null} onSelect={onSelect}
+            onNewSession={vi.fn()} onRefresh={vi.fn()} isLoading={false} renderHeader={false}
+            api={{ forkConversation } as unknown as ApiClient} />)
+
+        fireEvent.contextMenu(screen.getByRole('button', { name: /Claude source/ }))
+        fireEvent.click(screen.getByRole('menuitem', { name: 'Fork session' }))
+        const dialog = screen.getByRole('dialog')
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }))
+
+        await waitFor(() => expect(forkConversation).toHaveBeenCalledWith('claude-source'))
+        expect(onSelect).toHaveBeenCalledWith('claude-child')
+    })
+
+    it('hides Fork session for an archived non-Codex session', () => {
+        const session = makeSession({
+            id: 'archived-claude',
+            active: false,
+            metadata: {
+                path: '/work/archived',
+                name: 'Archived Claude session',
+                flavor: 'claude',
+                lifecycleState: 'archived',
+                agentSessionId: 'claude-native',
+                machineId: 'machine-1',
+                conversationHistory: { forkCurrent: true },
+            },
+        })
         renderWithProviders(<SessionList sessions={[session]} selectedSessionId={null} onSelect={vi.fn()}
             onNewSession={vi.fn()} onRefresh={vi.fn()} isLoading={false} renderHeader={false}
             api={{ forkConversation: vi.fn() } as unknown as ApiClient} />)
 
-        fireEvent.contextMenu(screen.getByRole('button', { name: /Locally controlled session/ }))
+        fireEvent.click(screen.getByTitle('/work/archived'))
+        fireEvent.contextMenu(screen.getByRole('button', { name: /Archived Claude session/ }))
         expect(screen.queryByRole('menuitem', { name: 'Fork session' })).toBeNull()
     })
 

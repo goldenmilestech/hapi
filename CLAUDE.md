@@ -149,6 +149,7 @@ git push fork main
 | `main`（2026-11-11） | 会话列表分组支持「收起到活跃」：隐藏非活跃/已归档行，仅保留活跃会话与当前打开会话，展开后恢复原预览批次 | `web/src/components/SessionList.tsx`、`web/src/lib/locales/` |
 | `main`（2026-11-11） | 旧 CLI（≤0.30.x）把首条 prompt 原样写进 `summary`，首条消息带图片时标题变成上传路径。Hub 丢弃这类上传路径标题、按首条用户文本回填 `promptTitle`，启动时修复已有会话，并允许 AI 标题重新生成 | `hub/src/sync/uploadPathTitle.ts`、`promptTitle.ts`、`sessionCache.ts`、`titleSuggestion.ts`、`automaticTitleSuggestion.ts`、`socket/handlers/cli/sessionHandlers.ts`、`syncEngine.ts` |
 | `feat/slash-menu-skills`（2026-11-11 已合入 `main`） | Web `/` 菜单并入会话全部 skills（全局/工作区/插件），技能行以 `$name` 插入，`$` 菜单不变；覆盖所有 flavor | `web/src/hooks/queries/useSlashCommands.ts`、`useSkills.ts`、`web/src/hooks/useActiveSuggestions.ts` |
+| `main`（2026-11-11） | 会话列表右键「分叉会话」不再限 Codex：按 `capabilities.conversationHistory.forkCurrent` 开放给所有 flavor（Claude/Grok/Pi 等）；归档分叉仍只支持 Codex | `web/src/components/SessionList.tsx`、`web/src/components/SessionList.directory-action.test.tsx` |
 
 新增定制时在合并进 `main` 的同一个提交里更新此表，上游同步时按表逐项验证。
 
