@@ -148,6 +148,7 @@ git push fork main
 | `main`（2026-11-11） | 旧 runner 兼容：只有声明 `spawn-reserved-session-id` 能力的 runner 才预分配会话 id；旧 CLI 直接走创建流程，避免 “Runner reported unexpected session id” 误报和无法 adopt 的幽灵 stub | `shared/src/runnerCapabilities.ts`、`hub/src/sync/syncEngine.ts`、`hub/src/sync/syncEngineSpawnPrealloc.test.ts` |
 | `main`（2026-11-11） | 会话列表分组支持「收起到活跃」：隐藏非活跃/已归档行，仅保留活跃会话与当前打开会话，展开后恢复原预览批次 | `web/src/components/SessionList.tsx`、`web/src/lib/locales/` |
 | `main`（2026-11-11） | 旧 CLI（≤0.30.x）把首条 prompt 原样写进 `summary`，首条消息带图片时标题变成上传路径。Hub 丢弃这类上传路径标题、按首条用户文本回填 `promptTitle`，启动时修复已有会话，并允许 AI 标题重新生成 | `hub/src/sync/uploadPathTitle.ts`、`promptTitle.ts`、`sessionCache.ts`、`titleSuggestion.ts`、`automaticTitleSuggestion.ts`、`socket/handlers/cli/sessionHandlers.ts`、`syncEngine.ts` |
+| `feat/slash-menu-skills`（2026-11-11 已合入 `main`） | Web `/` 菜单并入会话全部 skills（全局/工作区/插件），技能行以 `$name` 插入，`$` 菜单不变；覆盖所有 flavor | `web/src/hooks/queries/useSlashCommands.ts`、`useSkills.ts`、`web/src/hooks/useActiveSuggestions.ts` |
 
 新增定制时在合并进 `main` 的同一个提交里更新此表，上游同步时按表逐项验证。
 
