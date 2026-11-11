@@ -3,6 +3,9 @@ import { Hono } from 'hono'
 import type { Session, SyncEngine } from '../../sync/syncEngine'
 import type { WebAppEnv } from '../middleware/auth'
 import { createSessionsRoutes } from './sessions'
+import { Store } from '../../store'
+
+const store = new Store(':memory:')
 
 /**
  * Tests for the scratchlist v2 (tiann/hapi#893) REST routes:
@@ -119,7 +122,7 @@ function createApp(session: Session, overrides: EngineOverrides = {}) {
         c.set('namespace', overrides.callerNamespace ?? 'default')
         await next()
     })
-    app.route('/api', createSessionsRoutes(() => engine))
+    app.route('/api', createSessionsRoutes(() => engine, store))
     return app
 }
 

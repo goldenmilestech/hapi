@@ -153,7 +153,8 @@ function makeOptimisticHubEntry(text: string, now: number): HubEntry {
 
 export function useHubScratchlist(
     sessionId: string,
-    api: ApiClient | null
+    api: ApiClient | null,
+    enabledByCaller: boolean = true
 ): {
     entries: ScratchlistEntry[]
     isLoading: boolean
@@ -170,7 +171,7 @@ export function useHubScratchlist(
     // changes every render and re-triggers after a failed POST clears
     // migrationAttemptedRef (tight retry loop on persistent 409/offline).
     const queryKey = useMemo(() => queryKeys.scratchlist(sessionId), [sessionId])
-    const enabled = Boolean(api && sessionId)
+    const enabled = enabledByCaller && Boolean(api && sessionId)
     const migrationAttemptedRef = useRef(false)
     const [migrationStatus, setMigrationStatus] = useState<ScratchlistMigrationStatus>(() => {
         if (!sessionId) return 'idle'

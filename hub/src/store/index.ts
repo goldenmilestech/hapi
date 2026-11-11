@@ -12,6 +12,7 @@ import { PushStore } from './pushStore'
 import { FcmStore } from './fcmStore'
 import { ScratchlistStore } from './scratchlistStore'
 import { SessionStore } from './sessionStore'
+import { SessionShareStore } from './sessionShares'
 import { UserStore } from './userStore'
 import { TurnStore } from './turnStore'
 import { UsageStore } from './usageStore'
@@ -79,6 +80,7 @@ export class Store {
     private closed: boolean = false
 
     readonly sessions: SessionStore
+    readonly sessionShares: SessionShareStore
     readonly machines: MachineStore
     readonly messages: MessageStore
     readonly users: UserStore
@@ -123,6 +125,11 @@ export class Store {
         this.db.exec('PRAGMA foreign_keys = ON')
         this.db.exec('PRAGMA busy_timeout = 5000')
         this.initSchema()
+        // Additive table: created after the versioned migration ladder so a
+        // fresh database still takes the createSchema path (an extra table
+        // before initSchema would make hasAnyUserTables misdetect a legacy DB).
+        this.sessionShares = new SessionShareStore(this.db)
+        this.sessionShares.ensureSchema()
 
         if (dbPath !== ':memory:' && !dbPath.startsWith('file::memory:')) {
             for (const path of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {

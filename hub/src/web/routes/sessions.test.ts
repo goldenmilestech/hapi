@@ -5,6 +5,9 @@ import type { WebAppEnv } from '../middleware/auth'
 import { createSessionsRoutes } from './sessions'
 import { ArchiveCleanupError } from '../../sync/archiveCleanupError'
 import { RpcTargetMissingError } from '../../sync/rpcGateway'
+import { Store } from '../../store'
+
+const store = new Store(':memory:')
 
 function createSession(overrides?: Partial<Session>): Session {
     const baseMetadata = {
@@ -203,7 +206,7 @@ function createApp(session: Session, opts?: {
         c.set('namespace', 'default')
         await next()
     })
-    app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+    app.route('/api', createSessionsRoutes(() => engine as SyncEngine, store))
 
     return { app, applySessionConfigCalls }
 }
@@ -1965,7 +1968,7 @@ describe('sessions routes', () => {
             c.set('namespace', 'default')
             await next()
         })
-        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine, store))
 
         const limited = await app.request('/api/sessions?limit=2')
         expect(limited.status).toBe(200)
@@ -2012,7 +2015,7 @@ describe('sessions routes', () => {
             c.set('namespace', 'default')
             await next()
         })
-        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine, store))
 
         const response = await app.request('/api/sessions/content-search', {
             method: 'POST',
@@ -2058,7 +2061,7 @@ describe('sessions routes', () => {
             c.set('namespace', 'default')
             await next()
         })
-        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine, store))
 
         const response = await app.request('/api/sessions/content-search', {
             method: 'POST',
@@ -2086,7 +2089,7 @@ describe('sessions routes', () => {
             c.set('namespace', 'default')
             await next()
         })
-        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine, store))
 
         const response = await app.request('/api/sessions/content-search', {
             method: 'POST',
@@ -2117,7 +2120,7 @@ describe('sessions routes', () => {
             c.set('namespace', 'default')
             await next()
         })
-        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine, store))
 
         const query = 'x'.repeat(201)
         const expected = { error: 'Content search query too long' }
@@ -2183,7 +2186,7 @@ describe('sessions routes', () => {
             c.set('namespace', 'default')
             await next()
         })
-        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine, store))
 
         const response = await app.request(`/api/sessions/${session.id}/content-search?query=needle&limit=12`)
         expect(response.status).toBe(200)
@@ -2229,7 +2232,7 @@ describe('sessions routes', () => {
             c.set('namespace', 'default')
             await next()
         })
-        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine, store))
 
         const response = await app.request('/api/sessions?limit=1&order=updatedAt')
         expect(response.status).toBe(200)
@@ -2255,7 +2258,7 @@ describe('sessions routes', () => {
             c.set('namespace', 'default')
             await next()
         })
-        app.route('/api', createSessionsRoutes(() => engine as SyncEngine))
+        app.route('/api', createSessionsRoutes(() => engine as SyncEngine, store))
 
         const response = await app.request('/api/sessions?limit=1&order=updatedAt&active=true')
         expect(response.status).toBe(200)

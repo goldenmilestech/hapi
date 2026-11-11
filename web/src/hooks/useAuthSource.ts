@@ -3,6 +3,7 @@ import { getTelegramWebApp, isTelegramEnvironment } from './useTelegram'
 import type { AuthSource } from './useAuth'
 
 const ACCESS_TOKEN_PREFIX = 'hapi_access_token::'
+const SHARE_TOKEN_PREFIX = 'hapi_share_token::'
 
 function getTelegramInitData(): string | null {
     const tg = getTelegramWebApp()
@@ -55,6 +56,41 @@ function clearStoredAccessToken(key: string): void {
     }
 }
 
+function getShareTokenFromPath(): string | null {
+    if (typeof window === 'undefined') return null
+    const match = window.location.pathname.match(/^\/s\/([^/]+)\/?$/)
+    if (!match?.[1]) return null
+    try {
+        return decodeURIComponent(match[1])
+    } catch {
+        return null
+    }
+}
+
+function getStoredShareToken(key: string): string | null {
+    try {
+        return sessionStorage.getItem(key)
+    } catch {
+        return null
+    }
+}
+
+function storeShareToken(key: string, token: string): void {
+    try {
+        sessionStorage.setItem(key, token)
+    } catch {
+        // Ignore storage errors
+    }
+}
+
+function clearStoredShareToken(key: string): void {
+    try {
+        sessionStorage.removeItem(key)
+    } catch {
+        // Ignore storage errors
+    }
+}
+
 export function useAuthSource(baseUrl: string): {
     authSource: AuthSource | null
     isLoading: boolean
@@ -67,6 +103,7 @@ export function useAuthSource(baseUrl: string): {
     const [isTelegram, setIsTelegram] = useState(false)
     const retryCountRef = useRef(0)
     const accessTokenKey = useMemo(() => getAccessTokenKey(baseUrl), [baseUrl])
+    const shareTokenKey = useMemo(() => `${SHARE_TOKEN_PREFIX}${baseUrl}`, [baseUrl])
 
     // Initialize auth source on mount, with retry for delayed Telegram initData
     useEffect(() => {
@@ -76,6 +113,16 @@ export function useAuthSource(baseUrl: string): {
         setIsLoading(true)
 
         const telegramInitData = getTelegramInitData()
+
+        // A share link is an explicit one-off credential: prefer it over any
+        // persisted login so opening the link never leaks the owner's view.
+        const pathShareToken = getShareTokenFromPath()
+        if (pathShareToken) {
+            storeShareToken(shareTokenKey, pathShareToken)
+            setAuthSource({ type: 'share', token: pathShareToken })
+            setIsLoading(false)
+            return
+        }
 
         if (telegramInitData) {
             // Telegram Mini App environment
@@ -98,6 +145,15 @@ export function useAuthSource(baseUrl: string): {
         const storedToken = getStoredAccessToken(accessTokenKey)
         if (storedToken) {
             setAuthSource({ type: 'accessToken', token: storedToken })
+            setIsLoading(false)
+            return
+        }
+
+        // Refresh on an already-opened share URL: the path no longer carries
+        // the token, so keep the tab's share session alive in sessionStorage.
+        const storedShareToken = getStoredShareToken(shareTokenKey)
+        if (storedShareToken) {
+            setAuthSource({ type: 'share', token: storedShareToken })
             setIsLoading(false)
             return
         }
@@ -133,17 +189,19 @@ export function useAuthSource(baseUrl: string): {
         return () => {
             clearInterval(interval)
         }
-    }, [accessTokenKey])
+    }, [accessTokenKey, shareTokenKey])
 
     const setAccessToken = useCallback((token: string) => {
         storeAccessToken(accessTokenKey, token)
+        clearStoredShareToken(shareTokenKey)
         setAuthSource({ type: 'accessToken', token })
-    }, [accessTokenKey])
+    }, [accessTokenKey, shareTokenKey])
 
     const clearAuth = useCallback(() => {
         clearStoredAccessToken(accessTokenKey)
+        clearStoredShareToken(shareTokenKey)
         setAuthSource(null)
-    }, [accessTokenKey])
+    }, [accessTokenKey, shareTokenKey])
 
     return {
         authSource,

@@ -65,6 +65,10 @@ export function createMachinesRoutes(
         if (!engine) {
             return c.json({ error: 'Not connected' }, 503)
         }
+        // A session share never exposes machine names, paths or capabilities.
+        if (c.get('sessionId')) {
+            return c.json({ machines: [] })
+        }
 
         const namespace = c.get('namespace')
         const machines = engine.getOnlineMachinesByNamespace(namespace)

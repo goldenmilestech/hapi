@@ -1,6 +1,9 @@
 import type {
     AttachmentMetadata,
     AuthResponse,
+    CreateSessionShareRequest,
+    CreateSessionShareResponse,
+    SessionShareListResponse,
     CodexLocalSessionsResponse,
     CodexDuplicateSessionsResponse,
     CodexMergeDuplicateSessionsResponse,
@@ -289,7 +292,7 @@ export class ApiClient {
         return await res.json() as T
     }
 
-    async authenticate(auth: { initData: string } | { accessToken: string }): Promise<AuthResponse> {
+    async authenticate(auth: { initData: string } | { accessToken: string } | { shareToken: string }): Promise<AuthResponse> {
         const res = await fetchThroughAuthProxy(this.buildUrl('/api/auth'), {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
@@ -519,6 +522,29 @@ export class ApiClient {
 
     async getSession(sessionId: string): Promise<SessionResponse> {
         return await this.request<SessionResponse>(`/api/sessions/${encodeURIComponent(sessionId)}`)
+    }
+
+    async createSessionShare(
+        sessionId: string,
+        body: CreateSessionShareRequest = {}
+    ): Promise<CreateSessionShareResponse> {
+        return await this.request<CreateSessionShareResponse>(
+            `/api/sessions/${encodeURIComponent(sessionId)}/share`,
+            { method: 'POST', body: JSON.stringify(body) }
+        )
+    }
+
+    async listSessionShares(sessionId: string): Promise<SessionShareListResponse> {
+        return await this.request<SessionShareListResponse>(
+            `/api/sessions/${encodeURIComponent(sessionId)}/share`
+        )
+    }
+
+    async revokeSessionShare(sessionId: string, shareId: string): Promise<{ ok: true }> {
+        return await this.request<{ ok: true }>(
+            `/api/sessions/${encodeURIComponent(sessionId)}/share/${encodeURIComponent(shareId)}`,
+            { method: 'DELETE' }
+        )
     }
 
     async getSessionExport(

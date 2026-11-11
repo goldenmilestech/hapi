@@ -19,7 +19,7 @@ it('shares monotonic read state over REST and namespace-scoped SSE without touch
         expect(events.some(e => e.type === 'session-updated' && e.namespace === 'alice' && e.data && 'contentRevision' in e.data && e.data.contentRevision === 1)).toBe(true)
         const app = new Hono<WebAppEnv>()
         app.use('*', async (c, next) => { c.set('namespace', c.req.header('test-namespace') ?? 'alice'); await next() })
-        app.route('/api', createSessionsRoutes(() => engine))
+        app.route('/api', createSessionsRoutes(() => engine, store))
         const send = (body: unknown, namespace = 'alice') => app.request(`/api/sessions/${session.id}/read-state`, {
             method: 'PUT', headers: { 'content-type': 'application/json', 'test-namespace': namespace }, body: JSON.stringify(body)
         })

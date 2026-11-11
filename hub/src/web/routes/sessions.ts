@@ -31,11 +31,19 @@ import {
 } from '@hapi/protocol'
 import { RPC_TARGET_MISSING_ERROR_CODE } from '@hapi/protocol/rpcMethods'
 import type { SlashCommand } from '@hapi/protocol/apiTypes'
+import {
+    CreateSessionShareRequestSchema,
+    type SessionShareSummary
+} from '@hapi/protocol/apiTypes'
 import { Hono, type Context } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
+import { randomBytes } from 'node:crypto'
 import type { SyncEngine, Session } from '../../sync/syncEngine'
 import { RpcTargetMissingError } from '../../sync/rpcGateway'
 import type { WebAppEnv } from '../middleware/auth'
+import type { Store } from '../../store'
+import { hashShareToken, type SessionShareRecord } from '../../store/sessionShares'
+import { getConfiguration } from '../../configuration'
 import { loadScratchlistAttachmentLimitsFromEnv } from '../../config/scratchlistAttachmentLimits'
 import { validateScratchlistAttachmentsForWrite, scratchlistSessionBytesBeforeForPut } from '../../scratchlistAttachments/validate'
 import { TitleSuggestionError } from '../../sync/titleSuggestion'
@@ -83,7 +91,7 @@ function estimateBase64Bytes(base64: string): number {
     return Math.floor((len * 3) / 4) - padding
 }
 
-export function createSessionsRoutes(getSyncEngine: () => SyncEngine | null): Hono<WebAppEnv> {
+export function createSessionsRoutes(getSyncEngine: () => SyncEngine | null, store: Store): Hono<WebAppEnv> {
     const app = new Hono<WebAppEnv>()
 
     app.get('/sessions', (c) => {
@@ -104,6 +112,13 @@ export function createSessionsRoutes(getSyncEngine: () => SyncEngine | null): Ho
 
         let sessionRecords = engine.getSessionsByNamespace(namespace)
             .filter((session) => !activeOnly || session.active)
+        // A session share token may list sessions only to discover the one it
+        // was issued for; never expose sibling sessions from the namespace.
+        const shareSessionId = c.get('sessionId')
+        if (shareSessionId) {
+            sessionRecords = sessionRecords.filter((session) => session.id === shareSessionId)
+        }
+        sessionRecords = sessionRecords
             .sort((a, b) => {
                 // Peer discovery wants newest activity first before limit truncation.
                 if (order === 'updatedAt') {
@@ -1860,6 +1875,84 @@ export function createSessionsRoutes(getSyncEngine: () => SyncEngine | null): Ho
             c.json(await engine.listPiModelsForSession(sessionId))
         )
     )
+
+    // --- Session share links ---
+    // The opaque token is returned exactly once, at creation time. Only its
+    // SHA-256 digest is stored, and every exchange re-checks the session and
+    // the row so revocation takes effect on the next token refresh.
+    const toShareSummary = (share: SessionShareRecord): SessionShareSummary => ({
+        id: share.id,
+        mode: share.mode,
+        createdAt: share.createdAt,
+        expiresAt: share.expiresAt,
+        revokedAt: share.revokedAt
+    })
+
+    app.post('/sessions/:id/share', async (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) return engine
+
+        const sessionResult = requireSessionFromParam(c, engine)
+        if (sessionResult instanceof Response) return sessionResult
+
+        const body = await c.req.json().catch(() => null)
+        const parsed = CreateSessionShareRequestSchema.safeParse(body ?? {})
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid body', issues: parsed.error.flatten() }, 400)
+        }
+
+        const ttlHours = parsed.data.ttlHours ?? 24
+        const token = randomBytes(32).toString('base64url')
+        const share = store.sessionShares.create({
+            sessionId: sessionResult.sessionId,
+            namespace: c.get('namespace'),
+            tokenHash: hashShareToken(token),
+            mode: parsed.data.mode ?? 'chat',
+            expiresAt: Date.now() + ttlHours * 60 * 60 * 1000
+        })
+
+        const configuredOrigin = getConfiguration().publicUrl
+        const origin = (c.req.header('origin') || configuredOrigin || '').replace(/\/$/, '')
+
+        return c.json({
+            share: {
+                ...toShareSummary(share),
+                token,
+                url: `${origin}/s/${token}`
+            }
+        })
+    })
+
+    app.get('/sessions/:id/share', (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) return engine
+
+        const sessionResult = requireSessionFromParam(c, engine)
+        if (sessionResult instanceof Response) return sessionResult
+
+        const shares = store.sessionShares
+            .listBySession(sessionResult.sessionId, c.get('namespace'))
+            .map(toShareSummary)
+        return c.json({ shares })
+    })
+
+    app.delete('/sessions/:id/share/:shareId', (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) return engine
+
+        const sessionResult = requireSessionFromParam(c, engine)
+        if (sessionResult instanceof Response) return sessionResult
+
+        const revoked = store.sessionShares.revoke(
+            c.req.param('shareId'),
+            sessionResult.sessionId,
+            c.get('namespace')
+        )
+        if (!revoked) {
+            return c.json({ error: 'Share not found' }, 404)
+        }
+        return c.json({ ok: true })
+    })
 
     return app
 }
