@@ -144,6 +144,7 @@ git push fork main
 | `feat/btw-side-question-v034`（2026-11-11 已合入 `main`） | `/btw` 侧问题（不打断主会话） | cli + web |
 | `main`（2026-11-11） | Missions 控制台：Manager/Worker 分组、审批收件箱、停止/归档操作、work-graph 时间线，以及 `work-graph-updated` SSE 实时刷新 | `web/src/routes/missions/`、`web/src/lib/missions.ts`、`hub/src/sync/syncEngine.ts`、`hub/src/web/routes/workGraph.ts`、`shared/src/schemas.ts` |
 | `main`（2026-11-11） | 会话列表完成圆点：回合结束且未读时显示，打开行后立即清除 | `web/src/components/SessionList.tsx`、`SessionRowSummary.tsx`、`web/src/lib/locales/` |
+| `fix/session-running-spinner`（2026-11-11 已合入 `main`） | 运行中会话在 presence 呼吸点之外恢复转圈动画（上游 0.34.4 移除了行内 spinner） | `web/src/components/SessionRowSummary.tsx` |
 
 新增定制时在合并进 `main` 的同一个提交里更新此表，上游同步时按表逐项验证。
 
@@ -151,4 +152,5 @@ git push fork main
 
 - 2026-11-11：三条 0.30.7 定制分支已按 session-share → auto-title → btw 的顺序 cherry-pick 到上游 0.34.4 基线并合入 `main`，旧的 0.30.7 分支仅作历史保留，不再合入。
 - 2026-11-11：`main` 直接新增 Missions 控制台（含 `work-graph-updated` SSE）和会话列表完成圆点，见上表。
+- 2026-11-11：上游 0.34.4 的会话行改版移除了行内 spinner，仅保留 presence 呼吸点；已在 `SessionRowSummary.tsx` 恢复转圈并与呼吸点并存。
 - auto-title 的注入点（`sessionHandlers.ts` 的 `socket.on('message')`）已随合入适配到 0.34.4；后续上游同步时仍需按定制清单做端到端验证。

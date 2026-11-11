@@ -3,7 +3,7 @@ import type { SessionSummary } from '@/types/api'
 import { AgentFlavorIcon } from '@/components/AgentFlavorIcon'
 import { InfoIcon, ScheduleIcon } from '@/components/icons'
 import { HoverTooltip, SESSION_ROW_TOOLTIP_FOCUS_CLASS, useSessionRowTooltipIds } from '@/components/HoverTooltip'
-import { getAttentionLabel, SessionAttentionIndicator, SessionRequestIcon } from '@/components/SessionAttentionIndicator'
+import { getAttentionLabel, SessionAttentionIndicator, SessionRequestIcon, SessionSpinner } from '@/components/SessionAttentionIndicator'
 import { classifySessionAttention, sessionIsUnread } from '@/lib/sessionAttention'
 import { getSessionLastSeenAt, getSessionManualUnreadAt } from '@/lib/sessionLastSeen'
 import { formatRelativeTime } from '@/lib/relativeTime'
@@ -73,7 +73,8 @@ function getSessionTimeLabel(
  * Presentational session row — same chrome as the sidebar SessionItem body
  * (flavor icon with presence badge, title, request/schedule symbols, todos,
  * relative time, path). Visual language matches the native apps: no dimmed
- * rows or spinners; unread sessions have a separate accent dot.
+ * rows; a spinner beside the title marks running work, and unread sessions
+ * have a separate accent dot.
  * Used by the session list and by rich-composer mention chip tooltips.
  */
 export function SessionRowSummary(props: {
@@ -156,7 +157,8 @@ export function SessionRowSummary(props: {
     const timeLabel = getSessionTimeLabel(s, importedAt, t)
 
     // Presence lives on the agent icon (pulsing while a turn or background
-    // work runs) instead of dimming disconnected rows or adding spinners.
+    // work runs); the spinner beside the title restates it so running rows are
+    // legible without watching for the pulse. Disconnected rows stay undimmed.
     const isRunning = s.active && s.thinking
     const isBackgroundOnly = s.active && !s.thinking && (s.backgroundTaskCount ?? 0) > 0
     const isUnread = sessionIsUnread(s, {
@@ -208,6 +210,17 @@ export function SessionRowSummary(props: {
                         >
                             {sessionName}
                         </div>
+                        {/* The presence pulse alone is easy to miss at a glance, so
+                            keep the explicit spinner alongside it. */}
+                        {isRunning || isBackgroundOnly ? (
+                            <span
+                                data-testid="session-running-spinner"
+                                className="inline-flex shrink-0"
+                                aria-hidden="true"
+                            >
+                                <SessionSpinner background={isBackgroundOnly} />
+                            </span>
+                        ) : null}
                         {requestKind && urgentAttention && nestedTooltips && attentionId ? (
                             <SessionAttentionIndicator
                                 attention={attention}
