@@ -96,7 +96,11 @@ jobs:
                   if gh release view "$TAG" >/dev/null 2>&1; then
                       gh release upload "$TAG" cli/release-artifacts/* --clobber
                   else
+                      # --target pins the tag to the commit that was built. The
+                      # default would tag the default branch's current HEAD,
+                      # which may have moved while the build ran.
                       gh release create "$TAG" \
+                          --target "$GITHUB_SHA" \
                           --title "CLI build $TAG" \
                           --notes "Built from ${GITHUB_SHA} (${GITHUB_REF_NAME})." \
                           --prerelease \
