@@ -224,6 +224,7 @@ function createWebApp(options: {
     getSseManager: () => SSEManager | null
     getVisibilityTracker: () => VisibilityTracker | null
     jwtSecret: Uint8Array
+    shareTokenSecret: Uint8Array
     store: Store
     vapidPublicKey: string
     corsOrigins?: string[]
@@ -288,7 +289,9 @@ function createWebApp(options: {
 
     app.use('/api/*', createAuthMiddleware(options.jwtSecret))
     app.route('/api', createEventsRoutes(options.getSseManager, options.getSyncEngine, options.getVisibilityTracker))
-    app.route('/api', createSessionsRoutes(options.getSyncEngine, options.store))
+    app.route('/api', createSessionsRoutes(options.getSyncEngine, options.store, {
+        shareTokenSecret: options.shareTokenSecret
+    }))
     app.route('/api', createMessagesRoutes(options.getSyncEngine))
     app.route('/api', createPermissionsRoutes(options.getSyncEngine))
     app.route('/api', createMachinesRoutes(options.getSyncEngine, { dataDir: configuration.dataDir }))
@@ -426,6 +429,7 @@ export async function startWebServer(options: {
     getSseManager: () => SSEManager | null
     getVisibilityTracker: () => VisibilityTracker | null
     jwtSecret: Uint8Array
+    shareTokenSecret: Uint8Array
     store: Store
     vapidPublicKey: string
     socketEngine: SocketEngine
@@ -440,6 +444,7 @@ export async function startWebServer(options: {
         getSseManager: options.getSseManager,
         getVisibilityTracker: options.getVisibilityTracker,
         jwtSecret: options.jwtSecret,
+        shareTokenSecret: options.shareTokenSecret,
         store: options.store,
         vapidPublicKey: options.vapidPublicKey,
         corsOrigins: options.corsOrigins,

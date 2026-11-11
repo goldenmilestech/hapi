@@ -36,6 +36,8 @@ function setup() {
     app.get('/api/sessions/:id', (c) => c.json({ ok: true, requestSessionId: c.req.param('id') }))
     app.get('/api/sessions/:id/terminal', (c) => c.json({ ok: true }))
     app.post('/api/sessions/:id/share', (c) => c.json({ ok: true }))
+    app.patch('/api/sessions/:id/share/:shareId', (c) => c.json({ ok: true }))
+    app.post('/api/sessions/:id/share/:shareId/recover', (c) => c.json({ ok: true }))
     app.get('/api/machines', (c) => c.json({ ok: true }))
 
     return { store, app }
@@ -112,6 +114,14 @@ describe('session share authentication', () => {
         expect((await app.request('/api/sessions/session-2', { headers })).status).toBe(403)
         expect((await app.request('/api/sessions/session-1/terminal', { headers })).status).toBe(403)
         expect((await app.request('/api/sessions/session-1/share', {
+            method: 'POST',
+            headers
+        })).status).toBe(403)
+        expect((await app.request('/api/sessions/session-1/share/share-1', {
+            method: 'PATCH',
+            headers
+        })).status).toBe(403)
+        expect((await app.request('/api/sessions/session-1/share/share-1/recover', {
             method: 'POST',
             headers
         })).status).toBe(403)

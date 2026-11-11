@@ -75,13 +75,15 @@ export class SessionShareStore {
     }
 
     create(input: {
+        /** Callers that derive the token pass the id they derived it from. */
+        id?: string
         sessionId: string
         namespace: string
         tokenHash: string
         mode: SessionShareMode
         expiresAt: number | null
     }): SessionShareRecord {
-        const id = randomUUID()
+        const id = input.id ?? randomUUID()
         const now = Date.now()
         this.db.prepare(`
             INSERT INTO session_shares (
@@ -110,6 +112,51 @@ export class SessionShareStore {
             'SELECT * FROM session_shares WHERE token_hash = ? LIMIT 1'
         ).get(tokenHash) as DbSessionShareRow | undefined
         return row ? toRecord(row) : null
+    }
+
+    getById(id: string, sessionId: string, namespace: string): SessionShareRecord | null {
+        const row = this.db.prepare(`
+            SELECT * FROM session_shares
+            WHERE id = ? AND session_id = ? AND namespace = ?
+            LIMIT 1
+        `).get(id, sessionId, namespace) as DbSessionShareRow | undefined
+        return row ? toRecord(row) : null
+    }
+
+    /**
+     * Extending an expiry is allowed for expired shares (that is the point of
+     * renewal) but never for revoked ones, and only within the owning session
+     * and namespace.
+     */
+    updateExpiresAt(
+        id: string,
+        sessionId: string,
+        namespace: string,
+        expiresAt: number
+    ): SessionShareRecord | null {
+        const result = this.db.prepare(`
+            UPDATE session_shares SET expires_at = ?
+            WHERE id = ? AND session_id = ? AND namespace = ? AND revoked_at IS NULL
+        `).run(expiresAt, id, sessionId, namespace)
+        return result.changes > 0 ? this.getById(id, sessionId, namespace) : null
+    }
+
+    /**
+     * Replaces the token hash of an active share. Used to make a share created
+     * before tokens were derivable retrievable again; the previous token stops
+     * working immediately.
+     */
+    updateTokenHash(
+        id: string,
+        sessionId: string,
+        namespace: string,
+        tokenHash: string
+    ): SessionShareRecord | null {
+        const result = this.db.prepare(`
+            UPDATE session_shares SET token_hash = ?
+            WHERE id = ? AND session_id = ? AND namespace = ? AND revoked_at IS NULL
+        `).run(tokenHash, id, sessionId, namespace)
+        return result.changes > 0 ? this.getById(id, sessionId, namespace) : null
     }
 
     listBySession(sessionId: string, namespace: string): SessionShareRecord[] {

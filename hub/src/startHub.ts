@@ -6,6 +6,7 @@ import type { NotificationChannel } from './notifications/notificationTypes'
 import { HappyBot } from './telegram/bot'
 import { startWebServer } from './web/server'
 import { getOrCreateJwtSecret } from './config/jwtSecret'
+import { getOrCreateShareTokenSecret } from './config/shareTokenSecret'
 import { getOrCreateOwnerId } from './config/ownerId'
 import { createSocketServer } from './socket/server'
 import { SSEManager } from './sse/sseManager'
@@ -179,6 +180,7 @@ export async function startHub(options: StartHubOptions = {}): Promise<HubInstan
 
     const store = new Store(config.dbPath)
     const jwtSecret = await getOrCreateJwtSecret()
+    const shareTokenSecret = await getOrCreateShareTokenSecret(config.dataDir)
     const vapidKeys = await getOrCreateVapidKeys(config.dataDir)
     const vapidSubject = process.env.VAPID_SUBJECT ?? 'mailto:admin@hapi.run'
     const pushService = new PushService(vapidKeys, vapidSubject, store)
@@ -284,6 +286,7 @@ export async function startHub(options: StartHubOptions = {}): Promise<HubInstan
         getSseManager: () => sseManager,
         getVisibilityTracker: () => visibilityTracker,
         jwtSecret,
+        shareTokenSecret,
         store,
         vapidPublicKey: vapidKeys.publicKey,
         socketEngine: socketServer.engine,
