@@ -1,5 +1,5 @@
 import { describe, expect, it, spyOn } from 'bun:test'
-import { toSessionSummary } from '@hapi/protocol'
+import { MACHINE_CAPABILITIES, toSessionSummary } from '@hapi/protocol'
 import type { SyncEvent } from '@hapi/protocol/types'
 import { Store } from '../store'
 import { RpcRegistry } from '../socket/rpcRegistry'
@@ -628,7 +628,12 @@ describe('session model', () => {
         try {
             engine.getOrCreateMachine(
                 'machine-cursor',
-                { host: 'localhost', platform: 'linux', happyCliVersion: '0.1.0' },
+                {
+                    host: 'localhost',
+                    platform: 'linux',
+                    happyCliVersion: '0.1.0',
+                    capabilities: [MACHINE_CAPABILITIES.SpawnReservedSessionId],
+                },
                 null,
                 'default'
             )
