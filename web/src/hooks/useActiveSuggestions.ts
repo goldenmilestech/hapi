@@ -6,7 +6,7 @@ export interface Suggestion {
     label: string
     description?: string
     content?: string  // Expanded content for Codex user prompts
-    source?: 'builtin' | 'user' | 'plugin' | 'project'
+    source?: 'builtin' | 'user' | 'plugin' | 'project' | 'skill'
     /** When set, rich composer inserts an inline session atom instead of `text`. */
     sessionMention?: { id: string; title: string }
     /** An interactive row that changes the menu instead of inserting text. */

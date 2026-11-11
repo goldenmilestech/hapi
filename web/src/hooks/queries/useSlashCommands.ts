@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
 import { useCallback, useMemo } from 'react'
 import type { ApiClient } from '@/api/client'
-import type { SlashCommand } from '@/types/api'
+import type { SkillSummary, SlashCommand } from '@/types/api'
 import type { Suggestion } from '@/hooks/useActiveSuggestions'
 import { queryKeys } from '@/lib/query-keys'
 import { getBuiltinSlashCommands, mergeSlashCommands } from '@/lib/codexSlashCommands'
+import { useSessionSkills } from './useSkills'
 
 function levenshteinDistance(a: string, b: string): number {
     if (a.length === 0) return b.length
@@ -20,6 +21,74 @@ function levenshteinDistance(a: string, b: string): number {
         }
     }
     return matrix[b.length][a.length]
+}
+
+/** One row of the `/` menu: a slash command or a skill. */
+export interface SlashMenuEntry {
+    name: string
+    description?: string
+    /** What selecting the row inserts: `/command` for commands, `$skill` for skills. */
+    text: string
+    source: NonNullable<Suggestion['source']>
+    content?: string
+}
+
+/**
+ * Build the `/` menu from slash commands plus the session's skill catalog.
+ *
+ * Skills keep their `$name` spelling because that is the invocation every
+ * flavor understands: Claude expands it to the native `/name` command, Codex
+ * turns it into a `skill` input, Pi rewrites it to `skill:name`, and the ACP
+ * agents reach it through `skill_lookup`. Inserting `/name` instead would
+ * silently degrade to plain text outside Claude.
+ *
+ * A slash command wins over a skill with the same name: the command is the
+ * explicit, installed gesture, and only one row can own the lookup.
+ */
+export function buildSlashMenuEntries(
+    commands: readonly SlashCommand[],
+    skills: readonly SkillSummary[]
+): SlashMenuEntry[] {
+    const entries: SlashMenuEntry[] = []
+    const seen = new Set<string>()
+
+    for (const command of commands) {
+        const key = command.name.toLowerCase()
+        if (!key || seen.has(key)) continue
+        seen.add(key)
+        entries.push({
+            name: command.name,
+            description: command.description ?? (command.source === 'builtin' ? undefined : 'Custom command'),
+            text: `/${command.name}`,
+            source: command.source,
+            content: command.content,
+        })
+    }
+
+    for (const skill of skills) {
+        const key = skill.name.toLowerCase()
+        if (!key || seen.has(key)) continue
+        seen.add(key)
+        entries.push({
+            name: skill.name,
+            description: skill.description,
+            text: `$${skill.name}`,
+            source: 'skill',
+        })
+    }
+
+    return entries
+}
+
+function toSuggestion(entry: SlashMenuEntry): Suggestion {
+    return {
+        key: entry.text,
+        text: entry.text,
+        label: entry.text,
+        description: entry.description,
+        content: entry.content,
+        source: entry.source,
+    }
 }
 
 export function useSlashCommands(
@@ -53,6 +122,11 @@ export function useSlashCommands(
         retry: false, // Don't retry RPC failures
     })
 
+    // Skills share the `$` menu's cache entry, so listing them here costs no
+    // extra RPC in the common case.
+    const skillsQuery = useSessionSkills(api, sessionId)
+    const skills = useMemo(() => skillsQuery.data?.skills ?? [], [skillsQuery.data])
+
     // Merge local built-ins with commands discovered by the active CLI.
     // The CLI can expose agent-specific built-ins plus user/plugin/project commands;
     // keep local built-ins as an offline fallback, then append/override from RPC.
@@ -67,6 +141,11 @@ export function useSlashCommands(
         return builtin
     }, [agentType, query.data])
 
+    const entries = useMemo(
+        () => buildSlashMenuEntries(commands, skills),
+        [commands, skills]
+    )
+
     const getSuggestions = useCallback(async (queryText: string): Promise<Suggestion[]> => {
         // Opening the menu is the one moment a stale list is visible, so
         // refresh here instead of polling in the background. Fire-and-forget:
@@ -75,6 +154,7 @@ export function useSlashCommands(
         // immediately - the refreshed list flows in via query state.
         if (queryText === '/') {
             void query.refetch()
+            void skillsQuery.refetch()
         }
 
         const searchTerm = queryText.startsWith('/')
@@ -82,20 +162,13 @@ export function useSlashCommands(
             : queryText.toLowerCase()
 
         if (!searchTerm) {
-            return commands.map(cmd => ({
-                key: `/${cmd.name}`,
-                text: `/${cmd.name}`,
-                label: `/${cmd.name}`,
-                description: cmd.description ?? (cmd.source === 'builtin' ? undefined : 'Custom command'),
-                content: cmd.content,
-                source: cmd.source
-            }))
+            return entries.map(toSuggestion)
         }
 
         const maxDistance = Math.max(2, Math.floor(searchTerm.length / 2))
-        return commands
-            .map(cmd => {
-                const name = cmd.name.toLowerCase()
+        return entries
+            .map(entry => {
+                const name = entry.name.toLowerCase()
                 let score: number
                 if (name === searchTerm) score = 0
                 else if (name.startsWith(searchTerm)) score = 1
@@ -104,19 +177,12 @@ export function useSlashCommands(
                     const dist = levenshteinDistance(searchTerm, name)
                     score = dist <= maxDistance ? 3 + dist : Infinity
                 }
-                return { cmd, score }
+                return { entry, score }
             })
             .filter(item => item.score < Infinity)
             .sort((a, b) => a.score - b.score)
-            .map(({ cmd }) => ({
-                key: `/${cmd.name}`,
-                text: `/${cmd.name}`,
-                label: `/${cmd.name}`,
-                description: cmd.description ?? (cmd.source === 'builtin' ? undefined : 'Custom command'),
-                content: cmd.content,
-                source: cmd.source
-            }))
-    }, [commands, query.refetch])
+            .map(({ entry }) => toSuggestion(entry))
+    }, [entries, query.refetch, skillsQuery.refetch])
 
     return {
         commands,

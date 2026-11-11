@@ -22,18 +22,15 @@ function levenshteinDistance(a: string, b: string): number {
     return matrix[b.length][a.length]
 }
 
-export function useSkills(
-    api: ApiClient | null,
-    sessionId: string | null
-): {
-    skills: SkillSummary[]
-    isLoading: boolean
-    error: string | null
-    getSuggestions: (query: string) => Promise<Suggestion[]>
-} {
+/**
+ * Session skill catalog, shared by the `$` skill menu and the `/` menu (which
+ * lists skills alongside slash commands). Both hooks use the same query key,
+ * so the two menus never fetch the same catalog twice.
+ */
+export function useSessionSkills(api: ApiClient | null, sessionId: string | null) {
     const resolvedSessionId = sessionId ?? 'unknown'
 
-    const query = useQuery({
+    return useQuery({
         queryKey: queryKeys.skills(resolvedSessionId),
         queryFn: async () => {
             if (!api || !sessionId) {
@@ -55,6 +52,18 @@ export function useSkills(
         gcTime: 30 * 60 * 1000,
         retry: false,
     })
+}
+
+export function useSkills(
+    api: ApiClient | null,
+    sessionId: string | null
+): {
+    skills: SkillSummary[]
+    isLoading: boolean
+    error: string | null
+    getSuggestions: (query: string) => Promise<Suggestion[]>
+} {
+    const query = useSessionSkills(api, sessionId)
 
     const skills = useMemo(() => {
         if (query.data?.success && query.data.skills) {
