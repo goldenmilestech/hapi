@@ -939,6 +939,13 @@ export class ApiClient {
         })
     }
 
+    async setContextLimit(sessionId: string, contextLimit: number | null): Promise<void> {
+        await this.request(`/api/sessions/${encodeURIComponent(sessionId)}/context-limit`, {
+            method: 'POST',
+            body: JSON.stringify({ contextLimit })
+        })
+    }
+
     async setServiceTier(sessionId: string, serviceTier: string | null): Promise<void> {
         await this.request(`/api/sessions/${encodeURIComponent(sessionId)}/service-tier`, {
             method: 'POST',

@@ -1205,6 +1205,11 @@ export default {
   'misc.contextUsed': 'Использовано: {value} ({percent}%)',
   'misc.contextUsedTokens': 'Использовано: {value}',
   'misc.contextRemaining': 'Осталось: {value} ({percent}%)',
+  'misc.contextLimit': 'Лимит',
+  'misc.contextLimitSave': 'Сохранить',
+  'misc.contextLimitAuto': 'Авто',
+  'misc.contextAutoCompactHint': 'Авто-сжатие при приближении к лимиту',
+  'misc.compactContext': 'Сжать контекст',
 
   // Выбор цели Web Share
   'share.title': 'Поделиться в HAPI',

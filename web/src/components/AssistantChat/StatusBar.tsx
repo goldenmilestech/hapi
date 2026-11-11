@@ -1,13 +1,17 @@
 import {
+    CONTEXT_LIMIT_MAX_TOKENS,
+    CONTEXT_LIMIT_MIN_TOKENS,
     getCodexCollaborationModeLabel,
+    getCompactCommandForFlavor,
     getCopilotAgentModeLabel,
+    getEffectiveContextMax,
     getPermissionModeLabel,
     getPermissionModeTone,
     isPermissionModeAllowedForFlavor
 } from '@hapi/protocol'
 import type { PermissionModeTone } from '@hapi/protocol'
 import * as Popover from '@radix-ui/react-popover'
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { AgentState, CodexCollaborationMode, PermissionMode } from '@/types/api'
 import type { ConversationStatus } from '@/realtime/types'
 import { getContextBudgetTokens } from '@/chat/modelConfig'
@@ -133,6 +137,12 @@ function formatTokenCount(value: number): string {
     return String(value)
 }
 
+/** The limit editor works in thousands: 1000 means 1M tokens. */
+export function formatContextLimitDraft(limit: number | null | undefined): string {
+    if (typeof limit !== 'number' || !Number.isFinite(limit) || limit <= 0) return ''
+    return String(Math.round(limit / 1_000))
+}
+
 function getContextPercentages(contextSize: number, maxContextSize: number): {
     usedPercentage: number
     remainingPercentage: number
@@ -199,6 +209,13 @@ export function StatusBar(props: {
     contextSize?: number
     contextCacheRead?: number
     contextWindow?: number | null
+    /** Per-session context ceiling in tokens; null/undefined = native window. */
+    contextLimit?: number | null
+    /** Persist a new per-session ceiling; presence also enables the editor. */
+    onContextLimitChange?: (contextLimit: number | null) => Promise<void> | void
+    /** Send the flavor's compact command; presence enables the button. */
+    onCompact?: () => void
+    compactDisabled?: boolean
     /**
      * Model to use for the context-window fallback heuristic when
      * contextWindow is absent. Falls back to `model`. Callers pass the
@@ -224,31 +241,67 @@ export function StatusBar(props: {
     )
 
     const contextHeuristicModel = props.contextModel ?? props.model
+    // The configured per-session ceiling wins over the model's native window,
+    // but never extends it: a 1M limit on a 200k model still shows 200k.
+    const maxContextSize = useMemo(
+        () => getEffectiveContextMax(
+            props.contextWindow ?? getContextBudgetTokens(contextHeuristicModel, props.agentFlavor),
+            props.contextLimit
+        ),
+        [props.contextWindow, props.contextLimit, contextHeuristicModel, props.agentFlavor]
+    )
     const contextWarning = useMemo(
         () => {
-            if (props.contextSize === undefined) return null
-            const maxContextSize = props.contextWindow ?? getContextBudgetTokens(contextHeuristicModel, props.agentFlavor)
-            if (!maxContextSize) return null
+            if (props.contextSize === undefined || !maxContextSize) return null
             return getContextWarning(props.contextSize, maxContextSize)
         },
-        [props.contextSize, props.contextWindow, contextHeuristicModel, props.agentFlavor]
+        [props.contextSize, maxContextSize]
     )
     const contextUsageLabel = useMemo(() => {
         if (props.contextSize === undefined) return null
-        const maxContextSize = props.contextWindow ?? getContextBudgetTokens(contextHeuristicModel, props.agentFlavor)
         return formatContextUsageLabel(props.contextSize, maxContextSize)
-    }, [props.contextSize, props.contextWindow, contextHeuristicModel, props.agentFlavor])
+    }, [props.contextSize, maxContextSize])
     const compactContextUsageLabel = useMemo(() => {
         if (props.contextSize === undefined) return null
-        const maxContextSize = props.contextWindow ?? getContextBudgetTokens(contextHeuristicModel, props.agentFlavor)
         return formatCompactContextUsageLabel(props.contextSize, maxContextSize)
-    }, [props.contextSize, props.contextWindow, contextHeuristicModel, props.agentFlavor])
+    }, [props.contextSize, maxContextSize])
     const contextUsageDetails = useMemo(() => {
         if (props.contextSize === undefined) return null
-        const maxContextSize = props.contextWindow ?? getContextBudgetTokens(contextHeuristicModel, props.agentFlavor)
         return getContextUsageDetails(props.contextSize, maxContextSize, props.contextCacheRead)
-    }, [props.contextSize, props.contextCacheRead, props.contextWindow, contextHeuristicModel, props.agentFlavor])
+    }, [props.contextSize, props.contextCacheRead, maxContextSize])
     const contextUsedPercentage = contextUsageDetails?.usedPercentage ?? null
+
+    const compactCommand = getCompactCommandForFlavor(props.agentFlavor)
+    const canConfigureContextLimit = Boolean(props.onContextLimitChange) && compactCommand !== null
+    const contextLimit = props.contextLimit ?? null
+    const [popoverOpen, setPopoverOpen] = useState(false)
+    const [limitDraft, setLimitDraft] = useState(() => formatContextLimitDraft(contextLimit))
+    const [savingLimit, setSavingLimit] = useState(false)
+
+    useEffect(() => {
+        setLimitDraft(formatContextLimitDraft(contextLimit))
+    }, [contextLimit])
+
+    const saveContextLimit = async (next: number | null) => {
+        if (!props.onContextLimitChange || savingLimit) return
+        setSavingLimit(true)
+        try {
+            await props.onContextLimitChange(next)
+            setLimitDraft(formatContextLimitDraft(next))
+        } catch {
+            // The caller already reports the failure (haptics + console); keep
+            // the popover open so the operator can retry the same value.
+        } finally {
+            setSavingLimit(false)
+        }
+    }
+
+    const saveContextLimitFromDraft = () => {
+        const parsed = Number.parseFloat(limitDraft)
+        if (!Number.isFinite(parsed)) return
+        const tokens = Math.round(parsed * 1_000)
+        void saveContextLimit(Math.min(CONTEXT_LIMIT_MAX_TOKENS, Math.max(CONTEXT_LIMIT_MIN_TOKENS, tokens)))
+    }
 
     const permissionMode = props.permissionMode
     // Copilot always shows permission (including Default) so model=auto sessions
@@ -303,7 +356,7 @@ export function StatusBar(props: {
                     </span>
                 </div>
                 {contextUsageLabel ? (
-                    <Popover.Root>
+                    <Popover.Root open={popoverOpen} onOpenChange={setPopoverOpen}>
                         <Popover.Trigger asChild>
                             <button
                                 type="button"
@@ -356,6 +409,69 @@ export function StatusBar(props: {
                                                 percent: contextUsageDetails.remainingPercentage
                                             })}
                                         </span>
+                                    ) : null}
+                                    {canConfigureContextLimit ? (
+                                        <div className="mt-1 flex flex-col gap-1 border-t border-[var(--app-border)] pt-2">
+                                            <div className="flex items-center gap-1.5">
+                                                <span className="shrink-0 text-[var(--app-hint)]">
+                                                    {t('misc.contextLimit')}
+                                                </span>
+                                                <input
+                                                    type="number"
+                                                    inputMode="numeric"
+                                                    min={CONTEXT_LIMIT_MIN_TOKENS / 1_000}
+                                                    max={CONTEXT_LIMIT_MAX_TOKENS / 1_000}
+                                                    step={10}
+                                                    value={limitDraft}
+                                                    placeholder={t('misc.contextLimitAuto')}
+                                                    aria-label={t('misc.contextLimit')}
+                                                    onChange={(event) => setLimitDraft(event.target.value)}
+                                                    onKeyDown={(event) => {
+                                                        if (event.key !== 'Enter') return
+                                                        event.preventDefault()
+                                                        saveContextLimitFromDraft()
+                                                    }}
+                                                    className="w-16 rounded-sm border border-[var(--app-border)] bg-transparent px-1.5 py-0.5 text-right text-xs text-[var(--app-fg)] outline-none focus-visible:ring-1 focus-visible:ring-[var(--app-link)]"
+                                                />
+                                                <span className="text-[var(--app-hint)]">k</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={saveContextLimitFromDraft}
+                                                    disabled={savingLimit}
+                                                    className="rounded-sm px-1.5 py-0.5 text-[var(--app-link)] hover:bg-[var(--app-subtle-bg)] disabled:opacity-50"
+                                                >
+                                                    {t('misc.contextLimitSave')}
+                                                </button>
+                                                {contextLimit !== null ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void saveContextLimit(null)}
+                                                        disabled={savingLimit}
+                                                        className="rounded-sm px-1.5 py-0.5 text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] disabled:opacity-50"
+                                                    >
+                                                        {t('misc.contextLimitAuto')}
+                                                    </button>
+                                                ) : null}
+                                            </div>
+                                            {contextLimit !== null ? (
+                                                <span className="text-[10px] text-[var(--app-hint)]">
+                                                    {t('misc.contextAutoCompactHint')}
+                                                </span>
+                                            ) : null}
+                                        </div>
+                                    ) : null}
+                                    {props.onCompact && compactCommand ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setPopoverOpen(false)
+                                                props.onCompact?.()
+                                            }}
+                                            disabled={props.compactDisabled}
+                                            className="mt-1 w-full rounded-sm border border-[var(--app-border)] px-2 py-1 text-left text-xs text-[var(--app-link)] hover:bg-[var(--app-subtle-bg)] disabled:opacity-50"
+                                        >
+                                            {t('misc.compactContext')}
+                                        </button>
                                     ) : null}
                                 </div>
                             </Popover.Content>

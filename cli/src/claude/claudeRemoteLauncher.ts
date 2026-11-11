@@ -511,6 +511,7 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                             permissionMode: session.getPermissionMode() ?? 'default',
                             model: session.getModel() ?? undefined,
                             effort: session.getEffort() ?? undefined,
+                            contextLimit: session.getContextLimit(),
                         },
                         isAborted: (toolCallId: string) => {
                             return permissionHandler.isAborted(toolCallId);

@@ -1311,6 +1311,11 @@ export default {
   'misc.contextUsed': '使用：{value}（{percent}%）',
   'misc.contextUsedTokens': '使用：{value}',
   'misc.contextRemaining': '剩余：{value}（{percent}%）',
+  'misc.contextLimit': '上限',
+  'misc.contextLimitSave': '保存',
+  'misc.contextLimitAuto': '自动',
+  'misc.contextAutoCompactHint': '接近上限时自动压缩',
+  'misc.compactContext': '压缩上下文',
 
   // Web Share Target 分享面板
   'share.title': '分享到 HAPI',

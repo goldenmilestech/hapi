@@ -7,7 +7,7 @@
  * - No E2E encryption; data is stored as JSON in SQLite
  */
 
-import { type SessionReadStateRequest, type WorkGraphEvent, extractParentSectionSessionId, isKnownFlavor, isLiveLifecycleState, isSteeringSupportedForSession, MACHINE_CAPABILITIES, type LocalResumeTarget, type ResumableSession, type SessionEndReason } from '@hapi/protocol'
+import { type SessionReadStateRequest, type WorkGraphEvent, AUTO_COMPACT_TRIGGER_RATIO, extractParentSectionSessionId, getCompactCommandForFlavor, getEffectiveContextMax, isKnownFlavor, isLiveLifecycleState, isSteeringSupportedForSession, MACHINE_CAPABILITIES, normalizeContextLimit, type LocalResumeTarget, type ResumableSession, type SessionEndReason } from '@hapi/protocol'
 import {
     cliBinaryUpdatedOnDisk,
     isMachineCapabilitySkewed,
@@ -145,6 +145,19 @@ export type CursorChatStoreStatusResult =
     | { type: 'success'; status: CursorChatStoreStatus }
     | { type: 'error'; message: string; code: 'session_not_found' | 'access_denied' | 'resume_unavailable' | 'no_machine_online' | 'probe_failed' }
 
+/**
+ * Minimum spacing between hub-side auto-compact requests for one session.
+ * A compact turn can take a while; usage events keep arriving in the meantime
+ * and there is no other cheap way to know whether a compaction is in flight.
+ */
+const AUTO_COMPACT_COOLDOWN_MS = 60_000
+/**
+ * Re-attempt an armed session's compaction after this long even if usage never
+ * dropped, so a compact command lost to a disconnect cannot disable
+ * auto-compaction for the rest of the session's life.
+ */
+const AUTO_COMPACT_REARM_MS = 10 * 60_000
+
 function asRecord(value: unknown): Record<string, unknown> | null {
     return value !== null && typeof value === 'object' && !Array.isArray(value)
         ? value as Record<string, unknown>
@@ -227,6 +240,15 @@ export class SyncEngine {
     private readonly reopenTails = new Map<string, Promise<ReopenSessionResult>>()
     /** Sessions with an automatic title generation in flight. */
     private readonly autoTitleInFlightIds = new Set<string>()
+    /**
+     * Sessions whose hub-side auto-compact was already requested. Cleared once
+     * a usage snapshot falls back under the session limit, so one over-limit
+     * stretch triggers exactly one /compact instead of one per usage event.
+     */
+    private readonly autoCompactArmedIds = new Set<string>()
+    private readonly autoCompactTriggeredAtBySessionId = new Map<string, number>()
+    /** Latest usage snapshot per session, so a newly lowered limit can act at once. */
+    private readonly lastContextUsageBySessionId = new Map<string, { contextTokens: number; contextWindow: number | null }>()
     /** Serialize fork/rewind per session so concurrent native rollbacks cannot stack. */
     private readonly historyActionsInFlight = new Set<string>()
     /**
@@ -1320,6 +1342,14 @@ export class SyncEngine {
     ): Promise<void> {
         if (this.historyActionsInFlight.has(sessionId)) {
             throw new Error('Conversation history action already in progress')
+        }
+        // A manual compact command (typed or sent from the popover) already
+        // covers this over-limit stretch; arm the watcher so it does not queue
+        // a duplicate /compact behind it.
+        const compactCommand = getCompactCommandForFlavor(this.sessionCache.getSession(sessionId)?.metadata?.flavor)
+        if (compactCommand !== null && payload.text.trim() === compactCommand) {
+            this.autoCompactArmedIds.add(sessionId)
+            this.autoCompactTriggeredAtBySessionId.set(sessionId, Date.now())
         }
         if (!this.sessionCache.getSession(sessionId)?.thinking) {
             this.automaticTitleSuggestionService.onTurnStarted(sessionId)
@@ -2638,6 +2668,9 @@ export class SyncEngine {
         }
         await this.sessionCache.deleteSession(sessionId)
         this.titleTurnCompletedIds.delete(sessionId)
+        this.autoCompactArmedIds.delete(sessionId)
+        this.autoCompactTriggeredAtBySessionId.delete(sessionId)
+        this.lastContextUsageBySessionId.delete(sessionId)
         this.automaticTitleSuggestionService.forgetSession(sessionId)
         this.releaseSessionEnumerations(sessionId)
     }
@@ -2649,6 +2682,7 @@ export class SyncEngine {
             model?: { provider: string; modelId: string } | string | null
             modelReasoningEffort?: string | null
             effort?: string | null
+            contextLimit?: number | null
             serviceTier?: string | null
             collaborationMode?: CodexCollaborationMode
             copilotAgentMode?: CopilotAgentMode
@@ -2674,6 +2708,7 @@ export class SyncEngine {
                 model?: Session['model']
                 modelReasoningEffort?: Session['modelReasoningEffort']
                 effort?: Session['effort']
+                contextLimit?: Session['contextLimit']
                 serviceTier?: Session['serviceTier']
                 collaborationMode?: Session['collaborationMode']
                 copilotAgentMode?: Session['copilotAgentMode']
@@ -2695,6 +2730,94 @@ export class SyncEngine {
         }
 
         this.sessionCache.applySessionConfig(sessionId, applied)
+    }
+
+    /**
+     * Persist a session's context ceiling and, for a live Claude session,
+     * apply it to the running process as Claude Code's autoCompactWindow.
+     * Every other flavor is enforced by `handleAgentContextUsage`.
+     *
+     * The limit is a persisted preference, so it is written before the RPC:
+     * an older or disconnected runner must not lose the setting just because
+     * it cannot apply it live. A failed RPC falls back to the next launch.
+     */
+    async setSessionContextLimit(sessionId: string, contextLimit: number | null): Promise<void> {
+        const session = this.sessionCache.getSession(sessionId) ?? this.sessionCache.refreshSession(sessionId)
+        if (!session) {
+            throw new Error('Session not found')
+        }
+        const normalized = contextLimit === null ? null : normalizeContextLimit(contextLimit)
+        if (contextLimit !== null && normalized === null) {
+            throw new Error('Invalid context limit')
+        }
+
+        this.sessionCache.applySessionConfig(sessionId, { contextLimit: normalized })
+        this.autoCompactArmedIds.delete(sessionId)
+        this.autoCompactTriggeredAtBySessionId.delete(sessionId)
+
+        // A limit lowered below the current usage should compact at the next
+        // opportunity, not wait for the next usage-bearing agent message.
+        const lastUsage = this.lastContextUsageBySessionId.get(sessionId)
+        if (normalized !== null && lastUsage) {
+            this.handleAgentContextUsage(sessionId, lastUsage)
+        }
+
+        if (!session.active || session.metadata?.flavor !== 'claude') {
+            return
+        }
+        try {
+            await this.applySessionConfig(sessionId, { contextLimit: normalized })
+        } catch {
+            // The next Claude process reads the persisted limit at bootstrap.
+        }
+    }
+
+    /**
+     * Hub-side auto-compaction for flavors without a native threshold setting.
+     * Called for every freshly stored agent message that carries token usage.
+     * Claude is skipped: its native autoCompactWindow already fires inside the
+     * agent process, and also covers turns where no web client is connected.
+     */
+    handleAgentContextUsage(
+        sessionId: string,
+        usage: { contextTokens: number; contextWindow?: number | null }
+    ): void {
+        const session = this.sessionCache.getSession(sessionId)
+        if (!session?.active) return
+        const snapshot = { contextTokens: usage.contextTokens, contextWindow: usage.contextWindow ?? null }
+        this.lastContextUsageBySessionId.set(sessionId, snapshot)
+
+        const limit = session.contextLimit ?? null
+        if (limit === null) {
+            this.autoCompactArmedIds.delete(sessionId)
+            return
+        }
+
+        const flavor = session.metadata?.flavor ?? null
+        if (flavor === 'claude') return
+        const command = getCompactCommandForFlavor(flavor)
+        if (!command) return
+
+        // Never let the custom ceiling exceed the model's reported window; a
+        // user limit above it would otherwise only fire after the agent has
+        // already run out of room.
+        const budget = getEffectiveContextMax(usage.contextWindow ?? null, limit) ?? limit
+        const threshold = Math.floor(budget * AUTO_COMPACT_TRIGGER_RATIO)
+        if (usage.contextTokens < threshold) {
+            this.autoCompactArmedIds.delete(sessionId)
+            return
+        }
+        const lastTriggeredAt = this.autoCompactTriggeredAtBySessionId.get(sessionId) ?? 0
+        const elapsed = Date.now() - lastTriggeredAt
+        if (this.autoCompactArmedIds.has(sessionId) && elapsed < AUTO_COMPACT_REARM_MS) return
+        if (elapsed < AUTO_COMPACT_COOLDOWN_MS) return
+
+        this.autoCompactArmedIds.add(sessionId)
+        this.autoCompactTriggeredAtBySessionId.set(sessionId, Date.now())
+        void this.sendMessage(sessionId, { text: command, sentFrom: 'webapp' }).catch((error) => {
+            this.autoCompactArmedIds.delete(sessionId)
+            console.error('[SyncEngine] Auto-compact message failed', { sessionId, error })
+        })
     }
 
     async spawnSession(

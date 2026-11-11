@@ -557,7 +557,10 @@ export function useSSE(options: {
                     modelReasoningEffort: Object.prototype.hasOwnProperty.call(patch, 'modelReasoningEffort')
                         ? patch.modelReasoningEffort ?? null
                         : current.modelReasoningEffort,
-                    effort: Object.prototype.hasOwnProperty.call(patch, 'effort') ? patch.effort ?? null : current.effort
+                    effort: Object.prototype.hasOwnProperty.call(patch, 'effort') ? patch.effort ?? null : current.effort,
+                    contextLimit: Object.prototype.hasOwnProperty.call(patch, 'contextLimit')
+                        ? patch.contextLimit ?? null
+                        : current.contextLimit
                 }
 
                 // Gate versioned fields against THIS summary's watermarks —

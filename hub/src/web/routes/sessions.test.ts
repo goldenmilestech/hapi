@@ -86,6 +86,10 @@ function createApp(session: Session, opts?: {
     const applySessionConfig = async (sessionId: string, config: Record<string, unknown>) => {
         applySessionConfigCalls.push([sessionId, config])
     }
+    const setSessionContextLimitCalls: Array<[string, number | null]> = []
+    const setSessionContextLimit = async (sessionId: string, contextLimit: number | null) => {
+        setSessionContextLimitCalls.push([sessionId, contextLimit])
+    }
     const listOpencodeModelsForSession = async () => ({
         success: true,
         availableModels: [
@@ -150,6 +154,7 @@ function createApp(session: Session, opts?: {
             ? { ok: true, sessionId: session.id, session }
             : { ok: false, reason: 'not-found' },
         applySessionConfig,
+        setSessionContextLimit,
         listCursorModelsForSession,
         listCodexModelsForSession: opts?.listCodexModelsForSession ?? (async () => ({
             success: true,
@@ -208,7 +213,7 @@ function createApp(session: Session, opts?: {
     })
     app.route('/api', createSessionsRoutes(() => engine as SyncEngine, store))
 
-    return { app, applySessionConfigCalls }
+    return { app, applySessionConfigCalls, setSessionContextLimitCalls }
 }
 
 describe('sessions routes', () => {
@@ -1104,6 +1109,27 @@ describe('sessions routes', () => {
             error: 'Effort selection is not supported for this session type'
         })
         expect(applySessionConfigCalls).toEqual([])
+    })
+
+    it('stores a per-session context limit, including for inactive sessions, and validates the range', async () => {
+        const session = createSession({ active: false })
+        const { app, setSessionContextLimitCalls } = createApp(session)
+        const post = (contextLimit: unknown) => app.request('/api/sessions/session-1/context-limit', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ contextLimit })
+        })
+
+        expect((await post(200_000)).status).toBe(200)
+        expect((await post(null)).status).toBe(200)
+        expect(setSessionContextLimitCalls).toEqual([
+            ['session-1', 200_000],
+            ['session-1', null]
+        ])
+
+        expect((await post(99_999)).status).toBe(400)
+        expect((await post(1_000_001)).status).toBe(400)
+        expect(setSessionContextLimitCalls).toHaveLength(2)
     })
 
     it('applies effort changes for Antigravity sessions', async () => {

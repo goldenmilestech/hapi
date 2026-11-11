@@ -27,6 +27,7 @@ export function useSessionActions(
     setModel: (model: { provider: string; modelId: string } | string | null, options?: { effort: string | null }) => Promise<void>
     setModelReasoningEffort: (modelReasoningEffort: string | null) => Promise<void>
     setEffort: (effort: string | null) => Promise<void>
+    setContextLimit: (contextLimit: number | null) => Promise<void>
     setServiceTier: (serviceTier: string | null) => Promise<void>
     renameSession: (name: string | undefined, titleLocked?: boolean) => Promise<void>
     suggestSessionTitle: () => Promise<string>
@@ -223,6 +224,16 @@ export function useSessionActions(
         onSuccess: () => void invalidateSession(),
     })
 
+    const contextLimitMutation = useMutation({
+        mutationFn: async (contextLimit: number | null) => {
+            if (!api || !sessionId) {
+                throw new Error('Session unavailable')
+            }
+            await api.setContextLimit(sessionId, contextLimit)
+        },
+        onSuccess: () => void invalidateSession(),
+    })
+
     const serviceTierMutation = useMutation({
         mutationFn: async (serviceTier: string | null) => {
             if (!api || !sessionId) {
@@ -303,6 +314,7 @@ export function useSessionActions(
         setModel,
         setModelReasoningEffort: modelReasoningEffortMutation.mutateAsync,
         setEffort: effortMutation.mutateAsync,
+        setContextLimit: contextLimitMutation.mutateAsync,
         setServiceTier: serviceTierMutation.mutateAsync,
         renameSession: (name: string | undefined, titleLocked?: boolean) => renameMutation.mutateAsync({ name, titleLocked }),
         suggestSessionTitle: titleSuggestionMutation.mutateAsync,
@@ -319,6 +331,7 @@ export function useSessionActions(
             || modelMutation.isPending
             || modelReasoningEffortMutation.isPending
             || effortMutation.isPending
+            || contextLimitMutation.isPending
             || serviceTierMutation.isPending
             || renameMutation.isPending
             || titleSuggestionMutation.isPending

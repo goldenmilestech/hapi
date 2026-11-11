@@ -17,6 +17,7 @@ import { filterCatalogAffectingClaudeArgs } from "./sdk/metadataExtractor";
 import type { SideQuestionHandler } from "./sideQuestion";
 import { buildCompactCompletionEvent } from "./utils/compactCompletion";
 import { findLatestCompactSummary } from "./utils/compactSummaryLookup";
+import { applyContextLimitEnv } from "./utils/contextLimit";
 
 export interface CompactSummaryPayload {
     summary: string;
@@ -390,6 +391,11 @@ export async function claudeRemote(opts: {
             }
         }
     };
+
+    // Claude Code reads this at spawn instead of per request. A changed limit
+    // parks the next message in the launcher and restarts the process, so the
+    // env always reflects the mode this attempt is about to run with.
+    applyContextLimitEnv(mode.contextLimit);
 
     // Start the loop
     let response: ReturnType<typeof query>;

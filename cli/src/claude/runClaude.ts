@@ -22,7 +22,8 @@ import { PermissionModeSchema } from '@hapi/protocol/schemas';
 import { formatAttachmentsForClaude, formatMessageWithAttachments } from '@/utils/attachmentFormatter';
 import { normalizeClaudeSessionModel } from './model';
 import { normalizeClaudeSessionEffort } from './effort';
-import { normalizeHookPermissionMode } from './utils/hookPermissionMode';
+import { normalizeHookPermissionMode } from './utils/hookPermissionMode'
+import { applyContextLimitEnv, normalizeClaudeContextLimit } from './utils/contextLimit';
 import { getInvokedCwd } from '@/utils/invokedCwd';
 import {
     CLAUDE_CONVERSATION_HISTORY,
@@ -85,6 +86,10 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
             reservedSessionId: options.reservedSessionId
         });
     const { api, session, sessionInfo } = bootstrap;
+    // A limit set on an inactive session is read back here at bootstrap and
+    // exported for the Claude process; live changes arrive via SetSessionConfig.
+    const initialContextLimit = normalizeClaudeContextLimit(sessionInfo.contextLimit);
+    applyContextLimitEnv(initialContextLimit);
     logger.debug(`Session created: ${sessionInfo.id}`);
 
     const currentSessionRef: { current: Session | null } = { current: null };
@@ -311,6 +316,7 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
     let currentPermissionMode: PermissionMode = options.permissionMode ?? 'default';
     let currentModel: SessionModel = initialModel;
     let currentEffort: SessionEffort = initialEffort;
+    let currentContextLimit: number | null = initialContextLimit;
     let currentFallbackModel: string | undefined = undefined; // Track current fallback model
     let currentCustomSystemPrompt: string | undefined = undefined; // Track current custom system prompt
     let currentAppendSystemPrompt: string | undefined = undefined; // Track current append system prompt
@@ -325,7 +331,8 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
         sessionInstance.setPermissionMode(currentPermissionMode);
         sessionInstance.setModel(currentModel);
         sessionInstance.setEffort(currentEffort);
-        logger.debug(`[loop] Synced session config for keepalive: permissionMode=${currentPermissionMode}, model=${currentModel ?? 'auto'}, effort=${currentEffort ?? 'auto'}`);
+        sessionInstance.setContextLimit(currentContextLimit);
+        logger.debug(`[loop] Synced session config for keepalive: permissionMode=${currentPermissionMode}, model=${currentModel ?? 'auto'}, effort=${currentEffort ?? 'auto'}, contextLimit=${currentContextLimit ?? 'auto'}`);
     };
     type UserMessageHandler = Parameters<typeof session.onUserMessage>[0];
     type UserMessageArgs = Parameters<UserMessageHandler>;
@@ -507,6 +514,7 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
                 permissionMode: messagePermissionMode ?? 'default',
                 model: messageModel,
                 effort: messageEffort,
+                contextLimit: currentContextLimit,
                 fallbackModel: messageFallbackModel,
                 customSystemPrompt: messageCustomSystemPrompt,
                 appendSystemPrompt: messageAppendSystemPrompt,
@@ -526,6 +534,7 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
                 permissionMode: messagePermissionMode ?? 'default',
                 model: messageModel,
                 effort: messageEffort,
+                contextLimit: currentContextLimit,
                 fallbackModel: messageFallbackModel,
                 customSystemPrompt: messageCustomSystemPrompt,
                 appendSystemPrompt: messageAppendSystemPrompt,
@@ -553,6 +562,7 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
                 permissionMode: currentPermissionMode,
                 model: messageModel,
                 effort: messageEffort,
+                contextLimit: currentContextLimit,
                 fallbackModel: messageFallbackModel,
                 customSystemPrompt: messageCustomSystemPrompt,
                 appendSystemPrompt: messageAppendSystemPrompt,
@@ -579,6 +589,7 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
             permissionMode: messagePermissionMode ?? 'default',
             model: messageModel,
             effort: messageEffort,
+            contextLimit: currentContextLimit,
             fallbackModel: messageFallbackModel,
             customSystemPrompt: messageCustomSystemPrompt,
             appendSystemPrompt: messageAppendSystemPrompt,
@@ -649,11 +660,21 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
         return normalizeClaudeSessionEffort(value);
     };
 
+    const resolveContextLimit = (value: unknown): number | null => {
+        if (value === null) {
+            return null;
+        }
+        if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+            throw new Error('Invalid context limit');
+        }
+        return normalizeClaudeContextLimit(value);
+    };
+
     session.rpcHandlerManager.registerHandler(RPC_METHODS.SetSessionConfig, async (payload: unknown) => {
         if (!payload || typeof payload !== 'object') {
             throw new Error('Invalid session config payload');
         }
-        const config = payload as { permissionMode?: unknown; model?: unknown; effort?: unknown };
+        const config = payload as { permissionMode?: unknown; model?: unknown; effort?: unknown; contextLimit?: unknown };
 
         // The remote launcher reverts the session mode when Claude refuses one.
         const sessionPermissionMode = currentSessionRef.current?.getPermissionMode();
@@ -673,8 +694,24 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
             currentEffort = resolveEffort(config.effort);
         }
 
+        const contextLimitApplied = config.contextLimit !== undefined;
+        if (contextLimitApplied) {
+            currentContextLimit = resolveContextLimit(config.contextLimit);
+            // The running Claude process read the window at spawn; a changed
+            // value takes effect on the next --resume restart. Update the env
+            // now so that restart inherits it even before this handler returns.
+            applyContextLimitEnv(currentContextLimit);
+        }
+
         syncSessionModes();
-        return { applied: { permissionMode: currentPermissionMode, model: currentModel, effort: currentEffort } };
+        return {
+            applied: {
+                permissionMode: currentPermissionMode,
+                model: currentModel,
+                effort: currentEffort,
+                ...(contextLimitApplied ? { contextLimit: currentContextLimit } : {})
+            }
+        };
     });
 
     let loopError: unknown = null;
@@ -684,6 +721,7 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
             path: workingDirectory,
             model: currentModel,
             effort: currentEffort,
+            contextLimit: currentContextLimit,
             permissionMode: options.permissionMode,
             startingMode,
             messageQueue,

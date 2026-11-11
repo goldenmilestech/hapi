@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '@/lib/i18n-context'
 import { StatusBar } from './StatusBar'
 
@@ -214,6 +214,85 @@ describe('StatusBar context details popover', () => {
         const details = cacheLine.parentElement
         expect(details?.textContent).toBe('缓存：86k使用：90k（35%）剩余：168k（65%）')
         expect(screen.queryByText('上下文详情')).toBeNull()
+    })
+
+    it('uses the per-session limit in the gauge and can save a new limit from the popover', async () => {
+        localStorage.setItem('hapi-lang', 'zh-CN')
+        const onContextLimitChange = vi.fn(async () => {})
+        render(
+            <I18nProvider>
+                <StatusBar
+                    active
+                    thinking={false}
+                    agentState={null}
+                    contextSize={90_000}
+                    contextWindow={1_000_000}
+                    contextLimit={200_000}
+                    agentFlavor="claude"
+                    onContextLimitChange={onContextLimitChange}
+                />
+            </I18nProvider>
+        )
+
+        const trigger = screen.getByRole('button', { name: '上下文详情' })
+        expect(trigger.textContent).toContain('45% · 90k / 200k')
+
+        fireEvent.click(trigger)
+
+        expect(await screen.findByText('上限')).toBeInTheDocument()
+        expect(screen.getByText('接近上限时自动压缩')).toBeInTheDocument()
+        const input = screen.getByLabelText('上限')
+        fireEvent.change(input, { target: { value: '300' } })
+        fireEvent.click(screen.getByText('保存'))
+        await waitFor(() => expect(onContextLimitChange).toHaveBeenCalledWith(300_000))
+
+        fireEvent.click(screen.getByText('自动'))
+        await waitFor(() => expect(onContextLimitChange).toHaveBeenCalledWith(null))
+    })
+
+    it('runs the flavor compact command from the bottom of the popover', async () => {
+        localStorage.setItem('hapi-lang', 'zh-CN')
+        const onCompact = vi.fn()
+        render(
+            <I18nProvider>
+                <StatusBar
+                    active
+                    thinking={false}
+                    agentState={null}
+                    contextSize={90_000}
+                    contextWindow={1_000_000}
+                    agentFlavor="claude"
+                    onCompact={onCompact}
+                />
+            </I18nProvider>
+        )
+
+        fireEvent.click(screen.getByRole('button', { name: '上下文详情' }))
+        fireEvent.click(await screen.findByText('压缩上下文'))
+        expect(onCompact).toHaveBeenCalledTimes(1)
+    })
+
+    it('hides limit and compact controls for flavors without a compact command', async () => {
+        localStorage.setItem('hapi-lang', 'zh-CN')
+        render(
+            <I18nProvider>
+                <StatusBar
+                    active
+                    thinking={false}
+                    agentState={null}
+                    contextSize={90_000}
+                    contextWindow={1_000_000}
+                    agentFlavor="copilot"
+                    onCompact={() => {}}
+                    onContextLimitChange={async () => {}}
+                />
+            </I18nProvider>
+        )
+
+        fireEvent.click(screen.getByRole('button', { name: '上下文详情' }))
+        expect(await screen.findByText('使用：90k（9%）')).toBeInTheDocument()
+        expect(screen.queryByText('压缩上下文')).not.toBeInTheDocument()
+        expect(screen.queryByText('上限')).not.toBeInTheDocument()
     })
 
     it('localizes the popover content without localizing the external left label', async () => {

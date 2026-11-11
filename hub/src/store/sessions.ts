@@ -196,6 +196,7 @@ type DbSessionRow = {
     model: string | null
     model_reasoning_effort: string | null
     effort: string | null
+    context_limit: number | null
     service_tier: string | null
     todos: string | null
     todos_updated_at: number | null
@@ -226,6 +227,7 @@ function toStoredSession(row: DbSessionRow): StoredSession {
         model: row.model,
         modelReasoningEffort: row.model_reasoning_effort,
         effort: row.effort,
+        contextLimit: row.context_limit ?? null,
         serviceTier: row.service_tier,
         todos: safeJsonParse(row.todos),
         todosUpdatedAt: row.todos_updated_at,
@@ -832,6 +834,39 @@ export function setSessionEffort(
             id,
             namespace,
             effort,
+            updated_at: now,
+            touch_updated_at: touchUpdatedAt ? 1 : 0
+        })
+
+        return result.changes === 1
+    } catch {
+        return false
+    }
+}
+
+export function setSessionContextLimit(
+    db: Database,
+    id: string,
+    contextLimit: number | null,
+    namespace: string,
+    options?: { touchUpdatedAt?: boolean }
+): boolean {
+    const now = Date.now()
+    const touchUpdatedAt = options?.touchUpdatedAt === true
+
+    try {
+        const result = prepareCached(db, `
+            UPDATE sessions
+            SET context_limit = @context_limit,
+                updated_at = CASE WHEN @touch_updated_at = 1 THEN @updated_at ELSE updated_at END,
+                seq = seq + 1
+            WHERE id = @id
+              AND namespace = @namespace
+              AND context_limit IS NOT @context_limit
+        `).run({
+            id,
+            namespace,
+            context_limit: contextLimit,
             updated_at: now,
             touch_updated_at: touchUpdatedAt ? 1 : 0
         })
