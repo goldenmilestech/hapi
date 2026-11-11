@@ -110,6 +110,7 @@ export default {
   'sessions.markAllRead.confirming': '标记中…',
   'sessions.group.expand': '展开 {n} 个',
   'sessions.group.collapse': '收起 {n} 个',
+  'sessions.group.collapseToActive': '收起到活跃',
   'sessions.runningSection': '进行中',
   'sessions.activeSection': '活跃会话',
   'sessions.group.new': '在此目录新建会话',

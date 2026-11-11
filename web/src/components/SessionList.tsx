@@ -1742,6 +1742,11 @@ export function SessionList(props: {
     const [runningSectionCollapsed, setRunningSectionCollapsed] = useState(false)
     const [activeSectionCollapsed, setActiveSectionCollapsed] = useState(false)
     const [pinnedSectionCollapsed, setPinnedSectionCollapsed] = useState(false)
+    // Per-group "hide everything that is not connected" fold. Groups that are
+    // mostly archived history otherwise only offer expand, never a way back.
+    const [collapsedToActiveGroups, setCollapsedToActiveGroups] = useState<Set<string>>(
+        () => new Set()
+    )
     const autoExpandedSelectedSessionKeyRef = useRef<string | null>(null)
     const isGroupCollapsed = (group: SessionGroup): boolean => {
         const override = isFiltering
@@ -1833,6 +1838,52 @@ export function SessionList(props: {
                 isUnread: previewIsUnread
             }
         )
+    }
+
+    // "Collapse to active" keeps the connected rows only. The open session
+    // always stays visible, the same rule the status and unread filters follow.
+    const getActiveOnlySessions = (group: SessionGroup): SessionSummary[] => {
+        return group.sessions.filter(session =>
+            session.active || session.id === selectedSessionId
+        )
+    }
+
+    // Leaving the fold restores the preview the group had before collapsing,
+    // widened when needed so an active row past the preview limit is not
+    // yanked out of sight by the expansion itself.
+    const getRestoredGroupVisibleCount = (group: SessionGroup): number => {
+        const current = Math.min(getGroupVisibleCount(group), group.sessions.length)
+        const required = group.sessions.reduce((max, session, index) => {
+            return session.active || session.id === selectedSessionId
+                ? Math.max(max, index + 1)
+                : max
+        }, 0)
+        return Math.max(current, required)
+    }
+
+    const collapseGroupToActive = (groupKey: string) => {
+        setCollapsedToActiveGroups(prev => {
+            if (prev.has(groupKey)) return prev
+            const next = new Set(prev)
+            next.add(groupKey)
+            return next
+        })
+    }
+
+    const expandGroupFromActive = (group: SessionGroup) => {
+        const restoredCount = getRestoredGroupVisibleCount(group)
+        setCollapsedToActiveGroups(prev => {
+            if (!prev.has(group.key)) return prev
+            const next = new Set(prev)
+            next.delete(group.key)
+            return next
+        })
+        setSessionVisibleCounts(prev => {
+            if ((prev.get(group.key) ?? sessionPreviewLimit) >= restoredCount) return prev
+            const next = new Map(prev)
+            next.set(group.key, restoredCount)
+            return next
+        })
     }
 
     const renderPinnedSection = ({
@@ -1982,10 +2033,18 @@ export function SessionList(props: {
 
     const renderDirectoryGroup = (group: SessionGroup) => {
         const isCollapsed = isGroupCollapsed(group)
+        // Search shows every match and the status filter already decided what
+        // the group contains, so the fold only applies to the unfiltered list.
+        const isActiveOnly = !isFiltering
+            && listView.status === 'all'
+            && collapsedToActiveGroups.has(group.key)
+        const activeOnlySessions = getActiveOnlySessions(group)
         // A collapsed group still shows its unread rows, so new output in a
         // quiet project is never folded out of sight.
         const collapsedUnreadSessions = isCollapsed && keepUnreadSessionsVisible ? group.sessions.filter(isSessionUnread) : []
-        const visibleGroupSessions = getVisibleGroupSessions(group)
+        const visibleGroupSessions = isActiveOnly
+            ? activeOnlySessions
+            : getVisibleGroupSessions(group)
         const hiddenSessionCount = group.sessions.length - visibleGroupSessions.length
         const currentLimit = Math.min(
             getGroupVisibleCount(group),
@@ -1998,8 +2057,21 @@ export function SessionList(props: {
             isUnread: previewIsUnread
         })
         const collapseCount = visibleGroupSessions.length - previousGroupSessions.length
-        const canShowFewerSessions = previousLimit < currentLimit && collapseCount > 0
-        const expandCount = Math.min(sessionPreviewLimit, hiddenSessionCount)
+        const canShowFewerSessions = !isActiveOnly && previousLimit < currentLimit && collapseCount > 0
+        // Only hide rows that are on screen right now; a fold that changes
+        // nothing is noise, and it keeps the expand count meaningful.
+        const canCollapseToActive = group.sessions.some(session => session.active)
+            && visibleGroupSessions.some(session => !session.active && session.id !== selectedSessionId)
+        const restoredVisibleGroupSessions = isActiveOnly
+            ? getVisibleSessionPreview(group.sessions, {
+                selectedSessionId,
+                limit: getRestoredGroupVisibleCount(group),
+                isUnread: previewIsUnread
+            })
+            : visibleGroupSessions
+        const expandCount = isActiveOnly
+            ? Math.max(0, restoredVisibleGroupSessions.length - visibleGroupSessions.length)
+            : Math.min(sessionPreviewLimit, hiddenSessionCount)
         const canStartInGroupDirectory = group.directory !== 'Other'
         // With multiple machines in the unfiltered view, disambiguate
         // same-named directories by suffixing the machine label.
@@ -2065,7 +2137,18 @@ export function SessionList(props: {
                                 {renderGroupSessionItem(s)}
                             </div>
                         ))}
-                        {group.sessions.length > sessionPreviewLimit && (hiddenSessionCount > 0 || canShowFewerSessions) ? (
+                        {isActiveOnly ? (
+                            <div className="ml-2.5 mr-2 my-1 flex gap-1.5">
+                                <button
+                                    type="button"
+                                    onClick={() => expandGroupFromActive(group)}
+                                    className="flex min-w-0 flex-1 items-center justify-center gap-1 rounded-md border border-dashed border-[var(--app-border)] px-2 py-1 text-center text-xs text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+                                >
+                                    <SessionPreviewArrowIcon direction="down" className="h-3 w-3 shrink-0" />
+                                    {t('sessions.group.expand', { n: expandCount })}
+                                </button>
+                            </div>
+                        ) : group.sessions.length > sessionPreviewLimit && (hiddenSessionCount > 0 || canShowFewerSessions) ? (
                             <div className="ml-2.5 mr-2 my-1 flex gap-1.5">
                                 {canShowFewerSessions ? (
                                     <button
@@ -2075,6 +2158,15 @@ export function SessionList(props: {
                                     >
                                         <SessionPreviewArrowIcon direction="up" className="h-3 w-3 shrink-0" />
                                         {t('sessions.group.collapse', { n: collapseCount })}
+                                    </button>
+                                ) : null}
+                                {canCollapseToActive ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => collapseGroupToActive(group.key)}
+                                        className="flex min-w-0 flex-1 items-center justify-center rounded-md border border-dashed border-[var(--app-border)] px-2 py-1 text-center text-xs text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+                                    >
+                                        {t('sessions.group.collapseToActive')}
                                     </button>
                                 ) : null}
                                 {hiddenSessionCount > 0 ? (

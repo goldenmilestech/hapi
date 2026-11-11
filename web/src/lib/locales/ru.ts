@@ -97,6 +97,7 @@ export default {
   'sessions.markAllRead.confirming': 'Отмечаем как прочитанные…',
   'sessions.group.expand': 'Развернуть {n}',
   'sessions.group.collapse': 'Свернуть {n}',
+  'sessions.group.collapseToActive': 'Свернуть до активных',
   'sessions.runningSection': 'В работе',
   'sessions.activeSection': 'Активные сессии',
   'sessions.group.new': 'Новая сессия в этой папке',

@@ -110,6 +110,7 @@ export default {
   'sessions.markAllRead.confirming': 'Marking as read…',
   'sessions.group.expand': 'Expand {n}',
   'sessions.group.collapse': 'Collapse {n}',
+  'sessions.group.collapseToActive': 'Collapse to active',
   'sessions.runningSection': 'In progress',
   'sessions.activeSection': 'Active sessions',
   'sessions.group.new': 'New session in this directory',

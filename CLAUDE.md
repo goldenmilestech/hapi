@@ -146,6 +146,7 @@ git push fork main
 | `main`（2026-11-11） | 会话列表完成圆点：回合结束且未读时显示，打开行后立即清除 | `web/src/components/SessionList.tsx`、`SessionRowSummary.tsx`、`web/src/lib/locales/` |
 | `fix/session-running-spinner`（2026-11-11 已合入 `main`） | 运行中会话在 presence 呼吸点之外恢复转圈动画（上游 0.34.4 移除了行内 spinner） | `web/src/components/SessionRowSummary.tsx` |
 | `main`（2026-11-11） | 旧 runner 兼容：只有声明 `spawn-reserved-session-id` 能力的 runner 才预分配会话 id；旧 CLI 直接走创建流程，避免 “Runner reported unexpected session id” 误报和无法 adopt 的幽灵 stub | `shared/src/runnerCapabilities.ts`、`hub/src/sync/syncEngine.ts`、`hub/src/sync/syncEngineSpawnPrealloc.test.ts` |
+| `main`（2026-11-11） | 会话列表分组支持「收起到活跃」：隐藏非活跃/已归档行，仅保留活跃会话与当前打开会话，展开后恢复原预览批次 | `web/src/components/SessionList.tsx`、`web/src/lib/locales/` |
 
 新增定制时在合并进 `main` 的同一个提交里更新此表，上游同步时按表逐项验证。
 
