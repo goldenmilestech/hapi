@@ -2360,6 +2360,28 @@ export class SyncEngine {
                     status = 'already_gone'
                 }
             }
+            // #1911 follow-up: a runner reports `unknown` when it holds no
+            // tracked PID, no live argv match and no verified-exit tombstone.
+            // That is not evidence the CLI is alive — it is what a runner
+            // reports forever after losing all state for a finished session
+            // (restart, replaced runner, different machine), so retrying can
+            // never resolve it. When this hub also has no live socket for the
+            // row, the session cannot be running against this hub; archive it
+            // and let the archived row fence a late reconnect (CLI
+            // bootstrapExistingSession refuses archived rows, #1911 M1).
+            // `still_alive` keeps its veto, an unconfirmed resume start stays
+            // fenced, and an active CLI keeps the #1910 refusal.
+            if (status === 'unknown' && !sessionMeta?.codexResumePending) {
+                const hubActive = this.sessionCache.getSession(sessionId)?.active === true
+                if (!hubActive) {
+                    console.warn('[SyncEngine] archiving with unverified runner cleanup', {
+                        sessionId,
+                        machineId,
+                        cliUnreachable
+                    })
+                    status = 'already_gone'
+                }
+            }
             if (status === 'still_alive' || status === 'unknown') {
                 throw new ArchiveCleanupError('unconfirmed')
             }
