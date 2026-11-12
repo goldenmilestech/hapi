@@ -11,12 +11,13 @@ import {
     isRedundantGoalStatusEventContent,
     unwrapRoleWrappedRecordEnvelope
 } from '@hapi/protocol/messages'
-import { isObject } from '@hapi/protocol'
+import { isObject, safeStringify } from '@hapi/protocol'
 import type {
     MessageContextResponse,
     MessageDeliveryMode,
     MessagesResponse,
-    QueuedStateResponse
+    QueuedStateResponse,
+    SessionOutlineResponse
 } from '@hapi/protocol/apiTypes'
 import type { Server } from 'socket.io'
 import { randomUUID } from 'node:crypto'
@@ -108,6 +109,48 @@ function estimateSessionExportBytes(
 function isQueuedUserMessage(message: StoredMessageForDelivery): boolean {
     const record = unwrapRoleWrappedRecordEnvelope(message.content)
     return record?.role === 'user' && message.invokedAt === null
+}
+
+const OUTLINE_LABEL_MAX_LENGTH = 96
+// Keep the per-item payload bounded before the label truncation itself runs;
+// a pasted log or code dump would otherwise ship its whole head to every
+// outline request.
+const OUTLINE_LABEL_SOURCE_MAX_LENGTH = 4096
+const CLI_OUTPUT_TAG_PATTERN = /<(?:local-command-[a-z-]+|command-(?:name|message|args))>/i
+
+function collapseOutlineWhitespace(value: string): string {
+    return value.replace(/\s+/g, ' ').trim()
+}
+
+function truncateOutlineLabel(value: string): string {
+    const normalized = collapseOutlineWhitespace(value.slice(0, OUTLINE_LABEL_SOURCE_MAX_LENGTH))
+    if (normalized.length <= OUTLINE_LABEL_MAX_LENGTH) {
+        return normalized
+    }
+    return `${normalized.slice(0, OUTLINE_LABEL_MAX_LENGTH - 3).trimEnd()}...`
+}
+
+/**
+ * Mirror the web renderer's user-message text extraction so a server-built
+ * outline item points at a rendered `user-text` block. The renderer falls back
+ * to a JSON dump for non-text user payloads; doing the same here keeps the
+ * label identical to the block the browser will scroll to.
+ */
+function extractOutlineUserText(content: unknown): string {
+    if (typeof content === 'string') {
+        return content
+    }
+    if (isObject(content) && content.type === 'text' && typeof content.text === 'string') {
+        return content.text
+    }
+    return safeStringify(content)
+}
+
+/** CLI command echoes render as `cli-output`, so they never become outline anchors. */
+function isCliOutputUserMessage(text: string, meta: unknown): boolean {
+    return isObject(meta)
+        && meta.sentFrom === 'cli'
+        && CLI_OUTPUT_TAG_PATTERN.test(text)
 }
 
 function isExportVisibleStoredMessage(message: StoredMessageForDelivery): boolean {
@@ -254,6 +297,32 @@ export class MessageService {
                 hasMore: this.store.messages.getMessagesByPosition(sessionId, 1, oldestPosition).length > 0
             }
         }
+    }
+
+    /**
+     * Complete prompt index for the conversation outline. The web client
+     * keeps its loaded-window labels for anything already rendered and uses
+     * this list to keep older prompts navigable before pagination reaches
+     * them, so only delivered user prompts are included.
+     */
+    getSessionOutline(sessionId: string): SessionOutlineResponse {
+        const items: SessionOutlineResponse['items'] = []
+        for (const message of this.store.messages.getInvokedMessagesByPosition(sessionId)) {
+            const record = unwrapRoleWrappedRecordEnvelope(message.content)
+            if (record?.role !== 'user') {
+                continue
+            }
+            const text = extractOutlineUserText(record.content)
+            if (isCliOutputUserMessage(text, record.meta)) {
+                continue
+            }
+            items.push({
+                messageId: message.id,
+                createdAt: message.invokedAt ?? message.createdAt,
+                label: truncateOutlineLabel(text)
+            })
+        }
+        return { items }
     }
 
     getQueuedState(sessionId: string, localIds: string[]): QueuedStateResponse {

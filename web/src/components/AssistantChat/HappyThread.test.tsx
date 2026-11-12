@@ -12,6 +12,7 @@ import {
     getScrollToBottomButtonVisibility,
     hasAppliedHistoryVersion,
     isNestedScrollEvent,
+    focusOutlineTargetMessage,
     locateOutlineTargetMessage,
     prependMissingUserSnapshot,
     restoreScrollAnchor,
@@ -548,6 +549,94 @@ describe('outline target loading', () => {
 
         expect(target).toBeNull()
         expect(loadOlderPreservingScroll).toHaveBeenCalledTimes(1)
+    })
+
+    it('uses the rendered anchor without loading context when the row is already in the window', async () => {
+        const rendered = document.createElement('div')
+        const loadMessageContext = vi.fn(async () => true)
+        const loadOlderPreservingScroll = vi.fn(async () => true)
+
+        const target = await focusOutlineTargetMessage({
+            targetMessageId: 'user-text:rendered',
+            sourceMessageId: 'rendered',
+            findTarget: (anchorId) => anchorId === 'hapi-message-user-text:rendered' ? rendered : null,
+            loadMessageContext,
+            hasMoreMessages: () => false,
+            loadOlderPreservingScroll
+        })
+
+        expect(target).toBe(rendered)
+        expect(loadMessageContext).not.toHaveBeenCalled()
+        expect(loadOlderPreservingScroll).not.toHaveBeenCalled()
+    })
+
+    it('loads bounded context for a prompt outside the window and waits for its render', async () => {
+        const rendered = document.createElement('div')
+        const loadMessageContext = vi.fn(async () => true)
+        const waitForTarget = vi.fn(async () => rendered)
+        const loadOlderPreservingScroll = vi.fn(async () => true)
+
+        const target = await focusOutlineTargetMessage({
+            targetMessageId: 'user-text:historical',
+            sourceMessageId: 'historical',
+            findTarget: () => null,
+            loadMessageContext,
+            waitForTarget,
+            hasMoreMessages: () => true,
+            loadOlderPreservingScroll
+        })
+
+        expect(target).toBe(rendered)
+        expect(loadMessageContext).toHaveBeenCalledWith('historical')
+        expect(waitForTarget).toHaveBeenCalledWith('hapi-message-user-text:historical')
+        expect(loadOlderPreservingScroll).not.toHaveBeenCalled()
+    })
+
+    it('falls back to incremental paging when the context load fails', async () => {
+        const rendered = document.createElement('div')
+        const loadMessageContext = vi.fn(async () => false)
+        const waitForTarget = vi.fn(async () => null)
+        let loadCount = 0
+        const loadOlderPreservingScroll = vi.fn(async () => {
+            loadCount += 1
+            return true
+        })
+
+        const target = await focusOutlineTargetMessage({
+            targetMessageId: 'user-text:fallback',
+            sourceMessageId: 'fallback',
+            findTarget: () => loadCount > 0 ? rendered : null,
+            loadMessageContext,
+            waitForTarget,
+            hasMoreMessages: () => loadCount < 1,
+            loadOlderPreservingScroll
+        })
+
+        expect(target).toBe(rendered)
+        expect(loadMessageContext).toHaveBeenCalledWith('fallback')
+        expect(waitForTarget).not.toHaveBeenCalled()
+        expect(loadOlderPreservingScroll).toHaveBeenCalledTimes(1)
+    })
+
+    it('drops the result when a newer outline selection replaced this one', async () => {
+        const loadMessageContext = vi.fn(async () => true)
+        const waitForTarget = vi.fn(async () => document.createElement('div'))
+        let current = true
+
+        const pending = focusOutlineTargetMessage({
+            targetMessageId: 'user-text:stale',
+            sourceMessageId: 'stale',
+            findTarget: () => null,
+            loadMessageContext,
+            waitForTarget,
+            hasMoreMessages: () => false,
+            loadOlderPreservingScroll: async () => false,
+            isCurrent: () => current
+        })
+        current = false
+
+        expect(await pending).toBeNull()
+        expect(waitForTarget).not.toHaveBeenCalled()
     })
 })
 
