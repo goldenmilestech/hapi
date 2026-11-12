@@ -32,7 +32,7 @@ import {
 } from './release'
 
 const HANDOFF_TIMEOUT_MS = 120_000
-const DEFAULT_REPO = 'qlqj-frederick-dong/hapi'
+const DEFAULT_REPO = 'goldenmilestech/hapi'
 
 export type UpdateOptions = {
     check: boolean

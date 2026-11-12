@@ -9,7 +9,7 @@
 | remote | URL | 用途 |
 |---|---|---|
 | `origin` | `https://github.com/tiann/hapi.git` | 上游，只 fetch，不 push |
-| `fork` | `git@github.com:qlqj-frederick-dong/hapi.git` | 内部，唯一推送目标 |
+| `fork` | `git@github.com:goldenmilestech/hapi.git` | 内部，唯一推送目标 |
 
 ## 分支模型
 

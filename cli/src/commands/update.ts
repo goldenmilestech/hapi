@@ -17,7 +17,7 @@ Options:
 
 Environment:
   HAPI_UPDATE_REPO        GitHub repo to read releases from
-                          (default qlqj-frederick-dong/hapi)
+                          (default goldenmilestech/hapi)
   HAPI_AUTO_UPDATE=1      Let the runner check for updates every ~6 hours
   HAPI_DISABLE_VERSION_HANDOFF=1
                           Do not wait for the runner to restart itself
