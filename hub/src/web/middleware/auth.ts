@@ -11,6 +11,8 @@ export type WebAppEnv = {
         /** Set only for session-share JWTs: the single session they may touch. */
         sessionId?: string
         shareMode?: ShareMode
+        /** Access-token row the JWT was issued from; null for legacy tokens. */
+        tokenId?: string | null
     }
 }
 
@@ -18,7 +20,9 @@ const jwtPayloadSchema = z.object({
     uid: z.number(),
     ns: z.string(),
     sid: z.string().optional(),
-    mode: z.enum(['chat', 'chat_approve']).optional()
+    mode: z.enum(['chat', 'chat_approve']).optional(),
+    /** Access-token id, present only for JWTs minted from a hub-issued token. */
+    tid: z.string().optional()
 })
 
 /**
@@ -97,10 +101,31 @@ function isShareRequestAllowed(
     ))
 }
 
-export function createAuthMiddleware(jwtSecret: Uint8Array): MiddlewareHandler<WebAppEnv> {
+export type AuthMiddlewareOptions = {
+    /**
+     * Consulted for JWTs minted from a hub-issued access token. Returning true
+     * turns the request into a 401 immediately, so revocation does not have to
+     * wait for the JWT to expire. Legacy-token JWTs carry no `tid` and are
+     * unaffected.
+     */
+    isTokenRevoked?: (tokenId: string) => boolean
+    /**
+     * True when the namespace has an active access token. JWTs minted from the
+     * legacy shared token carry no `tid`; once their namespace is claimed they
+     * stop working, closing the up-to-4h window a previously exchanged JWT
+     * would otherwise keep. Share JWTs (`sid`) are explicit grants and are not
+     * affected.
+     */
+    isNamespaceClaimed?: (namespace: string) => boolean
+}
+
+export function createAuthMiddleware(
+    jwtSecret: Uint8Array,
+    options?: AuthMiddlewareOptions
+): MiddlewareHandler<WebAppEnv> {
     return async (c, next) => {
         const path = c.req.path
-        if (path === '/api/auth' || path === '/api/bind') {
+        if (path === '/api/auth' || path === '/api/auth/feishu/config' || path === '/api/bind') {
             await next()
             return
         }
@@ -123,6 +148,19 @@ export function createAuthMiddleware(jwtSecret: Uint8Array): MiddlewareHandler<W
 
             c.set('userId', parsed.data.uid)
             c.set('namespace', parsed.data.ns)
+            c.set('tokenId', parsed.data.tid ?? null)
+
+            if (parsed.data.tid && options?.isTokenRevoked?.(parsed.data.tid)) {
+                return c.json({ error: 'Invalid token' }, 401)
+            }
+
+            if (
+                !parsed.data.tid
+                && !parsed.data.sid
+                && options?.isNamespaceClaimed?.(parsed.data.ns)
+            ) {
+                return c.json({ error: 'Invalid token' }, 401)
+            }
 
             if (parsed.data.sid) {
                 const sessionId = parsed.data.sid

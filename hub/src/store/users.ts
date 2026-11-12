@@ -53,11 +53,12 @@ export function addUser(
 ): StoredUser {
     const now = Date.now()
     db.prepare(`
-        INSERT OR IGNORE INTO users (
+        INSERT INTO users (
             platform, platform_user_id, namespace, created_at
         ) VALUES (
             @platform, @platform_user_id, @namespace, @created_at
         )
+        ON CONFLICT(platform, platform_user_id) DO UPDATE SET namespace = excluded.namespace
     `).run({
         platform,
         platform_user_id: platformUserId,

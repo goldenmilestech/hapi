@@ -6,6 +6,12 @@ import { Spinner } from '@/components/Spinner'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { useTranslation } from '@/lib/use-translation'
+import {
+    buildFeishuAuthorizeUrl,
+    createFeishuState,
+    storeFeishuState
+} from '@/lib/feishuAuth'
+import type { FeishuPublicConfigResponse } from '@/types/api'
 import type { ServerUrlResult } from '@/hooks/useServerUrl'
 
 type LoginPromptProps = {
@@ -29,6 +35,40 @@ export function LoginPrompt(props: LoginPromptProps) {
     const [isServerDialogOpen, setIsServerDialogOpen] = useState(false)
     const [serverInput, setServerInput] = useState(props.serverUrl ?? '')
     const [serverError, setServerError] = useState<string | null>(null)
+    const [feishu, setFeishu] = useState<FeishuPublicConfigResponse | null>(null)
+
+    useEffect(() => {
+        if (isBindMode) {
+            return
+        }
+        let cancelled = false
+        const client = new ApiClient('', { baseUrl: props.baseUrl })
+        void client.getFeishuConfig()
+            .then((config) => {
+                if (!cancelled && config.enabled) {
+                    setFeishu(config)
+                }
+            })
+            .catch(() => {
+                // Feishu is optional; leave the token form as the only option.
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [props.baseUrl, isBindMode])
+
+    const handleFeishuLogin = useCallback(() => {
+        if (!feishu?.enabled) {
+            return
+        }
+        try {
+            const state = createFeishuState()
+            storeFeishuState(props.baseUrl, state)
+            window.location.assign(buildFeishuAuthorizeUrl(feishu, state))
+        } catch {
+            setError(t('login.feishu.unavailable'))
+        }
+    }, [feishu, props.baseUrl, t])
 
     const handleSubmit = useCallback(async (e: React.FormEvent) => {
         e.preventDefault()
@@ -131,6 +171,25 @@ export function LoginPrompt(props: LoginPromptProps) {
                         {subtitle}
                     </div>
                 </div>
+
+                {/* Feishu login */}
+                {!isBindMode && feishu?.enabled ? (
+                    <div className="space-y-4">
+                        <button
+                            type="button"
+                            onClick={handleFeishuLogin}
+                            disabled={isLoading}
+                            className="w-full py-2.5 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-fg)] font-medium hover:bg-[var(--app-subtle-bg)] disabled:opacity-50 transition-colors"
+                        >
+                            {t('login.feishu.button')}
+                        </button>
+                        <div className="flex items-center gap-3 text-xs text-[var(--app-hint)]">
+                            <span className="h-px flex-1 bg-[var(--app-border)]" />
+                            {t('login.feishu.or')}
+                            <span className="h-px flex-1 bg-[var(--app-border)]" />
+                        </div>
+                    </div>
+                ) : null}
 
                 {/* Form */}
                 <form onSubmit={handleSubmit} className="space-y-4">

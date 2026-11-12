@@ -6,6 +6,8 @@ type AppContextValue = {
     api: ApiClient
     token: string
     baseUrl: string
+    /** Replace the stored access token (used after personal-token rotation). */
+    updateAccessToken: (token: string) => void
     titleSuggestionAvailable?: boolean
     /**
      * Present while the client is authenticated through a session share link.

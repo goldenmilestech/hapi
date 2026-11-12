@@ -71,7 +71,7 @@ export function App() {
 function AppInner() {
     const { t } = useTranslation()
     const { serverUrl, baseUrl, setServerUrl, clearServerUrl } = useServerUrl()
-    const { authSource, isLoading: isAuthSourceLoading, setAccessToken } = useAuthSource(baseUrl)
+    const { authSource, isLoading: isAuthSourceLoading, feishuError, setAccessToken } = useAuthSource(baseUrl)
     const { token, api, share, isLoading: isAuthLoading, error: authError, needsBinding, bind } = useAuth(authSource, baseUrl)
     const [titleSuggestionAvailable, setTitleSuggestionAvailable] = useState(false)
     const goBack = useAppGoBack()
@@ -455,6 +455,7 @@ function AppInner() {
                 setServerUrl={setServerUrl}
                 clearServerUrl={clearServerUrl}
                 requireServerUrl={REQUIRE_SERVER_URL}
+                error={feishuError ? t(feishuError) : undefined}
             />,
         )
     }
@@ -495,7 +496,7 @@ function AppInner() {
                     setServerUrl={setServerUrl}
                     clearServerUrl={clearServerUrl}
                     requireServerUrl={REQUIRE_SERVER_URL}
-                    error={authError ?? t('login.error.authFailed')}
+                    error={authError ?? (feishuError ? t(feishuError) : t('login.error.authFailed'))}
                 />,
             )
         }
@@ -524,7 +525,7 @@ function AppInner() {
     }
 
     return (
-        <AppContextProvider value={{ api, token, baseUrl, titleSuggestionAvailable, share }}>
+        <AppContextProvider value={{ api, token, baseUrl, updateAccessToken: setAccessToken, titleSuggestionAvailable, share }}>
             <VoiceProvider>
                 <PwaUpdateBannerWithStatusOffset
                     isSyncing={revealSyncing}

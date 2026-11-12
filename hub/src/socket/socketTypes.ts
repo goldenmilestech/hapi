@@ -4,6 +4,8 @@ import type { DefaultEventsMap, Server, Socket } from 'socket.io'
 export type SocketData = {
     namespace?: string
     userId?: number
+    /** Access-token row the socket authenticated with; null for legacy tokens. */
+    tokenId?: string | null
 }
 
 export type SocketServer = Server<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, SocketData>

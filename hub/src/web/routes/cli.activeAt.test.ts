@@ -51,7 +51,10 @@ describe('CLI GET /sessions/:id with null active_at', () => {
         // Simulate hub restart so cache reloads from the NULL row.
         const reloaded = createEngine(store)
         const app = new Hono()
-        app.route('/cli', createCliRoutes(() => reloaded))
+        app.route('/cli', createCliRoutes(
+            () => reloaded,
+            () => ({ namespace: 'default', tokenId: null, source: 'legacy' })
+        ))
 
         const response = await app.request(`/cli/sessions/${created.id}`, {
             headers: authHeaders()

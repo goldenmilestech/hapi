@@ -13,6 +13,8 @@ Source of truth: `hub/src/config/cliApiToken.ts`, `hub/src/web/routes/auth.ts`.
 
 The hub's base token (`CLI_API_TOKEN`) is auto-generated on first run (32 random bytes, base64url, ~43 chars) and persisted in the hub's `settings.json`; an operator-provided env token overrides it. The configured base token never contains a `:` — the hub refuses to start otherwise (`validateCliApiToken`).
 
+Web clients may also authenticate with a Feishu authorization code. That path is web-only: the hub exchanges the code with its app secret, resolves the user's namespace, and returns a JWT plus the user's durable personal access token.
+
 ## Pairing
 
 Source of truth: `hub/src/startHub.ts`, `web/src/components/settings/CompanionPairing.tsx`.
@@ -40,17 +42,22 @@ Android `core/data/.../auth/HubUrls.kt` and `core/protocol/.../pairing/PairingLi
 
 ## Access-token grammar
 
-Source of truth: `hub/src/utils/accessToken.ts`.
+Source of truth: `hub/src/utils/accessToken.ts`, `hub/src/utils/accessTokenResolver.ts`.
+
+Two token shapes are accepted:
+
+- **Hub-issued access token (recommended).** An opaque `hapi_<base64url>` string created by the hub owner. The hub matches its SHA-256 digest against `access_tokens` and reads the namespace from that row, so the client cannot switch namespaces by editing the token. Clients must treat it as opaque.
+- **Legacy shared token.** `base [":" namespace]`, enabled only while the operator keeps `HAPI_LEGACY_SHARED_TOKEN` on (the default). The hub splits on the last `:`.
 
 ```
-accessToken = base [":" namespace]
+legacy accessToken = base [":" namespace]
 ```
 
 - Split on the **last** `:`. No colon → namespace defaults to `"default"`.
 - After splitting, both parts must be non-empty and contain no leading/trailing whitespace, else the token is invalid.
 - The whole input is trimmed before parsing.
 
-Clients must treat the access token as an **opaque string** and pass it through unchanged to `POST /api/auth` — never split it client-side to "normalize" it. The hub does the splitting; the namespace part selects which sessions the resulting JWT can see (see [Namespaces](#namespaces)).
+Clients must treat every access token as an **opaque string** and pass it through unchanged to `POST /api/auth` — never split it client-side to "normalize" it. The hub does the splitting for legacy tokens; the namespace part selects which sessions the resulting JWT can see (see [Namespaces](#namespaces)).
 
 ## Token exchange
 
@@ -76,13 +83,34 @@ Failures: `400 {"error": "Invalid body"}`, `401 {"error": "Invalid access token"
 
 `POST /api/bind` (`hub/src/web/routes/bind.ts`) is **Telegram-only** — it binds a Telegram identity to a namespace and requires Telegram `initData`. Native clients never call it.
 
+### Feishu login
+
+Source of truth: `hub/src/feishu/`, `hub/src/web/routes/auth.ts`.
+
+```
+GET  /api/auth/feishu/config          (unauthenticated)
+→ { enabled, appId, redirectUri, scope, authorizeUrl }
+
+POST /api/auth
+{ "feishuCode": "<code from the redirect>" }
+```
+
+The hub exchanges the code (v3 token endpoint), reads `user_info`, maps the user's `open_id` to a namespace, and returns the same `AuthResponse` with two extra fields:
+
+- `accessToken` — the caller's durable personal access token (also the CLI's `CLI_API_TOKEN`)
+- `namespace` — the namespace the JWT is bound to
+
+A namespace already mapped to another Feishu account returns `409 {"error":"namespace_conflict"}`. A failed or expired code returns `401`. Feishu not configured returns `503`. The public config endpoint never includes the app secret.
+
 ## The JWT
 
 Source of truth: `hub/src/web/routes/auth.ts` (signing), `hub/src/web/middleware/auth.ts` (verification), `hub/src/config/jwtSecret.ts` (key).
 
 - HS256, signed with a hub-local 32-byte secret (`<dataDir>/jwt-secret.json`).
-- Payload: `{ "uid": <number>, "ns": <string> }` plus standard `iat`/`exp`.
+- Payload: `{ "uid": <number>, "ns": <string> }` plus standard `iat`/`exp`. JWTs minted from a hub-issued access token also carry `"tid": "<access-token id>"`; legacy-token JWTs do not.
 - **Expires 4 hours** after issue.
+- Revoking the access token takes effect immediately for JWTs carrying its `tid`: the hub rejects them with `401 {"error":"Invalid token"}`, closes their SSE streams, and disconnects their CLI/terminal sockets. Legacy-token JWTs cannot be revoked individually and last until expiry.
+- A JWT with **neither** `tid` nor `sid` is rejected once its namespace has an active access token. Binding a namespace therefore immediately invalidates JWTs previously minted from the legacy shared token for that namespace.
 
 Treat the token as opaque for auth purposes, but clients may base64url-decode the payload to read `exp` for proactive refresh scheduling (the web client does exactly this — `decodeJwtExpMs` in `web/src/hooks/useAuth.ts`).
 

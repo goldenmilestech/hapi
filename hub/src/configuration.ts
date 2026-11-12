@@ -7,6 +7,15 @@
  *
  * Optional environment variables:
  * - CLI_API_TOKEN: Shared secret for hapi CLI authentication (auto-generated if not set)
+ * - HAPI_LEGACY_SHARED_TOKEN: Keep accepting CLI_API_TOKEN with an optional
+ *   `:namespace` suffix (default: on). Set to `off` once every client uses a
+ *   per-person access token.
+ * - FEISHU_APP_ID / FEISHU_APP_SECRET: Enable Feishu OAuth login.
+ * - FEISHU_REDIRECT_URI: OAuth redirect (default: {publicUrl}/auth/feishu).
+ *   Must be registered in the Feishu app's security settings.
+ * - FEISHU_SCOPE: Space-separated scopes (default: contact:user.email:readonly).
+ * - FEISHU_OWNER_OPEN_ID / FEISHU_OWNER_EMAIL: Sign in as the hub owner
+ *   (`default` namespace).
  * - TELEGRAM_BOT_TOKEN: Telegram Bot API token from @BotFather
  * - TELEGRAM_NOTIFICATION: Enable/disable Telegram notifications (default: true)
  * - SERVERCHAN_SENDKEY: Server酱 SendKey/AppKey for push notifications
@@ -91,6 +100,23 @@ class Configuration {
     /** Whether CLI API token was newly generated (for first-run display) */
     public cliApiTokenIsNew: boolean
 
+    /**
+     * Whether the legacy shared token grammar (`base[:namespace]`) still
+     * authenticates. Defaults to on for backward compatibility; turn it off
+     * with `HAPI_LEGACY_SHARED_TOKEN=off` after migrating every client to an
+     * access token issued by the hub.
+     */
+    public readonly legacySharedTokenEnabled: boolean
+
+    /** Feishu OAuth (web login). Disabled unless app id/secret/redirect exist. */
+    public readonly feishuAppId: string | null
+    public readonly feishuAppSecret: string | null
+    public readonly feishuRedirectUri: string | null
+    public readonly feishuScope: string
+    public readonly feishuOwnerOpenId: string | null
+    public readonly feishuOwnerEmail: string | null
+    public readonly feishuEnabled: boolean
+
     /** Path to settings.json file */
     public readonly settingsFile: string
 
@@ -163,6 +189,32 @@ class Configuration {
         this.cliApiToken = ''
         this.cliApiTokenSource = ''
         this.cliApiTokenIsNew = false
+
+        // Only an explicit false-like value disables the legacy path; unset or
+        // any other value keeps it on so existing runners survive an upgrade.
+        const legacyFlag = process.env.HAPI_LEGACY_SHARED_TOKEN?.trim().toLowerCase()
+        this.legacySharedTokenEnabled = !(
+            legacyFlag === '0'
+            || legacyFlag === 'false'
+            || legacyFlag === 'no'
+            || legacyFlag === 'off'
+        )
+
+        // Feishu web login. The redirect must match the value registered in
+        // the Feishu app; without one the flow cannot complete, so treat the
+        // feature as disabled rather than failing at callback time.
+        this.feishuAppId = process.env.FEISHU_APP_ID?.trim() || null
+        this.feishuAppSecret = process.env.FEISHU_APP_SECRET?.trim() || null
+        const redirectOverride = process.env.FEISHU_REDIRECT_URI?.trim() || null
+        this.feishuRedirectUri = redirectOverride ?? (
+            this.feishuAppId && this.feishuAppSecret
+                ? `${this.publicUrl.replace(/\/+$/, '')}/auth/feishu`
+                : null
+        )
+        this.feishuScope = process.env.FEISHU_SCOPE?.trim() || 'contact:user.email:readonly'
+        this.feishuOwnerOpenId = process.env.FEISHU_OWNER_OPEN_ID?.trim() || null
+        this.feishuOwnerEmail = process.env.FEISHU_OWNER_EMAIL?.trim().toLowerCase() || null
+        this.feishuEnabled = Boolean(this.feishuAppId && this.feishuAppSecret && this.feishuRedirectUri)
 
         // Store sources for logging (cliApiToken will be set by _setCliApiToken)
         this.sources = {
