@@ -1253,6 +1253,114 @@ describe('SessionList collapse behavior', () => {
         expect(screen.queryByRole('button', { name: /Archived task 3/ })).toBeNull()
     })
 
+    it('keeps project-pinned sessions visible when a group folds to active', () => {
+        localStorage.setItem('hapi-session-preview-limit', '2')
+        const sessions = [
+            makeSession({
+                id: 'session-active',
+                active: true,
+                updatedAt: 100,
+                metadata: { path: '/work/hapi', name: 'Live task', flavor: 'codex' },
+            }),
+            makeSession({
+                id: 'session-pinned',
+                pinned: true,
+                updatedAt: 95,
+                metadata: { path: '/work/hapi', name: 'Pinned task', flavor: 'codex' },
+            }),
+            ...Array.from({ length: 3 }, (_, index) => makeSession({
+                id: `session-idle-${index + 1}`,
+                updatedAt: 90 - index,
+                metadata: {
+                    path: '/work/hapi',
+                    name: `Archived task ${index + 1}`,
+                    flavor: 'codex',
+                },
+            })),
+        ]
+
+        render(renderSessionList(sessions, null))
+
+        // The fold hides inactive ordinary rows but never the pinned row.
+        expect(screen.getByRole('button', { name: /Live task/ })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /Pinned task/ })).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Archived task 1/ })).toBeNull()
+        expect(screen.getByRole('button', { name: 'Expand 2' })).toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Expand 2' }))
+        expect(screen.getByRole('button', { name: /Archived task 1/ })).toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Collapse to active' }))
+
+        expect(screen.getByRole('button', { name: /Pinned task/ })).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Archived task 1/ })).toBeNull()
+    })
+
+    it('does not fold or offer the active fold when only pinned rows are inactive', () => {
+        const sessions = [
+            makeSession({
+                id: 'session-active',
+                active: true,
+                updatedAt: 100,
+                metadata: { path: '/work/hapi', name: 'Live task', flavor: 'codex' },
+            }),
+            makeSession({
+                id: 'session-pinned',
+                pinned: true,
+                updatedAt: 90,
+                metadata: { path: '/work/hapi', name: 'Pinned task', flavor: 'codex' },
+            }),
+        ]
+
+        render(renderSessionList(sessions, null))
+
+        expect(screen.getByRole('button', { name: /Live task/ })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /Pinned task/ })).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Collapse to active' })).toBeNull()
+        expect(screen.queryByRole('button', { name: /Expand/ })).toBeNull()
+    })
+
+    it('keeps pinned sessions visible through the preview collapse', () => {
+        localStorage.setItem('hapi-session-preview-limit', '2')
+        const sessions = [
+            ...Array.from({ length: 3 }, (_, index) => makeSession({
+                id: `session-pinned-${index + 1}`,
+                pinned: true,
+                updatedAt: 100 - index,
+                metadata: {
+                    path: '/work/hapi',
+                    name: `Pinned task ${index + 1}`,
+                    flavor: 'codex',
+                },
+            })),
+            ...Array.from({ length: 2 }, (_, index) => makeSession({
+                id: `session-idle-${index + 1}`,
+                updatedAt: 80 - index,
+                metadata: {
+                    path: '/work/hapi',
+                    name: `Archived task ${index + 1}`,
+                    flavor: 'codex',
+                },
+            })),
+        ]
+
+        render(renderSessionList(sessions, null))
+
+        // More pinned rows than the preview floor: all of them stay visible.
+        expect(screen.getByRole('button', { name: /Pinned task 1/ })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /Pinned task 2/ })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /Pinned task 3/ })).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Archived task 1/ })).toBeNull()
+
+        fireEvent.click(screen.getByRole('button', { name: /Expand/ }))
+        expect(screen.getByRole('button', { name: /Archived task 1/ })).toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole('button', { name: /Collapse/ }))
+
+        expect(screen.getByRole('button', { name: /Pinned task 3/ })).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Archived task 1/ })).toBeNull()
+    })
+
     it('does not offer the active fold when every session is already active', () => {
         localStorage.setItem('hapi-session-preview-limit', '1')
         const sessions = Array.from({ length: 3 }, (_, index) => makeSession({

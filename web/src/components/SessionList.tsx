@@ -686,6 +686,13 @@ export function normalizeSearch(value: string | null | undefined): string {
 }
 
 
+// Project/global pins are operator-curated rows. Neither the preview fold nor
+// the active-only fold may hide them: a fold that swallows pins reads as
+// "my pinned session disappeared".
+function isPinnedSession(session: Pick<SessionSummary, 'pinned' | 'globalPinned'>): boolean {
+    return Boolean(session.pinned || session.globalPinned)
+}
+
 export function getVisibleSessionPreview(
     sessions: SessionSummary[],
     options: {
@@ -700,7 +707,8 @@ export function getVisibleSessionPreview(
 
     const requiredIds = new Set<string>()
     for (const session of sessions) {
-        if (session.active && session.pendingRequestsCount > 0) requiredIds.add(session.id)
+        if (isPinnedSession(session)) requiredIds.add(session.id)
+        else if (session.active && session.pendingRequestsCount > 0) requiredIds.add(session.id)
         else if (options.isUnread?.(session)) requiredIds.add(session.id)
     }
     if (options.selectedSessionId && sessions.some(session => session.id === options.selectedSessionId)) {
@@ -1843,12 +1851,13 @@ export function SessionList(props: {
         )
     }
 
-    // "Collapse to active" keeps the connected rows only. The open session and
-    // unread rows always stay visible, the same rules the status filter and the
-    // unread-visibility setting follow.
+    // "Collapse to active" keeps the connected rows only. Pinned rows, the open
+    // session and unread rows always stay visible, the same rules the status
+    // filter and the unread-visibility setting follow.
     const getActiveOnlySessions = (group: SessionGroup): SessionSummary[] => {
         return group.sessions.filter(session =>
             session.active
+            || isPinnedSession(session)
             || session.id === selectedSessionId
             || (keepUnreadSessionsVisible && isSessionUnread(session))
         )
@@ -2041,10 +2050,11 @@ export function SessionList(props: {
     const renderDirectoryGroup = (group: SessionGroup) => {
         const isCollapsed = isGroupCollapsed(group)
         // Inactive rows the fold would hide. Rows the fold keeps (active,
-        // selected, unread with the setting on) do not count, so a group with
-        // nothing foldable keeps the regular preview.
+        // pinned, selected, unread with the setting on) do not count, so a
+        // group with nothing foldable keeps the regular preview.
         const hasFoldableSessions = group.sessions.some(session =>
             !session.active
+            && !isPinnedSession(session)
             && session.id !== selectedSessionId
             && !(keepUnreadSessionsVisible && isSessionUnread(session))
         )
