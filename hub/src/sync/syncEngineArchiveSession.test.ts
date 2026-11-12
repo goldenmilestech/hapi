@@ -251,16 +251,53 @@ describe('SyncEngine.archiveSession runner reaping (#1910)', () => {
         expect(session?.metadata?.lifecycleState).not.toBe('archived')
     })
 
-    it('does NOT archive when the runner reports unknown after KillSession miss', async () => {
+    it('archives an inactive row when the runner has no record and KillSession missed (#1911 follow-up)', async () => {
+        // A runner that lost all tracking for a finished CLI reports unknown
+        // forever. With no live socket either, retrying can never confirm
+        // cleanup — leaving the row permanently unarchivable.
         const sessionId = insertActiveSession('sess-unknown-to-runner', 'machine-x')
+        cache().handleSessionEnd({ sid: sessionId, time: Date.now() })
         setKillSessionMissingTarget()
+        ;(engine as unknown as { rpcGateway: { stopRunnerSession: unknown } }).rpcGateway.stopRunnerSession =
+            async () => 'unknown'
+
+        await engine.archiveSession(sessionId)
+
+        const session = cache().getSession(sessionId)
+        expect(session?.active).toBe(false)
+        expect(session?.metadata?.lifecycleState).toBe('archived')
+    })
+
+    it('archives unknown runner state once the hub row has no live CLI', async () => {
+        const sessionId = insertActiveSession('sess-unknown-inactive-row', 'machine-x')
+        setKillSessionOk()
+        cache().handleSessionEnd({ sid: sessionId, time: Date.now() })
+        ;(engine as unknown as { rpcGateway: { stopRunnerSession: unknown } }).rpcGateway.stopRunnerSession =
+            async () => 'unknown'
+
+        await engine.archiveSession(sessionId)
+
+        expect(cache().getSession(sessionId)?.metadata?.lifecycleState).toBe('archived')
+    })
+
+    it('keeps an unconfirmed resume start fenced even when the CLI socket is gone', async () => {
+        const sessionId = insertActiveSession('sess-unknown-resume-pending', 'machine-x')
+        setKillSessionMissingTarget()
+        const current = store.sessions.getSession(sessionId)!
+        store.sessions.updateSessionMetadata(
+            sessionId,
+            { ...current.metadata as object, codexResumePending: { machineId: 'machine-x', nativeSessionId: 'native-x' } },
+            current.metadataVersion,
+            NAMESPACE
+        )
+        cache().refreshSession(sessionId)
         ;(engine as unknown as { rpcGateway: { stopRunnerSession: unknown } }).rpcGateway.stopRunnerSession =
             async () => 'unknown'
 
         await expect(engine.archiveSession(sessionId)).rejects.toThrow()
 
         const session = cache().getSession(sessionId)
-        expect(session?.active).toBe(true)
+        expect(session?.metadata?.codexResumePending).toBeDefined()
         expect(session?.metadata?.lifecycleState).not.toBe('archived')
     })
 
