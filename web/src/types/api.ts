@@ -79,6 +79,8 @@ export type {
     SessionTitleSuggestionResponse,
     SessionsResponse,
     SessionContentSearchResponse,
+    SessionOutlineItem,
+    SessionOutlineResponse,
     SpawnResponse,
     UploadFileResponse
 } from '@hapi/protocol/apiTypes'

@@ -2021,3 +2021,65 @@ describe('observed read revision receipts', () => {
         } finally { store.close() }
     })
 })
+
+describe('MessageService session outline', () => {
+    function makeService(store: Store): MessageService {
+        return new MessageService(store, makeIo(() => {}), makePublisher() as any)
+    }
+
+    it('indexes every delivered user prompt in display order', () => {
+        const store = makeStore()
+        const session = makeSession(store, 'outline-index')
+        const first = store.messages.addMessage(session.id, { role: 'user', content: { type: 'text', text: '  First\n prompt ' } }, 'local-first')
+        const queued = store.messages.addMessage(session.id, { role: 'user', content: { type: 'text', text: 'Still queued' } }, 'local-queued')
+        const agent = store.messages.addMessage(session.id, { role: 'agent', content: { type: 'text', text: 'reply' } })
+        const second = store.messages.addMessage(session.id, { role: 'user', content: { type: 'text', text: 'Second prompt' } }, 'local-second')
+        store.messages.markMessagesInvoked(session.id, ['local-first'], 1_000)
+        store.messages.markMessagesInvoked(session.id, ['local-second'], 2_000)
+
+        const outline = makeService(store).getSessionOutline(session.id)
+
+        expect(outline.items.map((item) => [item.messageId, item.createdAt, item.label])).toEqual([
+            [first.id, 1_000, 'First prompt'],
+            [second.id, 2_000, 'Second prompt']
+        ])
+        expect(queued.id).toBeDefined()
+        expect(agent.id).toBeDefined()
+        store.close()
+    })
+
+    it('skips CLI command echoes that render as cli-output blocks', () => {
+        const store = makeStore()
+        const session = makeSession(store, 'outline-cli')
+        store.messages.addMessage(
+            session.id,
+            { role: 'user', content: { type: 'text', text: '<command-name>/compact</command-name>' }, meta: { sentFrom: 'cli' } },
+            'local-cli'
+        )
+        const prompt = store.messages.addMessage(session.id, { role: 'user', content: { type: 'text', text: 'Real prompt' } }, 'local-prompt')
+        store.messages.markMessagesInvoked(session.id, ['local-cli', 'local-prompt'], 1_000)
+
+        const outline = makeService(store).getSessionOutline(session.id)
+
+        expect(outline.items.map((item) => item.messageId)).toEqual([prompt.id])
+        store.close()
+    })
+
+    it('truncates long labels and keeps attachment-only prompts locatable', () => {
+        const store = makeStore()
+        const session = makeSession(store, 'outline-labels')
+        const long = store.messages.addMessage(session.id, { role: 'user', content: { type: 'text', text: 'a '.repeat(500) } }, 'local-long')
+        const empty = store.messages.addMessage(session.id, { role: 'user', content: { type: 'text', text: '' } }, 'local-empty')
+        store.messages.markMessagesInvoked(session.id, ['local-long', 'local-empty'], 1_000)
+
+        const outline = makeService(store).getSessionOutline(session.id)
+
+        expect(outline.items).toHaveLength(2)
+        expect(outline.items[0]?.messageId).toBe(long.id)
+        expect(outline.items[0]?.label.endsWith('...')).toBe(true)
+        expect(outline.items[0]?.label.length).toBeLessThanOrEqual(96)
+        expect(outline.items[1]?.messageId).toBe(empty.id)
+        expect(outline.items[1]?.label).toBe('')
+        store.close()
+    })
+})

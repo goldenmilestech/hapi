@@ -13,6 +13,7 @@ import { createMessagesRoutes } from './messages'
 
 type GetMessagesPage = SyncEngine['getMessagesPage']
 type GetMessageContext = SyncEngine['getMessageContext']
+type GetSessionOutline = SyncEngine['getSessionOutline']
 
 // TS note: engine is cast to unknown→SyncEngine so test helpers don't need to
 // satisfy the full SyncEngine shape (only the subset the route under test uses).
@@ -26,6 +27,7 @@ function createApp(opts: {
     sendMessage?: (sessionId: string, payload: unknown) => Promise<void>
     getMessagesPage?: GetMessagesPage
     getMessageContext?: GetMessageContext
+    getSessionOutline?: GetSessionOutline
     getQueuedState?: (sessionId: string, localIds: string[]) => {
         queuedLocalIds: string[]
         indeterminateLocalIds: string[]
@@ -65,6 +67,7 @@ function createApp(opts: {
         }
     }))
     const getMessageContext = opts.getMessageContext ?? (() => null)
+    const getSessionOutline = opts.getSessionOutline ?? (() => ({ items: [] }))
 
     const engine = {
         resolveSessionAccess: () => ({
@@ -78,6 +81,7 @@ function createApp(opts: {
         steerQueuedMessage: opts.steerQueuedMessage ?? (async () => ({ status: 'failed', error: 'Steer failed', localId: null })),
         getMessagesPage,
         getMessageContext,
+        getSessionOutline,
     } as unknown as SyncEngine
 
     const app = new Hono<WebAppEnv>()
@@ -560,5 +564,33 @@ describe('POST /api/sessions/:id/messages/:messageId/steer', () => {
         const body = await response.json() as { error: string; code: string }
         expect(body.error).toBe('Session is inactive')
         expect(body.code).toBe('session_inactive')
+    })
+})
+
+describe('GET /api/sessions/:id/outline', () => {
+    it('returns the session prompt index', async () => {
+        const calls: string[] = []
+        const { app } = createApp({
+            getSessionOutline: (sessionId) => {
+                calls.push(sessionId)
+                return {
+                    items: [
+                        { messageId: 'message-1', createdAt: 1_000, label: 'First prompt' },
+                        { messageId: 'message-2', createdAt: 2_000, label: 'Second prompt' }
+                    ]
+                }
+            }
+        })
+
+        const response = await app.request('/api/sessions/session-1/outline')
+
+        expect(response.status).toBe(200)
+        expect(calls).toEqual(['session-1'])
+        expect(await response.json()).toEqual({
+            items: [
+                { messageId: 'message-1', createdAt: 1_000, label: 'First prompt' },
+                { messageId: 'message-2', createdAt: 2_000, label: 'Second prompt' }
+            ]
+        })
     })
 })

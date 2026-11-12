@@ -78,6 +78,7 @@ function isShareRequestAllowed(
     const rules: Array<{ pattern: RegExp; methods: string[]; requireApprove?: boolean }> = [
         { pattern: /^\/messages$/, methods: ['GET', 'POST'] },
         { pattern: /^\/messages\/[^/]+$/, methods: ['DELETE'] },
+        { pattern: /^\/outline$/, methods: ['GET'] },
         { pattern: /^\/messages\/queued-state$/, methods: ['POST'] },
         { pattern: /^\/messages\/[^/]+\/retry$/, methods: ['POST'] },
         { pattern: /^\/messages\/[^/]+\/steer$/, methods: ['POST'] },

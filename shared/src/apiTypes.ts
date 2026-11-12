@@ -207,6 +207,26 @@ export type MessageContextResponse = {
     }
 }
 
+/**
+ * One navigable prompt in a session outline. `createdAt` is the display
+ * position (invocation time for queued prompts), matching the message
+ * pagination key so clients can compare it with loaded windows.
+ */
+export type SessionOutlineItem = {
+    messageId: string
+    createdAt: number
+    label: string
+}
+
+/**
+ * Complete prompt index for a session. The web outline merges this with the
+ * loaded message window, so historical prompts stay listed before their
+ * messages are paged in.
+ */
+export type SessionOutlineResponse = {
+    items: SessionOutlineItem[]
+}
+
 export type MachinesResponse = { machines: Machine[] }
 
 export type SpawnResponse =

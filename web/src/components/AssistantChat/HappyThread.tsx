@@ -10,7 +10,8 @@ import type { ConversationOutlineItem } from '@/chat/outline'
 import {
     findConversationMessageAnchor,
     findConversationMessageTextRange,
-    getConversationMessageAnchorId
+    getConversationMessageAnchorId,
+    getOutlineSourceMessageId
 } from '@/chat/outline'
 import { formatMessageTimestampTitle, formatOutlineTimestamp } from '@/chat/presentation'
 import {
@@ -136,6 +137,12 @@ const SEARCH_TARGET_QUERY_RETRY_DELAY_MS = 75
 const MAX_SEARCH_TARGET_QUERY_RETRIES = 80
 const MAX_SEARCH_TARGET_CONTEXT_RETRIES = 3
 const MAX_SEARCH_TARGET_RENDER_RETRIES = 120
+// A context load round-trips to the hub, then assistant-ui commits the new
+// window on a later render. Poll the anchor for a bounded window instead of
+// subscribing to message versions, so a no-op re-render cannot strand the
+// jump on a stale DOM read.
+const OUTLINE_CONTEXT_RENDER_POLL_INTERVAL_MS = 50
+const OUTLINE_CONTEXT_RENDER_TIMEOUT_MS = 4000
 const SEARCH_TARGET_SCROLL_DELAYS_MS = [
     0, 16, 50, 120, 250, 500, 900, 1400, 2200, 3500, 5000, 7000,
     10_000, 15_000, 22_000, 30_000, 45_000
@@ -305,6 +312,67 @@ export async function locateOutlineTargetMessage(options: LocateOutlineTargetOpt
         target = options.findTarget(anchorId)
     }
     return target
+}
+
+/**
+ * Poll for an outline anchor after a bounded context load replaced the message
+ * window. `isCurrent` lets a newer outline click cancel this wait so an older
+ * selection cannot scroll the viewport after the reader chose another row.
+ */
+async function waitForOutlineAnchor(
+    anchorId: string,
+    isCurrent: () => boolean
+): Promise<HTMLElement | null> {
+    const deadline = Date.now() + OUTLINE_CONTEXT_RENDER_TIMEOUT_MS
+    let target = document.getElementById(anchorId)
+    while (!target && Date.now() < deadline && isCurrent()) {
+        await new Promise<void>((resolve) => {
+            window.setTimeout(resolve, OUTLINE_CONTEXT_RENDER_POLL_INTERVAL_MS)
+        })
+        target = document.getElementById(anchorId)
+    }
+    return target
+}
+
+type FocusOutlineTargetOptions = {
+    targetMessageId: string
+    sourceMessageId: string | null
+    findTarget: (anchorId: string) => HTMLElement | null
+    loadMessageContext?: (messageId: string) => Promise<boolean>
+    waitForTarget?: (anchorId: string) => Promise<HTMLElement | null>
+    hasMoreMessages: () => boolean
+    loadOlderPreservingScroll: () => Promise<boolean>
+    isCurrent?: () => boolean
+}
+
+/**
+ * Resolve an outline row to its rendered anchor. The prompt index covers the
+ * whole session, so a historical row is usually outside the message window:
+ * load the bounded context around it first and only fall back to paging when
+ * that fails (for example, a message the hub no longer serves).
+ */
+export async function focusOutlineTargetMessage(options: FocusOutlineTargetOptions): Promise<HTMLElement | null> {
+    const isCurrent = options.isCurrent ?? (() => true)
+    const anchorId = getConversationMessageAnchorId(options.targetMessageId)
+
+    let target = options.findTarget(anchorId)
+    if (!target && options.sourceMessageId && options.loadMessageContext) {
+        const loaded = await options.loadMessageContext(options.sourceMessageId)
+        if (!isCurrent()) return null
+        if (loaded && options.waitForTarget) {
+            target = await options.waitForTarget(anchorId)
+            if (!isCurrent()) return null
+        }
+    }
+    if (target) {
+        return target
+    }
+    return await locateOutlineTargetMessage({
+        targetMessageId: options.targetMessageId,
+        findTarget: options.findTarget,
+        hasMoreMessages: options.hasMoreMessages,
+        loadOlderPreservingScroll: options.loadOlderPreservingScroll
+    })
 }
 
 function createSearchMatchMarkerElement(sourceMessageId: string | null): HTMLElement {
@@ -922,6 +990,9 @@ export function HappyThread(props: {
     const searchTargetContextRetryCountRef = useRef(0)
     const searchTargetRenderRetryCountRef = useRef(0)
     const searchTargetScrollTimersRef = useRef<number[]>([])
+    // Latest outline selection wins: a slow context load from an earlier click
+    // must not scroll the viewport after a newer row was selected.
+    const outlineSelectTokenRef = useRef(0)
 
     // Smart scroll state: enabled only while the user is intentionally at the bottom.
     const autoScrollEnabledRef = useRef(true)
@@ -2277,19 +2348,32 @@ export function HappyThread(props: {
     }, [loadOlderFromConsumer])
 
     const handleOutlineSelect = useCallback(async (item: ConversationOutlineItem) => {
-        const target = await locateOutlineTargetMessage({
+        const selectToken = outlineSelectTokenRef.current + 1
+        outlineSelectTokenRef.current = selectToken
+        const isCurrent = () => outlineSelectTokenRef.current === selectToken
+
+        // Stop tail-following before the context window swaps in. The window
+        // replacement changes content height, and the ResizeObserver would see
+        // the pre-jump "at bottom" state and snap the viewport back to the end,
+        // undoing the scroll below.
+        autoScrollEnabledRef.current = false
+
+        const target = await focusOutlineTargetMessage({
             targetMessageId: item.targetMessageId,
+            sourceMessageId: getOutlineSourceMessageId(item.targetMessageId),
             findTarget: (anchorId) => document.getElementById(anchorId),
+            loadMessageContext: props.onLoadMessageContext,
+            waitForTarget: (anchorId) => waitForOutlineAnchor(anchorId, isCurrent),
             hasMoreMessages: () => hasMoreMessagesRef.current,
             loadOlderPreservingScroll: loadOlderForOutline
         })
+        if (!isCurrent()) return
         if (target) {
             target.scrollIntoView({ block: 'start', behavior: 'smooth' })
-            autoScrollEnabledRef.current = false
         }
         props.onOutlineItemClick?.(item)
         props.onOutlineOpenChange(false)
-    }, [loadOlderForOutline, props.onOutlineItemClick, props.onOutlineOpenChange])
+    }, [loadOlderForOutline, props.onLoadMessageContext, props.onOutlineItemClick, props.onOutlineOpenChange])
 
     useEffect(() => {
         if (searchTargetHistoryLockRef.current) {

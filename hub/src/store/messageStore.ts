@@ -40,6 +40,7 @@ import {
     copyMessageToSession as copyStoredMessageToSession,
     copyMessagesToSession as copyStoredMessagesToSession,
     getAllMessages,
+    getInvokedMessagesByPosition,
     getMessagesAfterSeq,
     getMinSeq,
     getMessageSeqById,
@@ -98,6 +99,10 @@ export class MessageStore {
 
     getAllMessages(sessionId: string): StoredMessage[] {
         return getAllMessages(this.db, sessionId)
+    }
+
+    getInvokedMessagesByPosition(sessionId: string): StoredMessage[] {
+        return getInvokedMessagesByPosition(this.db, sessionId)
     }
 
     getMessagesAfterSeq(sessionId: string, afterSeq: number): StoredMessage[] {

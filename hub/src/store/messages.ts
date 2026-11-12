@@ -402,6 +402,24 @@ export function getAllMessages(
     return rows.map(toStoredMessage)
 }
 
+/**
+ * Delivered messages in display order. The outline only indexes prompts the
+ * runtime actually consumed, so pending local rows stay out of the result and
+ * the caller does not need to filter them after decoding every payload.
+ */
+export function getInvokedMessagesByPosition(
+    db: Database,
+    sessionId: string
+): StoredMessage[] {
+    const rows = prepareCached(db, `
+        SELECT * FROM messages
+        WHERE session_id = ? AND invoked_at IS NOT NULL
+        ORDER BY invoked_at ASC, seq ASC
+    `).all(sessionId) as DbMessageRow[]
+
+    return rows.map(toStoredMessage)
+}
+
 export function getMessagesAfterSeq(
     db: Database,
     sessionId: string,

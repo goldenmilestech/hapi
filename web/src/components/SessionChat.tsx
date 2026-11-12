@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { useNavigate } from '@tanstack/react-router'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { PRESERVE_SESSION_SIDEBAR_SCROLL } from '@/lib/sessionNavigation'
 import { AssistantRuntimeProvider, useAui, useAuiState } from '@assistant-ui/react'
 import { DragDropZone } from '@/components/AssistantChat/DragDropZone'
@@ -24,7 +24,7 @@ import type { SuggestionHandler, Suggestion } from '@/hooks/useActiveSuggestions
 import { normalizeDecryptedMessage } from '@/chat/normalize'
 import { reduceChatBlocks } from '@/chat/reducer'
 import { reconcileChatBlocks } from '@/chat/reconcile'
-import { buildConversationOutline } from '@/chat/outline'
+import { buildConversationOutline, mergeConversationOutline } from '@/chat/outline'
 import { buildVisibleChatBlocks, isToolGroupBlock, type ToolGroupBlock, type VisibleChatBlock, visibleBlockRole } from '@/chat/toolGroups'
 import { filterConciseChatBlocks } from '@/chat/conciseView'
 import { getAssistantResponseGroups, hasUnambiguousResponseOwner, responseBlockKey, responseBlockIdentity, responseGroupIdentity } from '@/chat/responseGroups'
@@ -1724,9 +1724,25 @@ function SessionChatInner(props: SessionChatProps) {
     // tool_result pair is one card.
     const unseenCount = useUnseenBlockCount(props.viewMode, visibleBlocks)
 
-    const outlineItems = useMemo(
+    // The outline lists every prompt in the session, not just the paged-in
+    // window. Fetch the hub-side index while the panel is open; loaded blocks
+    // still win on merge so labels follow live edits and failed local sends.
+    const outlineIndexQuery = useQuery({
+        queryKey: queryKeys.sessionOutline(props.session.id),
+        queryFn: ({ signal }) => props.api.getSessionOutline(props.session.id, signal),
+        enabled: outlineOpen,
+        staleTime: 30_000,
+        retry: false,
+    })
+
+    const loadedOutlineItems = useMemo(
         () => buildConversationOutline(reconciled.blocks),
         [reconciled.blocks]
+    )
+
+    const outlineItems = useMemo(
+        () => mergeConversationOutline(loadedOutlineItems, outlineIndexQuery.data?.items ?? []),
+        [loadedOutlineItems, outlineIndexQuery.data]
     )
 
     // Permission mode change handler

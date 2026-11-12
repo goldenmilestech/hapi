@@ -45,6 +45,7 @@ import type {
     HubHealthResponse,
     SessionResponse,
     SessionContentMatchesResponse,
+    SessionOutlineResponse,
     SessionTitleSuggestionResponse,
     SessionsResponse,
     SessionContentSearchResponse
@@ -639,6 +640,13 @@ export class ApiClient {
     async getMessageContext(sessionId: string, messageId: string): Promise<MessageContextResponse | null> {
         return await this.request<MessageContextResponse | null>(
             `/api/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/context`
+        )
+    }
+
+    async getSessionOutline(sessionId: string, signal?: AbortSignal): Promise<SessionOutlineResponse> {
+        return await this.request<SessionOutlineResponse>(
+            `/api/sessions/${encodeURIComponent(sessionId)}/outline`,
+            { signal }
         )
     }
 

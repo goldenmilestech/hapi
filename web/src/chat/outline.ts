@@ -1,4 +1,5 @@
 import type { ChatBlock, UserTextBlock } from '@/chat/types'
+import type { SessionOutlineItem } from '@/types/api'
 
 export type ConversationOutlineItem = {
     id: string
@@ -9,6 +10,7 @@ export type ConversationOutlineItem = {
 }
 
 const MAX_OUTLINE_LABEL_LENGTH = 96
+const OUTLINE_TARGET_PREFIX = 'user-text:'
 
 function collapseWhitespace(value: string): string {
     return value.replace(/\s+/g, ' ').trim()
@@ -22,13 +24,26 @@ export function truncateOutlineLabel(value: string, maxLength = MAX_OUTLINE_LABE
     return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`
 }
 
+/** Rendered assistant-ui id for a raw message id (`user-text:<messageId>`). */
+export function getOutlineTargetMessageId(messageId: string): string {
+    return `${OUTLINE_TARGET_PREFIX}${messageId}`
+}
+
+/** Raw HAPI message id behind an outline target, or null for other block kinds. */
+export function getOutlineSourceMessageId(targetMessageId: string): string | null {
+    if (!targetMessageId.startsWith(OUTLINE_TARGET_PREFIX)) {
+        return null
+    }
+    const messageId = targetMessageId.slice(OUTLINE_TARGET_PREFIX.length)
+    return messageId.length > 0 ? messageId : null
+}
+
 function userBlockToOutlineItem(block: UserTextBlock): ConversationOutlineItem {
-    const label = truncateOutlineLabel(block.text) || 'Empty message'
     return {
-        id: `outline:user-text:${block.id}`,
-        targetMessageId: `user-text:${block.id}`,
+        id: `outline:${getOutlineTargetMessageId(block.id)}`,
+        targetMessageId: getOutlineTargetMessageId(block.id),
         kind: 'user',
-        label,
+        label: truncateOutlineLabel(block.text) || 'Empty message',
         createdAt: block.createdAt
     }
 }
@@ -48,6 +63,50 @@ export function buildConversationOutline(blocks: readonly ChatBlock[]): Conversa
     }
 
     return items
+}
+
+function indexedItemToOutlineItem(item: SessionOutlineItem): ConversationOutlineItem {
+    const targetMessageId = getOutlineTargetMessageId(item.messageId)
+    return {
+        id: `outline:${targetMessageId}`,
+        targetMessageId,
+        kind: 'user',
+        label: truncateOutlineLabel(item.label) || 'Empty message',
+        createdAt: item.createdAt
+    }
+}
+
+/**
+ * Merge the session-wide prompt index with prompts from the loaded message
+ * window. Loaded blocks win because they carry the live label (a prompt can be
+ * edited while pending) and include local failures the hub never delivered;
+ * indexed items fill in everything the window has not paged in yet.
+ */
+export function mergeConversationOutline(
+    loadedItems: readonly ConversationOutlineItem[],
+    indexedItems: readonly SessionOutlineItem[]
+): ConversationOutlineItem[] {
+    if (indexedItems.length === 0) {
+        return [...loadedItems]
+    }
+
+    const loadedByTarget = new Map(loadedItems.map((item) => [item.targetMessageId, item]))
+    const coveredTargets = new Set<string>()
+    const merged: ConversationOutlineItem[] = []
+    for (const item of indexedItems) {
+        const targetMessageId = getOutlineTargetMessageId(item.messageId)
+        coveredTargets.add(targetMessageId)
+        merged.push(loadedByTarget.get(targetMessageId) ?? indexedItemToOutlineItem(item))
+    }
+    for (const item of loadedItems) {
+        if (coveredTargets.has(item.targetMessageId)) {
+            continue
+        }
+        merged.push(item)
+    }
+
+    // Stable sort: same-timestamp rows keep index/window order.
+    return merged.sort((a, b) => a.createdAt - b.createdAt)
 }
 
 export function getConversationMessageAnchorId(messageId: string): string {

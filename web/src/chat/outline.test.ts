@@ -4,6 +4,8 @@ import {
     buildConversationOutline,
     findConversationMessageAnchor,
     findConversationMessageTextRange,
+    getOutlineSourceMessageId,
+    mergeConversationOutline,
     truncateOutlineLabel
 } from '@/chat/outline'
 
@@ -182,5 +184,68 @@ describe('conversation outline', () => {
         expect(range).not.toBeNull()
         expect(range!.toString()).toBe('Use   İSTANBUL')
         anchor.remove()
+    })
+})
+
+describe('merged conversation outline', () => {
+    it('extracts the raw message id behind a user-text target', () => {
+        expect(getOutlineSourceMessageId('user-text:message-1')).toBe('message-1')
+        expect(getOutlineSourceMessageId('agent-text:message-1:0')).toBeNull()
+        expect(getOutlineSourceMessageId('user-text:')).toBeNull()
+    })
+
+    it('lists indexed prompts that the message window has not paged in', () => {
+        expect(mergeConversationOutline([], [
+            { messageId: 'old-1', createdAt: 1000, label: '  Old   prompt  ' },
+            { messageId: 'old-2', createdAt: 2000, label: '' }
+        ])).toEqual([
+            {
+                id: 'outline:user-text:old-1',
+                targetMessageId: 'user-text:old-1',
+                kind: 'user',
+                label: 'Old prompt',
+                createdAt: 1000
+            },
+            {
+                id: 'outline:user-text:old-2',
+                targetMessageId: 'user-text:old-2',
+                kind: 'user',
+                label: 'Empty message',
+                createdAt: 2000
+            }
+        ])
+    })
+
+    it('prefers loaded labels and keeps local-only prompts', () => {
+        const loaded = buildConversationOutline([
+            userBlock('recent', 'Edited prompt', 3000),
+            userBlock('failed', 'Rejected prompt', 4000, { status: 'failed', invokedAt: null })
+        ])
+
+        const merged = mergeConversationOutline(loaded, [
+            { messageId: 'recent', createdAt: 3000, label: 'Server prompt' }
+        ])
+
+        expect(merged.map((item) => [item.targetMessageId, item.label])).toEqual([
+            ['user-text:recent', 'Edited prompt'],
+            ['user-text:failed', 'Rejected prompt']
+        ])
+    })
+
+    it('orders merged prompts by display time', () => {
+        const loaded = buildConversationOutline([
+            userBlock('middle', 'Middle', 2000)
+        ])
+
+        const merged = mergeConversationOutline(loaded, [
+            { messageId: 'first', createdAt: 1000, label: 'First' },
+            { messageId: 'last', createdAt: 3000, label: 'Last' }
+        ])
+
+        expect(merged.map((item) => item.targetMessageId)).toEqual([
+            'user-text:first',
+            'user-text:middle',
+            'user-text:last'
+        ])
     })
 })
