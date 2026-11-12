@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { I18nProvider } from '@/lib/i18n-context'
+import { ApiClient } from '@/api/client'
 import { AUTH_PROXY_REDIRECT_MESSAGE } from '@/api/authProxy'
 import { LoginPrompt } from './LoginPrompt'
 
@@ -60,6 +61,15 @@ describe('LoginPrompt redirected hub requests', () => {
     let assign: ReturnType<typeof vi.fn>
 
     beforeEach(() => {
+        // The prompt probes the Feishu config on mount; keep that request out of
+        // the fetch sequence the redirect scenarios script below.
+        vi.spyOn(ApiClient.prototype, 'getFeishuConfig').mockResolvedValue({
+            enabled: false,
+            appId: null,
+            redirectUri: null,
+            scope: '',
+            authorizeUrl: ''
+        })
         originalFetch = globalThis.fetch
         Object.defineProperty(window, 'localStorage', {
             value: {
@@ -83,6 +93,7 @@ describe('LoginPrompt redirected hub requests', () => {
     afterEach(() => {
         globalThis.fetch = originalFetch
         Object.defineProperty(window, 'location', { configurable: true, value: originalLocation })
+        vi.restoreAllMocks()
     })
 
     function mockRedirectedFetch() {
