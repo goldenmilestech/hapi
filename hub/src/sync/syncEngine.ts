@@ -3833,7 +3833,7 @@ export class SyncEngine {
         }
 
         if (this.historyActionsInFlight.has(sessionId)) {
-            return { type: 'error', message: 'Archived fork is in progress; retry the fork before reopening', code: 'resume_failed' }
+            return { type: 'error', message: 'Another conversation history action is in progress; retry shortly', code: 'resume_failed' }
         }
         this.historyActionsInFlight.add(sessionId)
         const promise = (async () => {
@@ -4063,7 +4063,7 @@ export class SyncEngine {
                 this.sessionReadyIds.delete(access.sessionId)
                 this.writeCodexResumePending(access.sessionId, namespace, { machineId: targetMachine.id, nativeSessionId: resumeToken })
             }
-            const spawnResult = await this.rpcGateway.spawnSession(
+            const spawnResumeChild = () => this.rpcGateway.spawnSession(
                 targetMachine.id,
                 directory,
                 flavor,
@@ -4081,6 +4081,7 @@ export class SyncEngine {
                 session.copilotAgentMode ?? undefined,
                 resumedStartingMode
             )
+            let spawnResult = await spawnResumeChild()
 
             if (spawnResult.type !== 'success') {
                 if (flavor === 'codex' && resumeToken) {
@@ -4124,6 +4125,13 @@ export class SyncEngine {
 
             const becameActive = await this.waitForSessionActive(spawnResult.sessionId)
             if (!becameActive) {
+                console.warn('[resume] session did not become active after spawn', {
+                    sessionId: access.sessionId,
+                    machineId: targetMachine.id,
+                    spawnedSessionId: spawnResult.sessionId,
+                    flavor,
+                    startingMode: resumedStartingMode ?? null,
+                })
                 if (resumedStartingMode === 'pty') {
                     const current = this.sessionCache.getSessionByNamespace(access.sessionId, namespace)
                     const stopped = current
@@ -4150,6 +4158,43 @@ export class SyncEngine {
                         return { type: 'error', message: 'Pi resume failed and the child is still active', code: 'resume_failed', rollbackSafe: false }
                     }
                 }
+                // A runner dedupes spawns by existing session id and rehydrates
+                // children recorded in resume-processes after a restart. Such a
+                // child can be alive while its Hub session socket is already
+                // gone, so the spawn "succeeds" but the row never activates and
+                // every retry returns the same stale child. PTY/Pi keep their
+                // own durable attempt reconciliation and are excluded here.
+                if (
+                    resumedStartingMode !== 'pty'
+                    && !requiresPiNativeReady
+                    && spawnResult.sessionId === access.sessionId
+                ) {
+                    const retry = await this.retryStaleResumeChild({
+                        machineId: targetMachine.id,
+                        sessionId: access.sessionId,
+                        namespace,
+                        flavor,
+                        resumeToken,
+                        spawn: spawnResumeChild,
+                    })
+                    if (retry.type === 'failed') {
+                        return {
+                            type: 'error',
+                            message: retry.message,
+                            code: 'resume_failed',
+                            ...(retry.rollbackSafe === false ? { rollbackSafe: false } : {}),
+                        }
+                    }
+                    spawnResult = retry.spawn
+                } else {
+                    return { type: 'error', message: 'Session failed to become active', code: 'resume_failed' }
+                }
+            }
+
+            // The `let` reassignment above widens the union again even though
+            // the retry only ever yields an activated success; keep the
+            // invariant explicit so the remaining flow is success-typed.
+            if (spawnResult.type !== 'success') {
                 return { type: 'error', message: 'Session failed to become active', code: 'resume_failed' }
             }
 
@@ -4308,6 +4353,88 @@ export class SyncEngine {
     }
 
     /**
+     * Recover a resume whose spawn was acked by a stale runner child.
+     *
+     * The runner dedupes spawns by existing session id and rehydrates children
+     * recorded in `resume-processes` after a runner restart. A child can be
+     * alive while its Hub session socket is already gone (e.g. a dropped
+     * connection the CLI never recovered from). The spawn then acknowledges
+     * success, but the session never becomes active and every later resume
+     * returns the same stale child, leaving the row unresumable until an
+     * operator archives it.
+     *
+     * Stop the stale child once (the runner clears the dedupe entry only after
+     * a confirmed stop) and spawn again. Returns the activated spawn result, or
+     * a failure that mirrors the regular spawn error semantics.
+     */
+    private async retryStaleResumeChild(options: {
+        machineId: string
+        sessionId: string
+        namespace: string
+        flavor: AgentFlavor
+        resumeToken: string | undefined
+        spawn: () => ReturnType<RpcGateway['spawnSession']>
+    }): Promise<
+        | { type: 'retried'; spawn: Awaited<ReturnType<RpcGateway['spawnSession']>> }
+        | { type: 'failed'; message: string; rollbackSafe?: false }
+    > {
+        let status: 'stopped' | 'already_gone' | 'still_alive' | 'unknown'
+        try {
+            status = await this.rpcGateway.stopRunnerSession(options.machineId, options.sessionId)
+        } catch (error) {
+            console.warn('[resume] stale runner child stop failed; not retrying', {
+                sessionId: options.sessionId,
+                machineId: options.machineId,
+                message: error instanceof Error ? error.message : String(error),
+            })
+            return { type: 'failed', message: 'Session failed to become active' }
+        }
+        if (status === 'still_alive' || status === 'unknown') {
+            console.warn('[resume] stale runner child is still alive; not retrying', {
+                sessionId: options.sessionId,
+                machineId: options.machineId,
+                status,
+            })
+            return { type: 'failed', message: 'Session failed to become active' }
+        }
+        console.warn('[resume] stopped stale runner child; retrying spawn', {
+            sessionId: options.sessionId,
+            machineId: options.machineId,
+            status,
+        })
+        const retried = await options.spawn()
+        if (retried.type === 'error') {
+            // Mirror the regular spawn-failure fence cleanup: an explicit
+            // childStarted=false proves nothing is running, so the Codex fence
+            // can be dropped; otherwise it stays until a proven stop.
+            if (options.flavor === 'codex' && options.resumeToken && retried.childStarted === false) {
+                this.writeCodexResumePending(options.sessionId, options.namespace, undefined)
+            }
+            console.warn('[resume] stale-child retry spawn failed', {
+                sessionId: options.sessionId,
+                machineId: options.machineId,
+                message: retried.message,
+            })
+            return {
+                type: 'failed',
+                message: retried.message,
+                ...(options.flavor === 'codex' && options.resumeToken && retried.childStarted !== false
+                    ? { rollbackSafe: false as const }
+                    : {}),
+            }
+        }
+        const becameActive = await this.waitForSessionActive(retried.sessionId)
+        if (!becameActive) {
+            console.warn('[resume] stale-child retry did not become active', {
+                sessionId: options.sessionId,
+                machineId: options.machineId,
+            })
+            return { type: 'failed', message: 'Session failed to become active' }
+        }
+        return { type: 'retried', spawn: retried }
+    }
+
+    /**
      * Revive an archived session so the web UI can reach it again.
      *
      * Behaviour:
@@ -4347,7 +4474,7 @@ export class SyncEngine {
         }
 
         if (this.historyActionsInFlight.has(sessionId)) {
-            return { type: 'error', message: 'Archived fork is in progress; retry the fork before reopening', code: 'resume_failed' }
+            return { type: 'error', message: 'Another conversation history action is in progress; retry shortly', code: 'resume_failed' }
         }
         this.historyActionsInFlight.add(sessionId)
         const promise = (async () => {
