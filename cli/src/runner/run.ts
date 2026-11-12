@@ -76,6 +76,11 @@ export function createSpawnDeduplicator(
     }
     const existing = completedOrInFlight.get(key);
     if (existing) {
+      // A recovered child may still be listed here after a runner restart even
+      // when its Hub session socket is already gone; log the dedupe hit so a
+      // stuck resume can be traced back to this branch instead of a silent
+      // "spawn succeeded but the session never activated".
+      logger.debug(`[RUNNER RUN] Spawn dedupe hit for ${key}${childState.has(key) ? ' (live/recovered child)' : ''}`);
       return await existing;
     }
 
@@ -1155,6 +1160,13 @@ export async function startRunner(options: { workspaceRoots?: string[] } = {}): 
     for (const [pid, record] of persistedResumeProcesses) {
       const verified = pidToRequestedSessionId.get(pid) === record.requestedSessionId;
       existingSessionIdByChildPid.set(pid, record.requestedSessionId);
+      // Recovery makes this child the answer to every later spawn for the same
+      // HAPI id, so record it: a "spawn succeeded but never activated" report
+      // can then be matched to a recovered PID whose Hub socket may be dead.
+      logger.debug(
+        `[RUNNER RUN] Recovered child ${record.requestedSessionId} (pid ${pid}, verified=${verified}, `
+        + `confirmed=${record.confirmedSessionId ?? 'none'})`
+      );
       spawnSession.recoverChild(
         record.requestedSessionId,
         verified && record.confirmedSessionId
