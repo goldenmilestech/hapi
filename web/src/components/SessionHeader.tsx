@@ -19,6 +19,7 @@ import { getSessionModelLabel } from '@/lib/sessionModelLabel'
 import { useTranslation } from '@/lib/use-translation'
 import { AgentFlavorIcon } from '@/components/AgentFlavorIcon'
 import { isFastServiceTier } from '@/components/AssistantChat/codexFastMode'
+import { MACHINE_CAPABILITIES } from '@hapi/protocol/runnerCapabilities'
 import { getSessionTitle } from '@/lib/sessionTitle'
 import { getSessionProjectLabel, getSessionProjectPath } from '@/lib/sessionProjectLabel'
 import { useToast } from '@/lib/toast-context'
@@ -135,6 +136,22 @@ function TerminalIcon(props: { className?: string }) {
     )
 }
 
+function VsCodeIcon(props: { className?: string }) {
+    return (
+        <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            className={props.className}
+            aria-hidden="true"
+        >
+            <path d="M23.15 2.587 18.21.21a1.494 1.494 0 0 0-1.705.29l-9.46 8.63-4.12-3.128a.999.999 0 0 0-1.276.057L.327 7.261A1 1 0 0 0 .326 8.74L3.899 12 .326 15.26a1 1 0 0 0 .001 1.479L1.65 17.94a.999.999 0 0 0 1.276.057l4.12-3.128 9.46 8.63a1.492 1.492 0 0 0 1.704.29l4.942-2.377A1.5 1.5 0 0 0 24 20.06V3.939a1.5 1.5 0 0 0-.85-1.352Zm-5.146 14.861L10.826 12l7.178-5.448v10.896Z" />
+        </svg>
+    )
+}
+
 function MoreVerticalIcon(props: { className?: string }) {
     return (
         <svg
@@ -224,6 +241,22 @@ export function SessionHeader(props: {
         () => resolveSessionHeaderMachineLabel(session, machineLabelsById),
         [session, machineLabelsById]
     )
+    const sessionMachineId = session.metadata?.machineId?.trim() || null
+    // Worktree sessions run in metadata.path (the worktree); fall back to the
+    // displayed project path when metadata.path is absent.
+    const workspacePath = session.metadata?.path?.trim() || projectPath
+    const sessionMachine = useMemo(
+        () => (sessionMachineId ? machines.find((candidate) => candidate.id === sessionMachineId) ?? null : null),
+        [machines, sessionMachineId]
+    )
+    // Older runners do not register the open-workspace RPC; hide the control
+    // instead of surfacing a dead button.
+    const canOpenWorkspace = Boolean(
+        api
+        && !isShareGuest
+        && workspacePath
+        && sessionMachine?.metadata?.capabilities?.includes(MACHINE_CAPABILITIES.OpenWorkspace)
+    )
     const lastActiveAt = session.activeAt || session.updatedAt || session.createdAt
     // Relative labels cross minute/hour boundaries without new patches; tick
     // once a minute so "just now" does not freeze forever on inactive sessions.
@@ -257,6 +290,7 @@ export function SessionHeader(props: {
     const [deleteOpen, setDeleteOpen] = useState(false)
     const [isSyncingCodex, setIsSyncingCodex] = useState(false)
     const [isSyncingPi, setIsSyncingPi] = useState(false)
+    const [isOpeningWorkspace, setIsOpeningWorkspace] = useState(false)
 
     const { archiveSession, reopenSession, renameSession, suggestSessionTitle, updateSessionSummary, setPinMode, deleteSession, isPending: isActionPending } = useSessionActions(
         api,
@@ -300,6 +334,28 @@ export function SessionHeader(props: {
             }
         } catch (error) {
             setReopenError(formatReopenError(error))
+        }
+    }
+
+    const handleOpenWorkspace = async () => {
+        if (!api || !sessionMachineId || !workspacePath || isOpeningWorkspace) {
+            return
+        }
+        setIsOpeningWorkspace(true)
+        try {
+            const result = await api.openWorkspaceInEditor(sessionMachineId, workspacePath)
+            if (!result.success) {
+                throw new Error(result.error)
+            }
+        } catch (error) {
+            addToast({
+                title: t('session.openInVscode.failed'),
+                body: error instanceof Error ? error.message : t('dialog.error.default'),
+                sessionId: session.id,
+                url: `/sessions/${session.id}`
+            })
+        } finally {
+            setIsOpeningWorkspace(false)
         }
     }
 
@@ -499,6 +555,19 @@ export function SessionHeader(props: {
                             ) : null}
                         </div>
                     </div>
+
+                    {canOpenWorkspace ? (
+                        <button
+                            type="button"
+                            onClick={() => void handleOpenWorkspace()}
+                            className={`${headerToggleClass(false)} disabled:opacity-50`}
+                            title={t('session.openInVscode')}
+                            aria-label={t('session.openInVscode')}
+                            disabled={isOpeningWorkspace}
+                        >
+                            <VsCodeIcon />
+                        </button>
+                    ) : null}
 
                     {props.onToggleFiles && !isShareGuest ? (
                         <button

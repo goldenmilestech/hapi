@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { MACHINE_CAPABILITIES } from '@hapi/protocol/runnerCapabilities'
 import type { Session } from '@/types/api'
 import type { ApiClient } from '@/api/client'
 import { I18nProvider } from '@/lib/i18n-context'
@@ -461,5 +462,75 @@ describe('SessionHeader', () => {
         fireEvent.click(screen.getByRole('menuitem', { name: 'Pin in project' }))
 
         expect(await screen.findByText('Could not update pin: Network unavailable')).toBeInTheDocument()
+    })
+
+    it('opens the session workspace in VS Code when the runner advertises the capability', async () => {
+        const openWorkspaceInEditor = vi.fn().mockResolvedValue({ success: true })
+        const api = {
+            getMachines: vi.fn().mockResolvedValue({
+                machines: [{
+                    id: 'machine-1',
+                    namespace: 'default',
+                    seq: 1,
+                    createdAt: 1,
+                    updatedAt: 1,
+                    active: true,
+                    activeAt: 1,
+                    metadata: {
+                        host: 'machine',
+                        platform: 'darwin',
+                        happyCliVersion: '1.0.0',
+                        capabilities: [MACHINE_CAPABILITIES.OpenWorkspace]
+                    },
+                    metadataVersion: 1,
+                    runnerState: null,
+                    runnerStateVersion: 1
+                }]
+            }),
+            getScratchlist: vi.fn().mockResolvedValue({ entries: [] }),
+            openWorkspaceInEditor
+        } as unknown as ApiClient
+
+        renderHeaderWithApi(baseSession({
+            metadata: { flavor: 'claude', path: '/repo/hapi', host: 'machine', machineId: 'machine-1' }
+        }), api)
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Open in VS Code' }))
+
+        await waitFor(() => expect(openWorkspaceInEditor).toHaveBeenCalledWith('machine-1', '/repo/hapi'))
+    })
+
+    it('hides the VS Code control for runners without the capability', async () => {
+        const api = {
+            getMachines: vi.fn().mockResolvedValue({
+                machines: [{
+                    id: 'machine-1',
+                    namespace: 'default',
+                    seq: 1,
+                    createdAt: 1,
+                    updatedAt: 1,
+                    active: true,
+                    activeAt: 1,
+                    metadata: {
+                        host: 'machine',
+                        platform: 'darwin',
+                        happyCliVersion: '0.9.0',
+                        capabilities: []
+                    },
+                    metadataVersion: 1,
+                    runnerState: null,
+                    runnerStateVersion: 1
+                }]
+            }),
+            getScratchlist: vi.fn().mockResolvedValue({ entries: [] }),
+            openWorkspaceInEditor: vi.fn()
+        } as unknown as ApiClient
+
+        renderHeaderWithApi(baseSession({
+            metadata: { flavor: 'claude', path: '/repo/hapi', host: 'machine', machineId: 'machine-1' }
+        }), api)
+
+        await waitFor(() => expect(api.getMachines).toHaveBeenCalled())
+        expect(screen.queryByRole('button', { name: 'Open in VS Code' })).not.toBeInTheDocument()
     })
 })

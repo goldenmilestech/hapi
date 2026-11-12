@@ -37,6 +37,7 @@ import type {
     OpencodeModelSummary,
     OpencodeModelVariantsResponse,
     OpencodeReasoningEffortResponse,
+    OpenWorkspaceResponse,
     PathExistsResponse,
     PiModelsResponse,
     SlashCommandsResponse,
@@ -367,6 +368,28 @@ export class RpcGateway {
             return { success: false, error: 'Unexpected list-directory result' }
         }
         return result as RpcListDirectoryResponse
+    }
+
+    async openWorkspace(machineId: string, directory: string): Promise<OpenWorkspaceResponse> {
+        const result = await this.machineRpc(
+            machineId,
+            RPC_METHODS.OpenWorkspace,
+            { directory }
+        )
+        if (result && typeof result === 'object' && (result as { success?: unknown }).success === true) {
+            return { success: true }
+        }
+        // The runner's RpcHandlerManager turns thrown handler errors into
+        // `{ error }`; normalize both shapes for the web client.
+        const error = result && typeof result === 'object'
+            ? (result as { error?: unknown }).error
+            : undefined
+        return {
+            success: false,
+            error: typeof error === 'string' && error.trim()
+                ? error
+                : 'Failed to launch VS Code'
+        }
     }
 
     async getAgentAvailability(machineId: string): Promise<AgentAvailabilityResponse> {

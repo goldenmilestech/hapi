@@ -242,6 +242,8 @@ export default {
   'session.title': 'Файлы',
   'session.view.returnToChat': 'Вернуться к диалогу',
   'session.more': 'Дополнительные действия',
+  'session.openInVscode': 'Открыть в VS Code',
+  'session.openInVscode.failed': 'Не удалось открыть VS Code',
   'session.sidebar.show': 'Показать список сессий',
   'session.outline.open': 'План диалога',
   'session.outline.close': 'Закрыть план',

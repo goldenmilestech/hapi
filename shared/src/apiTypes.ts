@@ -849,6 +849,17 @@ export const MachinePathsExistsRequestSchema = z.object({
 
 export type MachinePathsExistsRequest = z.infer<typeof MachinePathsExistsRequestSchema>
 
+export const OpenWorkspaceRequestSchema = z.object({
+    directory: z.string().min(1)
+})
+
+export type OpenWorkspaceRequest = z.infer<typeof OpenWorkspaceRequestSchema>
+
+/** Result of asking a runner to launch VS Code on a workspace directory. */
+export type OpenWorkspaceResponse =
+    | { success: true }
+    | { success: false; error: string }
+
 export const AgentAvailabilityReasonSchema = z.enum(['not_found', 'invalid_configuration'])
 export type AgentAvailabilityReason = z.infer<typeof AgentAvailabilityReasonSchema>
 

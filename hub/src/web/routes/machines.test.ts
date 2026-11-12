@@ -1227,4 +1227,92 @@ describe('machines routes', () => {
         expect(response.status).toBe(503)
         expect(await response.json()).toMatchObject({ success: false, code: RPC_TARGET_MISSING_ERROR_CODE })
     })
+
+    it('requires the open-workspace capability before forwarding to the runner', async () => {
+        const machine = createMachine()
+        const engine = {
+            getMachine: () => machine,
+            getMachineByNamespace: () => machine,
+            openWorkspace: () => { throw new Error('must not open') }
+        } as unknown as Partial<SyncEngine>
+        const app = new Hono<WebAppEnv>()
+        app.use('*', async (c, next) => { c.set('namespace', 'default'); await next() })
+        app.route('/api', createMachinesRoutes(() => engine as SyncEngine))
+
+        const response = await app.request('/api/machines/machine-1/open-workspace', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ directory: '/repo/hapi' })
+        })
+
+        expect(response.status).toBe(409)
+        expect(await response.json()).toEqual({
+            success: false,
+            error: 'This runner must be upgraded before opening VS Code',
+            code: 'runner_upgrade_required'
+        })
+    })
+
+    it('forwards the workspace directory to a capable runner', async () => {
+        const machine = createMachine({
+            metadata: {
+                host: 'localhost',
+                platform: 'darwin',
+                happyCliVersion: '1.0.0',
+                capabilities: [MACHINE_CAPABILITIES.OpenWorkspace]
+            }
+        })
+        const calls: Array<{ machineId: string; directory: string }> = []
+        const engine = {
+            getMachine: () => machine,
+            getMachineByNamespace: () => machine,
+            openWorkspace: async (machineId: string, directory: string) => {
+                calls.push({ machineId, directory })
+                return { success: true as const }
+            }
+        } as unknown as Partial<SyncEngine>
+        const app = new Hono<WebAppEnv>()
+        app.use('*', async (c, next) => { c.set('namespace', 'default'); await next() })
+        app.route('/api', createMachinesRoutes(() => engine as SyncEngine))
+
+        const response = await app.request('/api/machines/machine-1/open-workspace', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ directory: '/repo/hapi' })
+        })
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({ success: true })
+        expect(calls).toEqual([{ machineId: 'machine-1', directory: '/repo/hapi' }])
+    })
+
+    it('returns a stable code when the open-workspace RPC target is absent', async () => {
+        const machine = createMachine({
+            metadata: {
+                host: 'localhost',
+                platform: 'darwin',
+                happyCliVersion: '1.0.0',
+                capabilities: [MACHINE_CAPABILITIES.OpenWorkspace]
+            }
+        })
+        const engine = {
+            getMachine: () => machine,
+            getMachineByNamespace: () => machine,
+            openWorkspace: async () => {
+                throw new RpcTargetMissingError('machine-1:open-workspace', 'handler-not-registered')
+            }
+        } as unknown as Partial<SyncEngine>
+        const app = new Hono<WebAppEnv>()
+        app.use('*', async (c, next) => { c.set('namespace', 'default'); await next() })
+        app.route('/api', createMachinesRoutes(() => engine as SyncEngine))
+
+        const response = await app.request('/api/machines/machine-1/open-workspace', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ directory: '/repo/hapi' })
+        })
+
+        expect(response.status).toBe(503)
+        expect(await response.json()).toMatchObject({ success: false, code: RPC_TARGET_MISSING_ERROR_CODE })
+    })
 })
