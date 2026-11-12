@@ -23,6 +23,7 @@ import { pingPeerCommand } from './pingPeer'
 import { inspectPeerCommand } from './inspectPeer'
 import { spawnPeerCommand } from './spawnPeer'
 import { usageCommand } from './usage'
+import { updateCommand } from './update'
 import { setModeCommand } from './setMode'
 import type { CommandContext, CommandDefinition } from './types'
 
@@ -63,6 +64,7 @@ const COMMANDS: CommandDefinition[] = [
     doctorCommand,
     resumeCommand,
     runnerCommand,
+    updateCommand,
     notifyCommand,
     pingPeerCommand,
     inspectPeerCommand,

@@ -21,6 +21,7 @@ Commands:
   hapi hub [--relay]         Start the API + web hub
   hapi server                Alias for hapi hub
   hapi runner                Manage the background runner
+  hapi update [--check]      Update hapi CLI/runner from GitHub releases
   hapi doctor                Run diagnostics and troubleshooting
   hapi ping-peer             List peers or message another session
   hapi inspect-peer <id>     Read another session's metadata and messages
