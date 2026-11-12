@@ -33,6 +33,7 @@ import { PERMISSION_MODES } from '@hapi/protocol/modes';
 import { RUNNER_CAPABILITIES } from '@hapi/protocol';
 import { withRetry } from '@/utils/time';
 import { isRetryableConnectionError } from '@/utils/errorUtils';
+import { maybeAutoUpdateNow } from '@/update/autoUpdate';
 
 import { cleanupRunnerState, getInstalledCliMtimeMs, isRunnerRunningCurrentlyInstalledHappyVersion, stopRunner, waitForRunnerHandoff } from './controlClient';
 import { startRunnerControlServer } from './controlServer';
@@ -2016,6 +2017,13 @@ export async function startRunner(options: { workspaceRoots?: string[] } = {}): 
       } catch (error) {
         logger.debug('[RUNNER RUN] Failed to write heartbeat', error);
       }
+
+      // Opt-in: pull the newest CLI release in the background. The replacement
+      // is picked up by the mtime handoff on a later heartbeat, so sessions
+      // survive. Detached on purpose: a download must not stall the heartbeat.
+      void maybeAutoUpdateNow().catch((error) => {
+        logger.debug('[RUNNER RUN] Auto-update check failed', error)
+      })
 
       heartbeatRunning = false;
     }, heartbeatIntervalMs); // Every 60 seconds in production
