@@ -9,6 +9,8 @@ export type SSESubscription = {
     all: boolean
     sessionId: string | null
     machineId: string | null
+    /** Access-token row the JWT was minted from; null for legacy tokens. */
+    tokenId?: string | null
 }
 
 type SSEConnection = SSESubscription & {
@@ -72,6 +74,7 @@ export class SSEManager {
         all?: boolean
         sessionId?: string | null
         machineId?: string | null
+        tokenId?: string | null
         visibility?: VisibilityState
         /** Last event id the client saw; enables replay instead of resync. */
         resumeFrom?: string | null
@@ -85,6 +88,7 @@ export class SSEManager {
             all: Boolean(options.all),
             sessionId: options.sessionId ?? null,
             machineId: options.machineId ?? null,
+            tokenId: options.tokenId ?? null,
             send: options.send,
             sendHeartbeat: options.sendHeartbeat,
             close: options.close,
@@ -222,6 +226,23 @@ export class SSEManager {
 
     hasSubscription(id: string): boolean {
         return this.connections.has(id)
+    }
+
+    /**
+     * Closes every stream minted from a revoked access token. The route's
+     * `close` handler aborts the HTTP stream, which unsubscribes in its
+     * `finally` block.
+     */
+    closeByTokenId(tokenId: string): number {
+        let closed = 0
+        for (const connection of [...this.connections.values()]) {
+            if (connection.tokenId !== tokenId) {
+                continue
+            }
+            closed++
+            connection.close?.()
+        }
+        return closed
     }
 
     async sendToast(namespace: string, event: Extract<SyncEvent, { type: 'toast' }>): Promise<number> {

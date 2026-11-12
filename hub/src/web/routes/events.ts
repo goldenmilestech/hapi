@@ -94,6 +94,7 @@ export function createEventsRoutes(
                 all,
                 sessionId: resolvedSessionId,
                 machineId,
+                tokenId: c.get('tokenId') ?? null,
                 visibility,
                 resumeFrom,
                 send: (event, eventId) => stream.writeSSE({ data: JSON.stringify(event), id: eventId }),

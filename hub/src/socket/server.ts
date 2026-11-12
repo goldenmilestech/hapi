@@ -4,8 +4,7 @@ import { jwtVerify } from 'jose'
 import { z } from 'zod'
 import type { Store } from '../store'
 import { getConfiguration } from '../configuration'
-import { constantTimeEquals } from '../utils/crypto'
-import { parseAccessToken } from '../utils/accessToken'
+import { resolveHubAccessToken } from '../utils/accessTokenResolver'
 import { registerCliHandlers } from './handlers/cli'
 import { registerTerminalHandlers } from './handlers/terminal'
 import { RpcRegistry } from './rpcRegistry'
@@ -18,7 +17,9 @@ import type { CliSocketWithData, SocketData, SocketServer } from './socketTypes'
 
 const jwtPayloadSchema = z.object({
     uid: z.number(),
-    ns: z.string()
+    ns: z.string(),
+    /** Access-token id, present only for JWTs minted from a hub-issued token. */
+    tid: z.string().optional()
 })
 
 const DEFAULT_IDLE_TIMEOUT_MS = 15 * 60_000
@@ -56,6 +57,8 @@ export function createSocketServer(deps: SocketServerDeps): {
     io: SocketServer
     engine: Engine
     rpcRegistry: RpcRegistry
+    /** Drops every live CLI/terminal socket authenticated by a revoked token. */
+    disconnectAccessToken: (tokenId: string) => number
 } {
     const configuration = getConfiguration()
     const corsOrigins = deps.corsOrigins ?? configuration.corsOrigins
@@ -114,34 +117,85 @@ export function createSocketServer(deps: SocketServerDeps): {
         }
     })
 
+    /**
+     * Token id → live sockets, so revoking a token can drop its connections
+     * immediately instead of waiting for the JWT to expire.
+     */
+    const socketsByToken = new Map<string, Set<{ disconnect: (close?: boolean) => void }>>()
+
+    function trackTokenSocket(
+        tokenId: string | null | undefined,
+        socket: { disconnect: (close?: boolean) => void }
+    ): () => void {
+        if (!tokenId) {
+            return () => {}
+        }
+        let sockets = socketsByToken.get(tokenId)
+        if (!sockets) {
+            sockets = new Set()
+            socketsByToken.set(tokenId, sockets)
+        }
+        sockets.add(socket)
+        return () => {
+            sockets.delete(socket)
+            if (sockets.size === 0) {
+                socketsByToken.delete(tokenId)
+            }
+        }
+    }
+
+    function disconnectAccessToken(tokenId: string): number {
+        const sockets = socketsByToken.get(tokenId)
+        if (!sockets) {
+            return 0
+        }
+        const count = sockets.size
+        for (const socket of [...sockets]) {
+            socket.disconnect(true)
+        }
+        socketsByToken.delete(tokenId)
+        return count
+    }
+
     cliNs.use((socket, next) => {
         const auth = socket.handshake.auth as Record<string, unknown> | undefined
         const token = typeof auth?.token === 'string' ? auth.token : null
-        const parsedToken = token ? parseAccessToken(token) : null
-        if (!parsedToken || !constantTimeEquals(parsedToken.baseToken, configuration.cliApiToken)) {
+        const resolved = token ? resolveHubAccessToken(token, deps.store) : null
+        if (!resolved) {
             return next(new Error('Invalid token'))
         }
-        socket.data.namespace = parsedToken.namespace
+        socket.data.namespace = resolved.namespace
+        socket.data.tokenId = resolved.tokenId
         next()
     })
-    cliNs.on('connection', (socket) => registerCliHandlers(socket as CliSocketWithData, {
-        io,
-        store: deps.store,
-        rpcRegistry,
-        terminalRegistry,
-        onSessionAlive: deps.onSessionAlive,
-        onSessionReady: deps.onSessionReady,
-        onSessionEnd: deps.onSessionEnd,
-        onMachineAlive: deps.onMachineAlive,
-        onWebappEvent: deps.onWebappEvent,
-        onBackgroundTasks: deps.onBackgroundTasks,
-        onSessionActivity: deps.onSessionActivity,
-        onAgentProgress: deps.onAgentProgress,
-        onSweepImmediateQueued: deps.onSweepImmediateQueued,
-        onMessagesConsumed: deps.onMessagesConsumed,
-        onUserMessage: deps.onUserMessage,
-        onAgentContextUsage: deps.onAgentContextUsage
-    }))
+    cliNs.on('connection', (socket) => {
+        // Close the tiny handshake→connection race: a revoke that landed after
+        // the middleware ran must not leave a socket behind.
+        if (socket.data.tokenId && deps.store.accessTokens.isTokenIdRevoked(socket.data.tokenId)) {
+            socket.disconnect(true)
+            return
+        }
+        const untrack = trackTokenSocket(socket.data.tokenId, socket)
+        socket.once('disconnect', untrack)
+        registerCliHandlers(socket as CliSocketWithData, {
+            io,
+            store: deps.store,
+            rpcRegistry,
+            terminalRegistry,
+            onSessionAlive: deps.onSessionAlive,
+            onSessionReady: deps.onSessionReady,
+            onSessionEnd: deps.onSessionEnd,
+            onMachineAlive: deps.onMachineAlive,
+            onWebappEvent: deps.onWebappEvent,
+            onBackgroundTasks: deps.onBackgroundTasks,
+            onSessionActivity: deps.onSessionActivity,
+            onAgentProgress: deps.onAgentProgress,
+            onSweepImmediateQueued: deps.onSweepImmediateQueued,
+            onMessagesConsumed: deps.onMessagesConsumed,
+            onUserMessage: deps.onUserMessage,
+            onAgentContextUsage: deps.onAgentContextUsage
+        })
+    })
 
     terminalNs.use(async (socket, next) => {
         const auth = socket.handshake.auth as Record<string, unknown> | undefined
@@ -156,23 +210,40 @@ export function createSocketServer(deps: SocketServerDeps): {
             if (!parsed.success) {
                 return next(new Error('Invalid token payload'))
             }
+            if (parsed.data.tid && deps.store.accessTokens.isTokenIdRevoked(parsed.data.tid)) {
+                return next(new Error('Invalid token'))
+            }
+            // A namespace claimed by an access token is closed to JWTs minted
+            // from the legacy shared token. Terminal JWTs carry no `sid`.
+            if (!parsed.data.tid && deps.store.accessTokens.getActiveByNamespace(parsed.data.ns)) {
+                return next(new Error('Invalid token'))
+            }
             socket.data.userId = parsed.data.uid
             socket.data.namespace = parsed.data.ns
+            socket.data.tokenId = parsed.data.tid ?? null
             next()
             return
         } catch {
             return next(new Error('Invalid token'))
         }
     })
-    terminalNs.on('connection', (socket) => registerTerminalHandlers(socket, {
-        io,
-        getSession: (sessionId) => {
-            return deps.getSession?.(sessionId) ?? deps.store.sessions.getSession(sessionId)
-        },
-        terminalRegistry,
-        maxTerminalsPerSocket,
-        maxTerminalsPerSession
-    }))
+    terminalNs.on('connection', (socket) => {
+        if (socket.data.tokenId && deps.store.accessTokens.isTokenIdRevoked(socket.data.tokenId)) {
+            socket.disconnect(true)
+            return
+        }
+        const untrack = trackTokenSocket(socket.data.tokenId, socket)
+        socket.once('disconnect', untrack)
+        registerTerminalHandlers(socket, {
+            io,
+            getSession: (sessionId) => {
+                return deps.getSession?.(sessionId) ?? deps.store.sessions.getSession(sessionId)
+            },
+            terminalRegistry,
+            maxTerminalsPerSocket,
+            maxTerminalsPerSession
+        })
+    })
 
-    return { io, engine, rpcRegistry }
+    return { io, engine, rpcRegistry, disconnectAccessToken }
 }

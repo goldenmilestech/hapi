@@ -80,6 +80,8 @@ import SettingsVoicePage from '@/routes/settings/voice'
 import SettingsVoiceVoicesPage from '@/routes/settings/voice-voices'
 import SettingsVoiceAdvancedPage from '@/routes/settings/voice-advanced'
 import SettingsMachinesPage from '@/routes/settings/machines'
+import SettingsTokensPage from '@/routes/settings/tokens'
+import FeishuCallbackPage from '@/routes/auth/feishu'
 import SettingsAboutPage from '@/routes/settings/about'
 import SettingsStoragePage from '@/routes/settings/storage'
 import SettingsUsagePage from '@/routes/settings/usage'
@@ -1440,6 +1442,18 @@ const settingsMachinesRoute = createRoute({
     component: SettingsMachinesPage,
 })
 
+const settingsTokensRoute = createRoute({
+    getParentRoute: () => settingsRoute,
+    path: 'tokens',
+    component: SettingsTokensPage,
+})
+
+const feishuCallbackRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/auth/feishu',
+    component: FeishuCallbackPage,
+})
+
 const settingsAboutRoute = createRoute({
     getParentRoute: () => settingsRoute,
     path: 'about',
@@ -1529,6 +1543,7 @@ export const routeTree = rootRoute.addChildren([
         ]),
     ]),
     browseRoute,
+    feishuCallbackRoute,
     missionsRoute.addChildren([
         missionsIndexRoute,
         missionDetailRoute,
@@ -1542,6 +1557,7 @@ export const routeTree = rootRoute.addChildren([
         settingsVoiceVoicesRoute,
         settingsVoiceAdvancedRoute,
         settingsMachinesRoute,
+        settingsTokensRoute,
         settingsStorageRoute,
         settingsUsageRoute,
         settingsAboutRoute,

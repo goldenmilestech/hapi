@@ -14,6 +14,7 @@ import { createQwenProxyWebSocketHandler } from './qwenProxyHandler'
 import { decodeVoiceSystemPromptParam } from '../voiceSystemPromptParam'
 import type { SyncEngine } from '../sync/syncEngine'
 import { createAuthMiddleware, type WebAppEnv } from './middleware/auth'
+import { resolveHubAccessToken } from '../utils/accessTokenResolver'
 import { createAuthRoutes } from './routes/auth'
 import { createBindRoutes } from './routes/bind'
 import { createEventsRoutes } from './routes/events'
@@ -33,6 +34,9 @@ import { createPushRoutes } from './routes/push'
 import { createDevicesRoutes } from './routes/devices'
 import { createVoiceRoutes } from './routes/voice'
 import { createHubSettingsRoutes } from './routes/hubSettings'
+import { createAccessTokensRoutes } from './routes/accessTokens'
+import { createFeishuRoutes } from './routes/feishu'
+import { createMeAccessTokenRoutes } from './routes/meAccessToken'
 import { createWorkGraphRoutes } from './routes/workGraph'
 import type { SSEManager } from '../sse/sseManager'
 import type { VisibilityTracker } from '../visibility/visibilityTracker'
@@ -282,12 +286,18 @@ function createWebApp(options: {
         return next()
     })
 
-    app.route('/cli', createCliRoutes(options.getSyncEngine))
+    app.route('/cli', createCliRoutes(options.getSyncEngine, (raw) => resolveHubAccessToken(raw, options.store)))
 
     app.route('/api', createAuthRoutes(options.jwtSecret, options.store))
     app.route('/api', createBindRoutes(options.jwtSecret, options.store))
 
-    app.use('/api/*', createAuthMiddleware(options.jwtSecret))
+    app.use('/api/*', createAuthMiddleware(options.jwtSecret, {
+        isTokenRevoked: (tokenId) => options.store.accessTokens.isTokenIdRevoked(tokenId),
+        isNamespaceClaimed: (namespace) => options.store.accessTokens.getActiveByNamespace(namespace) !== null
+    }))
+    app.route('/api', createAccessTokensRoutes(options.store, { dataDir: configuration.dataDir }))
+    app.route('/api', createMeAccessTokenRoutes(options.store, { dataDir: configuration.dataDir }))
+    app.route('/api', createFeishuRoutes(options.store))
     app.route('/api', createEventsRoutes(options.getSseManager, options.getSyncEngine, options.getVisibilityTracker))
     app.route('/api', createSessionsRoutes(options.getSyncEngine, options.store, {
         shareTokenSecret: options.shareTokenSecret

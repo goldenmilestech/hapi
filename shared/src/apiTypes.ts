@@ -141,6 +141,13 @@ export type AuthResponse = {
      * Clients use it to render a single-session view.
      */
     share?: SessionShareInfo
+    /**
+     * Present after Feishu login: the caller's durable personal access token.
+     * The SPA stores it so it can refresh JWTs without another OAuth redirect.
+     */
+    accessToken?: string
+    /** The namespace the credential resolves to. */
+    namespace?: string
 }
 
 export type SessionsResponse = { sessions: SessionSummary[] }
@@ -840,8 +847,40 @@ export type AgentAvailabilityResponse = z.infer<typeof AgentAvailabilityResponse
 export const AuthRequestSchema = z.union([
     z.object({ initData: z.string() }),
     z.object({ accessToken: z.string() }),
-    z.object({ shareToken: z.string().min(1) })
+    z.object({ shareToken: z.string().min(1) }),
+    z.object({ feishuCode: z.string().min(1) })
 ])
+
+export type FeishuPublicConfigResponse = {
+    enabled: boolean
+    appId: string | null
+    redirectUri: string | null
+    scope: string
+    authorizeUrl: string
+}
+
+export type FeishuEmailBindingSummary = {
+    id: string
+    email: string
+    namespace: string
+    createdAt: number
+}
+
+export type FeishuBindingsResponse = {
+    bindings: FeishuEmailBindingSummary[]
+}
+
+export const CreateFeishuBindingRequestSchema = z.object({
+    email: z.string().trim().email().max(254),
+    namespace: z.string().trim().min(1).max(64).refine((value) => !value.includes(':'), {
+        message: 'Namespace must not contain ":"'
+    })
+})
+export type CreateFeishuBindingRequest = z.infer<typeof CreateFeishuBindingRequestSchema>
+
+export type CreateFeishuBindingResponse = {
+    binding: FeishuEmailBindingSummary
+}
 
 export const CreateSessionShareRequestSchema = z.object({
     mode: z.enum(['chat', 'chat_approve']).optional(),
@@ -888,6 +927,58 @@ export type RecoverSessionShareResponse = {
 
 export type SessionShareListResponse = {
     shares: SessionShareSummary[]
+}
+
+/**
+ * A namespace is a fixed string chosen by the hub owner when issuing a token.
+ * It may not contain `:` because the legacy shared-token grammar splits on the
+ * last colon; keeping new namespaces colon-free avoids any ambiguity if such a
+ * token ever reaches the legacy parser. Other characters are allowed so a
+ * hub can bind a token to a namespace that predates this feature.
+ */
+export const CreateAccessTokenRequestSchema = z.object({
+    name: z.string().trim().min(1).max(64),
+    namespace: z.string().trim().min(1).max(64).refine((value) => !value.includes(':'), {
+        message: 'Namespace must not contain ":"'
+    }),
+    /** Epoch milliseconds. Omit or null for a token that never expires. */
+    expiresAt: z.number().int().positive().nullable().optional()
+})
+export type CreateAccessTokenRequest = z.infer<typeof CreateAccessTokenRequestSchema>
+
+export type AccessTokenSummary = {
+    id: string
+    name: string
+    namespace: string
+    /** First characters of the token, for identification in the UI. */
+    tokenPrefix: string
+    createdAt: number
+    lastUsedAt: number | null
+    expiresAt: number | null
+    revokedAt: number | null
+}
+
+export type AccessTokensResponse = {
+    tokens: AccessTokenSummary[]
+}
+
+export type CreateAccessTokenResponse = {
+    /** Plaintext token. Returned exactly once; the hub stores only its hash. */
+    token: string
+    tokenInfo: AccessTokenSummary
+}
+
+export type RevokeAccessTokenResponse = {
+    ok: true
+}
+
+/**
+ * The caller's own token. `token` is null when the active row was created
+ * before derived tokens existed and cannot be shown again.
+ */
+export type PersonalAccessTokenResponse = {
+    token: string | null
+    tokenInfo: AccessTokenSummary | null
 }
 
 export type AuthRequest = z.infer<typeof AuthRequestSchema>

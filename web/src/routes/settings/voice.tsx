@@ -8,7 +8,7 @@ import { VoiceRespondsControls } from '@/components/settings/VoiceAdvancedContro
 import { TranscriptionProviderOnboard } from '@/components/settings/TranscriptionProviderOnboard'
 import { SettingsChoiceGroup, SettingsLinkRow, SettingsPageContent, SettingsSection } from '@/components/settings/SettingsPrimitives'
 import { SelectControl } from '@/components/ui/select-control'
-import { getNamespaceFromToken } from '@/components/settings/SettingsNav'
+import { getNamespaceFromToken } from '@/lib/jwt'
 import { useVoiceSettings } from './useVoiceSettings'
 
 export default function SettingsVoicePage() {

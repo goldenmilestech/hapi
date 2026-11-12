@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ApiClient } from '@/api/client'
 import { getTelegramWebApp, isTelegramEnvironment } from './useTelegram'
 import type { AuthSource } from './useAuth'
+import {
+    consumeFeishuError,
+    consumeFeishuState,
+    getFeishuCallbackParams,
+    storeFeishuError
+} from '@/lib/feishuAuth'
 
 const ACCESS_TOKEN_PREFIX = 'hapi_access_token::'
 const SHARE_TOKEN_PREFIX = 'hapi_share_token::'
@@ -95,13 +102,16 @@ export function useAuthSource(baseUrl: string): {
     authSource: AuthSource | null
     isLoading: boolean
     isTelegram: boolean
+    feishuError: string | null
     setAccessToken: (token: string) => void
     clearAuth: () => void
 } {
     const [authSource, setAuthSource] = useState<AuthSource | null>(null)
     const [isLoading, setIsLoading] = useState(true)
     const [isTelegram, setIsTelegram] = useState(false)
+    const [feishuError, setFeishuError] = useState<string | null>(null)
     const retryCountRef = useRef(0)
+    const feishuCallbackStartedRef = useRef(false)
     const accessTokenKey = useMemo(() => getAccessTokenKey(baseUrl), [baseUrl])
     const shareTokenKey = useMemo(() => `${SHARE_TOKEN_PREFIX}${baseUrl}`, [baseUrl])
 
@@ -111,6 +121,57 @@ export function useAuthSource(baseUrl: string): {
         setAuthSource(null)
         setIsTelegram(false)
         setIsLoading(true)
+        setFeishuError(null)
+
+        // Feishu redirects back to /auth/feishu?code=...&state=... . Exchange
+        // the code once, persist the returned personal token, then reload into
+        // the app so the normal access-token path takes over.
+        const feishuCallback = getFeishuCallbackParams()
+        if (feishuCallback) {
+            // StrictMode runs effects twice in development; the authorization
+            // code is single-use, so only the first pass may exchange it.
+            if (feishuCallbackStartedRef.current) {
+                return
+            }
+            feishuCallbackStartedRef.current = true
+            if (feishuCallback.error) {
+                storeFeishuError(baseUrl, 'login.feishu.denied')
+                window.location.replace('/sessions')
+                return
+            }
+            const expectedState = consumeFeishuState(baseUrl)
+            if (
+                !feishuCallback.code
+                || !feishuCallback.state
+                || expectedState !== feishuCallback.state
+            ) {
+                storeFeishuError(baseUrl, 'login.feishu.stateError')
+                window.location.replace('/sessions')
+                return
+            }
+
+            void (async () => {
+                try {
+                    const client = new ApiClient('', { baseUrl })
+                    const auth = await client.authenticate({ feishuCode: feishuCallback.code! })
+                    if (!auth.accessToken) {
+                        throw new Error('Missing access token')
+                    }
+                    storeAccessToken(accessTokenKey, auth.accessToken)
+                    window.location.replace('/sessions')
+                } catch {
+                    storeFeishuError(baseUrl, 'login.feishu.exchangeError')
+                    window.location.replace('/sessions')
+                }
+            })()
+            return
+        }
+
+        // A failed callback reloads with the reason in sessionStorage.
+        const pendingFeishuError = consumeFeishuError(baseUrl)
+        if (pendingFeishuError) {
+            setFeishuError(pendingFeishuError)
+        }
 
         const telegramInitData = getTelegramInitData()
 
@@ -207,6 +268,7 @@ export function useAuthSource(baseUrl: string): {
         authSource,
         isLoading,
         isTelegram,
+        feishuError,
         setAccessToken,
         clearAuth
     }

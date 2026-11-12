@@ -2,6 +2,8 @@ import { Database } from 'bun:sqlite'
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync } from 'node:fs'
 import { dirname } from 'node:path'
 
+import { AccessTokenStore } from './accessTokens'
+import { FeishuBindingStore } from './feishuBindings'
 import { MachineStore } from './machineStore'
 import { MessageStore } from './messageStore'
 import { addMessage } from './messages'
@@ -81,6 +83,8 @@ export class Store {
 
     readonly sessions: SessionStore
     readonly sessionShares: SessionShareStore
+    readonly accessTokens: AccessTokenStore
+    readonly feishuBindings: FeishuBindingStore
     readonly machines: MachineStore
     readonly messages: MessageStore
     readonly users: UserStore
@@ -130,6 +134,8 @@ export class Store {
         // before initSchema would make hasAnyUserTables misdetect a legacy DB).
         this.sessionShares = new SessionShareStore(this.db)
         this.sessionShares.ensureSchema()
+        this.accessTokens = new AccessTokenStore(this.db)
+        this.feishuBindings = new FeishuBindingStore(this.db)
 
         if (dbPath !== ':memory:' && !dbPath.startsWith('file::memory:')) {
             for (const path of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {

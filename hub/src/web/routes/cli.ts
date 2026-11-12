@@ -9,8 +9,7 @@ import {
 } from '@hapi/protocol'
 import { getConfiguration } from '../../configuration'
 import { readSessionSummaryContractEnabled } from '../../config/sessionSummaryContract'
-import { constantTimeEquals } from '../../utils/crypto'
-import { parseAccessToken } from '../../utils/accessToken'
+import type { ResolvedAccess } from '../../utils/accessTokenResolver'
 import type { Machine, Session, SyncEngine } from '../../sync/syncEngine'
 import { SessionIdentityConflictError, SessionNotAdoptableError } from '../../store/sessions'
 
@@ -65,7 +64,10 @@ function clearErrorStatus(code: string): 403 | 404 | 409 | 500 {
                 : 500
 }
 
-export function createCliRoutes(getSyncEngine: () => SyncEngine | null): Hono<CliEnv> {
+export function createCliRoutes(
+    getSyncEngine: () => SyncEngine | null,
+    resolveToken: (raw: string) => ResolvedAccess | null
+): Hono<CliEnv> {
     const app = new Hono<CliEnv>()
 
     app.use('*', async (c, next) => {
@@ -82,13 +84,12 @@ export function createCliRoutes(getSyncEngine: () => SyncEngine | null): Hono<Cl
         }
 
         const token = parsed.data.replace(/^Bearer\s+/i, '')
-        const configuration = getConfiguration()
-        const parsedToken = parseAccessToken(token)
-        if (!parsedToken || !constantTimeEquals(parsedToken.baseToken, configuration.cliApiToken)) {
+        const resolved = resolveToken(token)
+        if (!resolved) {
             return c.json({ error: 'Invalid token' }, 401)
         }
 
-        c.set('namespace', parsedToken.namespace)
+        c.set('namespace', resolved.namespace)
         return await next()
     })
 

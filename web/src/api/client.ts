@@ -1,6 +1,14 @@
 import type {
     AttachmentMetadata,
     AuthResponse,
+    AccessTokensResponse,
+    CreateAccessTokenRequest,
+    CreateAccessTokenResponse,
+    PersonalAccessTokenResponse,
+    FeishuPublicConfigResponse,
+    FeishuBindingsResponse,
+    CreateFeishuBindingRequest,
+    CreateFeishuBindingResponse,
     CreateSessionShareRequest,
     CreateSessionShareResponse,
     RecoverSessionShareResponse,
@@ -295,7 +303,12 @@ export class ApiClient {
         return await res.json() as T
     }
 
-    async authenticate(auth: { initData: string } | { accessToken: string } | { shareToken: string }): Promise<AuthResponse> {
+    async authenticate(auth:
+        | { initData: string }
+        | { accessToken: string }
+        | { shareToken: string }
+        | { feishuCode: string }
+    ): Promise<AuthResponse> {
         const res = await fetchThroughAuthProxy(this.buildUrl('/api/auth'), {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
@@ -994,6 +1007,66 @@ export class ApiClient {
         await this.request(`/api/machines/${encodeURIComponent(machineId)}`, {
             method: 'PATCH',
             body: JSON.stringify({ displayName })
+        })
+    }
+
+    async getAccessTokens(): Promise<AccessTokensResponse> {
+        return await this.request<AccessTokensResponse>('/api/access-tokens')
+    }
+
+    async createAccessToken(body: CreateAccessTokenRequest): Promise<CreateAccessTokenResponse> {
+        return await this.request<CreateAccessTokenResponse>('/api/access-tokens', {
+            method: 'POST',
+            body: JSON.stringify(body)
+        })
+    }
+
+    async revokeAccessToken(id: string): Promise<void> {
+        await this.request(`/api/access-tokens/${encodeURIComponent(id)}/revoke`, {
+            method: 'POST'
+        })
+    }
+
+    async getAccessTokenById(id: string): Promise<CreateAccessTokenResponse> {
+        return await this.request<CreateAccessTokenResponse>(
+            `/api/access-tokens/${encodeURIComponent(id)}/token`
+        )
+    }
+
+    async getPersonalAccessToken(): Promise<PersonalAccessTokenResponse> {
+        return await this.request<PersonalAccessTokenResponse>('/api/me/access-token')
+    }
+
+    async createPersonalAccessToken(): Promise<PersonalAccessTokenResponse> {
+        return await this.request<PersonalAccessTokenResponse>('/api/me/access-token', {
+            method: 'POST'
+        })
+    }
+
+    async regeneratePersonalAccessToken(): Promise<PersonalAccessTokenResponse> {
+        return await this.request<PersonalAccessTokenResponse>('/api/me/access-token/regenerate', {
+            method: 'POST'
+        })
+    }
+
+    async getFeishuConfig(): Promise<FeishuPublicConfigResponse> {
+        return await this.request<FeishuPublicConfigResponse>('/api/auth/feishu/config')
+    }
+
+    async getFeishuBindings(): Promise<FeishuBindingsResponse> {
+        return await this.request<FeishuBindingsResponse>('/api/feishu/bindings')
+    }
+
+    async addFeishuBinding(body: CreateFeishuBindingRequest): Promise<CreateFeishuBindingResponse> {
+        return await this.request<CreateFeishuBindingResponse>('/api/feishu/bindings', {
+            method: 'POST',
+            body: JSON.stringify(body)
+        })
+    }
+
+    async removeFeishuBinding(email: string): Promise<void> {
+        await this.request(`/api/feishu/bindings/${encodeURIComponent(email)}`, {
+            method: 'DELETE'
         })
     }
 

@@ -7,7 +7,10 @@ import { SessionIdentityConflictError } from '../../store/sessions'
 
 function createApp(engine: Partial<SyncEngine>) {
     const app = new Hono()
-    app.route('/cli', createCliRoutes(() => engine as SyncEngine))
+    app.route('/cli', createCliRoutes(
+        () => engine as SyncEngine,
+        () => ({ namespace: 'default', tokenId: null, source: 'legacy' })
+    ))
     return app
 }
 

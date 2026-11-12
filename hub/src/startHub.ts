@@ -152,6 +152,20 @@ export async function startHub(options: StartHubOptions = {}): Promise<HubInstan
     console.log(`[Hub] HAPI_LISTEN_PORT: ${config.listenPort} (${formatSource(config.sources.listenPort)})`)
     console.log(`[Hub] HAPI_PUBLIC_URL: ${config.publicUrl} (${formatSource(config.sources.publicUrl)})`)
 
+    if (config.feishuEnabled && config.feishuRedirectUri) {
+        console.log(`[Hub] Feishu login: enabled (redirect: ${config.feishuRedirectUri})`)
+        if (config.feishuRedirectUri.includes('localhost')) {
+            console.warn(
+                '[Hub] Feishu redirect URI points at localhost. '
+                + 'Set HAPI_PUBLIC_URL or FEISHU_REDIRECT_URI to the public hub URL for remote clients.'
+            )
+        }
+    } else if (config.feishuAppId || config.feishuAppSecret) {
+        console.warn('[Hub] Feishu app id/secret set but the redirect URI is missing; Feishu login is disabled.')
+    } else {
+        console.log('[Hub] Feishu login: disabled (set FEISHU_APP_ID and FEISHU_APP_SECRET)')
+    }
+
     if (!config.telegramEnabled) {
         console.log('[Hub] Telegram: disabled (no TELEGRAM_BOT_TOKEN)')
     } else {
@@ -179,6 +193,14 @@ export async function startHub(options: StartHubOptions = {}): Promise<HubInstan
     }
 
     const store = new Store(config.dbPath)
+    if (!config.legacySharedTokenEnabled) {
+        if (!store.accessTokens.getActiveByNamespace('default')) {
+            console.warn(
+                '[Hub] HAPI_LEGACY_SHARED_TOKEN=off and no active default-namespace access token exists. '
+                + 'The owner cannot sign in until one is created.'
+            )
+        }
+    }
     const jwtSecret = await getOrCreateJwtSecret()
     const shareTokenSecret = await getOrCreateShareTokenSecret(config.dataDir)
     const vapidKeys = await getOrCreateVapidKeys(config.dataDir)
@@ -215,6 +237,13 @@ export async function startHub(options: StartHubOptions = {}): Promise<HubInstan
     syncEngine = new SyncEngine(store, socketServer.io, socketServer.rpcRegistry, sseManager)
     // Accountable principal for A2A work-graph notify ingest (P3).
     syncEngine.setHubOwnerUserId(await getOrCreateOwnerId())
+
+    // Revocation is immediate: drop the token's live CLI/terminal sockets and
+    // SSE streams in addition to rejecting its JWT on the next request.
+    store.accessTokens.onRevoke((tokenId) => {
+        socketServer.disconnectAccessToken(tokenId)
+        sseManager?.closeByTokenId(tokenId)
+    })
 
     const androidPushConfig = resolveAndroidPushConfig(config)
     const notificationChannels: NotificationChannel[] = []
