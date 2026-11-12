@@ -1743,9 +1743,11 @@ export function SessionList(props: {
     const [runningSectionCollapsed, setRunningSectionCollapsed] = useState(false)
     const [activeSectionCollapsed, setActiveSectionCollapsed] = useState(false)
     const [pinnedSectionCollapsed, setPinnedSectionCollapsed] = useState(false)
-    // Per-group "hide everything that is not connected" fold. Groups that are
-    // mostly archived history otherwise only offer expand, never a way back.
-    const [collapsedToActiveGroups, setCollapsedToActiveGroups] = useState<Set<string>>(
+    // Per-group "hide everything that is not connected" fold. The fold is the
+    // default for groups with live rows, so a directory that is mostly archived
+    // history opens compact. Expanding a group records it here until the user
+    // folds it again.
+    const [expandedFromActiveGroups, setExpandedFromActiveGroups] = useState<Set<string>>(
         () => new Set()
     )
     const autoExpandedSelectedSessionKeyRef = useRef<string | null>(null)
@@ -1841,17 +1843,20 @@ export function SessionList(props: {
         )
     }
 
-    // "Collapse to active" keeps the connected rows only. The open session
-    // always stays visible, the same rule the status and unread filters follow.
+    // "Collapse to active" keeps the connected rows only. The open session and
+    // unread rows always stay visible, the same rules the status filter and the
+    // unread-visibility setting follow.
     const getActiveOnlySessions = (group: SessionGroup): SessionSummary[] => {
         return group.sessions.filter(session =>
-            session.active || session.id === selectedSessionId
+            session.active
+            || session.id === selectedSessionId
+            || (keepUnreadSessionsVisible && isSessionUnread(session))
         )
     }
 
-    // Leaving the fold restores the preview the group had before collapsing,
-    // widened when needed so an active row past the preview limit is not
-    // yanked out of sight by the expansion itself.
+    // Expanding restores a preview batch past the fold: the previous preview
+    // width, at least one more batch than the folded rows so Expand always
+    // reveals something, and far enough to reach the last live row.
     const getRestoredGroupVisibleCount = (group: SessionGroup): number => {
         const current = Math.min(getGroupVisibleCount(group), group.sessions.length)
         const required = group.sessions.reduce((max, session, index) => {
@@ -1859,24 +1864,25 @@ export function SessionList(props: {
                 ? Math.max(max, index + 1)
                 : max
         }, 0)
-        return Math.max(current, required)
+        const foldedCount = getActiveOnlySessions(group).length
+        return Math.max(current, required, foldedCount + sessionPreviewLimit)
     }
 
     const collapseGroupToActive = (groupKey: string) => {
-        setCollapsedToActiveGroups(prev => {
-            if (prev.has(groupKey)) return prev
+        setExpandedFromActiveGroups(prev => {
+            if (!prev.has(groupKey)) return prev
             const next = new Set(prev)
-            next.add(groupKey)
+            next.delete(groupKey)
             return next
         })
     }
 
     const expandGroupFromActive = (group: SessionGroup) => {
         const restoredCount = getRestoredGroupVisibleCount(group)
-        setCollapsedToActiveGroups(prev => {
-            if (!prev.has(group.key)) return prev
+        setExpandedFromActiveGroups(prev => {
+            if (prev.has(group.key)) return prev
             const next = new Set(prev)
-            next.delete(group.key)
+            next.add(group.key)
             return next
         })
         setSessionVisibleCounts(prev => {
@@ -2034,11 +2040,23 @@ export function SessionList(props: {
 
     const renderDirectoryGroup = (group: SessionGroup) => {
         const isCollapsed = isGroupCollapsed(group)
-        // Search shows every match and the status filter already decided what
-        // the group contains, so the fold only applies to the unfiltered list.
+        // Inactive rows the fold would hide. Rows the fold keeps (active,
+        // selected, unread with the setting on) do not count, so a group with
+        // nothing foldable keeps the regular preview.
+        const hasFoldableSessions = group.sessions.some(session =>
+            !session.active
+            && session.id !== selectedSessionId
+            && !(keepUnreadSessionsVisible && isSessionUnread(session))
+        )
+        // The active fold is the default: a group with live rows shows only the
+        // connected rows (and the open session) until it is expanded. Search
+        // and the status/unread filters already decided what the group
+        // contains, so the fold only applies to the unfiltered list.
         const isActiveOnly = !isFiltering
             && listView.status === 'all'
-            && collapsedToActiveGroups.has(group.key)
+            && group.hasActiveSession
+            && hasFoldableSessions
+            && !expandedFromActiveGroups.has(group.key)
         const activeOnlySessions = getActiveOnlySessions(group)
         // A collapsed group still shows its unread rows, so new output in a
         // quiet project is never folded out of sight.
@@ -2059,10 +2077,12 @@ export function SessionList(props: {
         })
         const collapseCount = visibleGroupSessions.length - previousGroupSessions.length
         const canShowFewerSessions = !isActiveOnly && previousLimit < currentLimit && collapseCount > 0
-        // Only hide rows that are on screen right now; a fold that changes
-        // nothing is noise, and it keeps the expand count meaningful.
-        const canCollapseToActive = group.sessions.some(session => session.active)
-            && visibleGroupSessions.some(session => !session.active && session.id !== selectedSessionId)
+        // Offer the way back to the fold whenever the group still has inactive
+        // rows to hide. Checked against the whole group, not just the preview
+        // batch: inactive rows past the preview limit need a way back too.
+        const canCollapseToActive = !isActiveOnly
+            && group.hasActiveSession
+            && hasFoldableSessions
         const restoredVisibleGroupSessions = isActiveOnly
             ? getVisibleSessionPreview(group.sessions, {
                 selectedSessionId,
@@ -2253,6 +2273,23 @@ export function SessionList(props: {
             const next = new Map(prev)
             let changed = false
             for (const key of next.keys()) {
+                if (!knownKeys.has(key)) {
+                    next.delete(key)
+                    changed = true
+                }
+            }
+            return changed ? next : prev
+        })
+    }, [allGroups])
+
+    // Clean up active-fold opt-outs for groups that no longer exist.
+    useEffect(() => {
+        setExpandedFromActiveGroups(prev => {
+            if (prev.size === 0) return prev
+            const knownKeys = new Set(allGroups.map(g => g.key))
+            const next = new Set(prev)
+            let changed = false
+            for (const key of next) {
                 if (!knownKeys.has(key)) {
                     next.delete(key)
                     changed = true

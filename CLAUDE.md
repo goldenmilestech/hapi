@@ -146,7 +146,7 @@ git push fork main
 | `main`（2026-11-11） | 会话列表完成圆点：回合结束且未读时显示，打开行后立即清除 | `web/src/components/SessionList.tsx`、`SessionRowSummary.tsx`、`web/src/lib/locales/` |
 | `fix/session-running-spinner`（2026-11-11 已合入 `main`） | 运行中会话在 presence 呼吸点之外恢复转圈动画（上游 0.34.4 移除了行内 spinner） | `web/src/components/SessionRowSummary.tsx` |
 | `main`（2026-11-11） | 旧 runner 兼容：只有声明 `spawn-reserved-session-id` 能力的 runner 才预分配会话 id；旧 CLI 直接走创建流程，避免 “Runner reported unexpected session id” 误报和无法 adopt 的幽灵 stub | `shared/src/runnerCapabilities.ts`、`hub/src/sync/syncEngine.ts`、`hub/src/sync/syncEngineSpawnPrealloc.test.ts` |
-| `main`（2026-11-11） | 会话列表分组支持「收起到活跃」：隐藏非活跃/已归档行，仅保留活跃会话与当前打开会话，展开后恢复原预览批次 | `web/src/components/SessionList.tsx`、`web/src/lib/locales/` |
+| `main`（2026-11-11，2026-11-12 改为默认开启） | 会话列表分组「收起到活跃」：有活跃会话的分组默认只显示活跃行与当前打开会话，展开后按批次恢复非活跃行，可再次收起 | `web/src/components/SessionList.tsx`、`web/src/lib/locales/` |
 | `main`（2026-11-11） | 旧 CLI（≤0.30.x）把首条 prompt 原样写进 `summary`，首条消息带图片时标题变成上传路径。Hub 丢弃这类上传路径标题、按首条用户文本回填 `promptTitle`，启动时修复已有会话，并允许 AI 标题重新生成 | `hub/src/sync/uploadPathTitle.ts`、`promptTitle.ts`、`sessionCache.ts`、`titleSuggestion.ts`、`automaticTitleSuggestion.ts`、`socket/handlers/cli/sessionHandlers.ts`、`syncEngine.ts` |
 | `feat/slash-menu-skills`（2026-11-11 已合入 `main`） | Web `/` 菜单并入会话全部 skills（全局/工作区/插件），技能行以 `$name` 插入，`$` 菜单不变；覆盖所有 flavor | `web/src/hooks/queries/useSlashCommands.ts`、`useSkills.ts`、`web/src/hooks/useActiveSuggestions.ts` |
 | `main`（2026-11-11） | 每会话 context 上限与自动压缩：上下文 popover 内可设置 100k–1M 上限；Claude 会话通过原生 `autoCompactWindow`（`CLAUDE_CODE_AUTO_COMPACT_WINDOW`）自动压缩，其他支持压缩的 flavor 由 hub 在用量达到有效上限 90% 时自动投递 `/compact`（Cursor/Gemini 为 `/compress`）；popover 底部「压缩上下文」按钮直接发送压缩命令 | `shared/src/contextLimit.ts`、`shared/src/schemas.ts`、`hub/src/store/`、`hub/src/sync/contextUsage.ts`、`hub/src/sync/syncEngine.ts`、`hub/src/web/routes/sessions.ts`、`web/src/components/AssistantChat/StatusBar.tsx`、`cli/src/claude/utils/contextLimit.ts` |
@@ -165,3 +165,4 @@ git push fork main
 - 2026-11-11：修复旧 runner（0.30.7）从 Web 创建会话时报 “Runner reported unexpected session id”、但会话实际已创建的问题：hub 改为按 runner 能力协商是否预分配会话 id，旧 runner 不再产生误报和无法 adopt 的幽灵 stub。
 - auto-title 的注入点（`sessionHandlers.ts` 的 `socket.on('message')`）已随合入适配到 0.34.4；后续上游同步时仍需按定制清单做端到端验证。
 - 2026-11-11：`sessions` 表新增 `context_limit`（schema v32），旧库启动时自动 ALTER；`contextLimit` 作为可选字段进入 Session 协议，旧客户端/旧 runner 不受影响。
+- 2026-11-12：「收起到活跃」改为默认行为：有活跃会话的分组默认只渲染活跃行与当前打开会话，`expandedFromActiveGroups` 记录用户展开过的分组（空集合 = 全部默认收起）；展开时至少多显示一个预览批次，保证非活跃行在预览上限之后也能被展开看到。

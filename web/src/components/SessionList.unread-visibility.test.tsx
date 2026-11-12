@@ -101,6 +101,21 @@ describe('SessionList unread visibility', () => {
         expect(screen.queryByTestId('session-group-unread-peek')).toBeNull()
         expect(screen.queryByRole('button', { name: /Read row/ })).toBeNull()
     })
+
+    it('keeps unread rows visible while a group is folded to active by default', () => {
+        seedReads({ read: 1000, unread: 1000 })
+        renderSessionList([
+            makeSession({ id: 'live', active: true, updatedAt: 3000, metadata: { path: '/work/mixed', name: 'Live row' } }),
+            makeSession({ id: 'read', updatedAt: 1000, metadata: { path: '/work/mixed', name: 'Read row' } }),
+            makeSession({ id: 'unread', updatedAt: 2000, metadata: { path: '/work/mixed', name: 'Unread row' } })
+        ])
+
+        // The default fold hides read inactive rows but never unread ones.
+        expect(screen.getByRole('button', { name: /Live row/ })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /Unread row/ })).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Read row/ })).toBeNull()
+        expect(screen.getByRole('button', { name: 'Expand 1' })).toBeInTheDocument()
+    })
 })
 
 describe('SessionList unread visibility setting off', () => {

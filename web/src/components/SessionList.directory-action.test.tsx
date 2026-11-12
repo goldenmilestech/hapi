@@ -1143,7 +1143,7 @@ describe('SessionList collapse behavior', () => {
         expect(screen.getByRole('button', { name: 'Expand 2' })).toBeInTheDocument()
     })
 
-    it('collapses a mostly archived group to its active sessions and expands back', () => {
+    it('collapses a mostly archived group to its active sessions by default', () => {
         localStorage.setItem('hapi-session-preview-limit', '2')
         const sessions = [
             makeSession({
@@ -1165,27 +1165,27 @@ describe('SessionList collapse behavior', () => {
 
         render(renderSessionList(sessions, null))
 
+        // The fold is the default: only the live row shows until expanded.
+        expect(screen.getByRole('button', { name: /Live task/ })).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Archived task 1/ })).toBeNull()
+        expect(screen.queryByRole('button', { name: 'Collapse to active' })).toBeNull()
+        expect(screen.getByRole('button', { name: 'Expand 2' })).toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Expand 2' }))
+
         expect(screen.getByRole('button', { name: /Live task/ })).toBeInTheDocument()
         expect(screen.getByRole('button', { name: /Archived task 1/ })).toBeInTheDocument()
-        expect(screen.queryByRole('button', { name: /Archived task 2/ })).toBeNull()
+        expect(screen.getByRole('button', { name: /Archived task 2/ })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Collapse to active' })).toBeInTheDocument()
 
         fireEvent.click(screen.getByRole('button', { name: 'Collapse to active' }))
 
         expect(screen.getByRole('button', { name: /Live task/ })).toBeInTheDocument()
         expect(screen.queryByRole('button', { name: /Archived task 1/ })).toBeNull()
-        expect(screen.queryByRole('button', { name: /Archived task 2/ })).toBeNull()
-        expect(screen.queryByRole('button', { name: 'Collapse to active' })).toBeNull()
-        expect(screen.getByRole('button', { name: 'Expand 1' })).toBeInTheDocument()
-
-        fireEvent.click(screen.getByRole('button', { name: 'Expand 1' }))
-
-        expect(screen.getByRole('button', { name: /Archived task 1/ })).toBeInTheDocument()
-        expect(screen.queryByRole('button', { name: /Archived task 2/ })).toBeNull()
-        expect(screen.getByRole('button', { name: 'Collapse to active' })).toBeInTheDocument()
         expect(screen.getByRole('button', { name: 'Expand 2' })).toBeInTheDocument()
     })
 
-    it('offers the active fold even when the group fits inside the preview limit', () => {
+    it('folds small groups to active even when they fit inside the preview limit', () => {
         const sessions = [
             makeSession({
                 id: 'session-active',
@@ -1206,12 +1206,8 @@ describe('SessionList collapse behavior', () => {
 
         render(renderSessionList(sessions, null))
 
-        // The whole group is already previewed; the fold is still offered
-        // because the active rows and the archived rows are both on screen.
-        expect(screen.getByRole('button', { name: /Archived task 2/ })).toBeInTheDocument()
-
-        fireEvent.click(screen.getByRole('button', { name: 'Collapse to active' }))
-
+        // The whole group fits the preview, but the inactive rows are still
+        // folded away by the default.
         expect(screen.getByRole('button', { name: /Live task/ })).toBeInTheDocument()
         expect(screen.queryByRole('button', { name: /Archived task 1/ })).toBeNull()
         expect(screen.queryByRole('button', { name: /Archived task 2/ })).toBeNull()
@@ -1221,9 +1217,15 @@ describe('SessionList collapse behavior', () => {
 
         expect(screen.getByRole('button', { name: /Archived task 1/ })).toBeInTheDocument()
         expect(screen.getByRole('button', { name: /Archived task 2/ })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Collapse to active' })).toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Collapse to active' }))
+
+        expect(screen.queryByRole('button', { name: /Archived task 1/ })).toBeNull()
+        expect(screen.getByRole('button', { name: 'Expand 2' })).toBeInTheDocument()
     })
 
-    it('keeps the open inactive session visible while collapsed to active', () => {
+    it('keeps the open inactive session visible while folded to active', () => {
         localStorage.setItem('hapi-session-preview-limit', '3')
         const sessions = [
             makeSession({
@@ -1244,7 +1246,6 @@ describe('SessionList collapse behavior', () => {
         ]
 
         render(renderSessionList(sessions, 'session-idle-2'))
-        fireEvent.click(screen.getByRole('button', { name: 'Collapse to active' }))
 
         expect(screen.getByRole('button', { name: /Live task/ })).toBeInTheDocument()
         expect(screen.getByRole('button', { name: /Archived task 2/ })).toBeInTheDocument()
@@ -1271,7 +1272,7 @@ describe('SessionList collapse behavior', () => {
         expect(screen.getByRole('button', { name: 'Expand 1' })).toBeInTheDocument()
     })
 
-    it('does not offer a no-op collapse when required sessions exceed the preview limit', () => {
+    it('folds a group whose live rows exceed the preview limit', () => {
         localStorage.setItem('hapi-session-preview-limit', '2')
         const sessions = Array.from({ length: 4 }, (_, index) => makeSession({
             id: `session-${index + 1}`,
@@ -1287,22 +1288,24 @@ describe('SessionList collapse behavior', () => {
 
         render(renderSessionList(sessions, null))
 
-        expect(screen.queryByRole('button', { name: /Collapse/ })).toBeNull()
+        expect(screen.getByRole('button', { name: /Task 2/ })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /Task 4/ })).toBeInTheDocument()
         expect(screen.queryByRole('button', { name: /Task 1/ })).toBeNull()
+        expect(screen.queryByRole('button', { name: 'Collapse to active' })).toBeNull()
         expect(screen.getByRole('button', { name: 'Expand 1' })).toBeInTheDocument()
 
         fireEvent.click(screen.getByRole('button', { name: 'Expand 1' }))
 
         expect(screen.getByRole('button', { name: /Task 1/ })).toBeInTheDocument()
-        expect(screen.getByRole('button', { name: 'Collapse 1' })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Collapse to active' })).toBeInTheDocument()
 
-        fireEvent.click(screen.getByRole('button', { name: 'Collapse 1' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Collapse to active' }))
 
         expect(screen.queryByRole('button', { name: /Task 1/ })).toBeNull()
-        expect(screen.queryByRole('button', { name: /Collapse/ })).toBeNull()
+        expect(screen.getByRole('button', { name: 'Expand 1' })).toBeInTheDocument()
     })
 
-    it('expands from the rendered count when required sessions exceed the preview limit', () => {
+    it('expands from the folded row count when live rows exceed the preview limit', () => {
         localStorage.setItem('hapi-session-preview-limit', '2')
         const sessions = Array.from({ length: 8 }, (_, index) => makeSession({
             id: `session-${index + 1}`,
@@ -1318,6 +1321,7 @@ describe('SessionList collapse behavior', () => {
 
         render(renderSessionList(sessions, null))
 
+        expect(screen.getByRole('button', { name: /Task 1/ })).toBeInTheDocument()
         expect(screen.getByRole('button', { name: /Task 5/ })).toBeInTheDocument()
         expect(screen.queryByRole('button', { name: /Task 6/ })).toBeNull()
         expect(screen.getByRole('button', { name: 'Expand 2' })).toBeInTheDocument()

@@ -89,7 +89,10 @@ const MIXED_ROWS = [
 
 it('lists active sessions ahead of archived ones by default', () => {
     const rowOrder = renderSessions(MIXED_ROWS)
-    // Archived-only /b stays collapsed as before; within /a the live row leads.
+    // Archived-only /b stays collapsed as before; /a opens folded to its live
+    // row, and expanding it keeps the live row ahead of the archived one.
+    expect(rowOrder()).toEqual(['liveOld'])
+    fireEvent.click(screen.getByRole('button', { name: 'Expand 1' }))
     expect(rowOrder()).toEqual(['liveOld', 'archivedNew'])
 })
 
