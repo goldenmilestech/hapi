@@ -3,6 +3,7 @@ import {
     MACHINE_CAPABILITIES,
     MachineListDirectoryRequestSchema,
     MachinePathsExistsRequestSchema,
+    OpenWorkspaceRequestSchema,
     RenameMachineRequestSchema,
     SpawnSessionRequestSchema
 } from '@hapi/protocol'
@@ -309,6 +310,48 @@ export function createMachinesRoutes(
             return c.json(await engine.checkPathsExist(machineId, uniquePaths))
         } catch (error) {
             return c.json({ error: error instanceof Error ? error.message : 'Failed to check paths' }, 500)
+        }
+    })
+
+    app.post('/machines/:id/open-workspace', async (c) => {
+        const engine = getSyncEngine()
+        if (!engine) {
+            return c.json({ success: false, error: 'Not connected' }, 503)
+        }
+
+        const machineId = c.req.param('id')
+        const machine = requireMachine(c, engine, machineId)
+        if (machine instanceof Response) {
+            return machine
+        }
+        if (!machine.metadata?.capabilities?.includes(MACHINE_CAPABILITIES.OpenWorkspace)) {
+            return c.json({
+                success: false,
+                error: 'This runner must be upgraded before opening VS Code',
+                code: 'runner_upgrade_required',
+            }, 409)
+        }
+
+        const body = await c.req.json().catch(() => null)
+        const parsed = OpenWorkspaceRequestSchema.safeParse(body)
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid body' }, 400)
+        }
+
+        try {
+            return c.json(await engine.openWorkspace(machineId, parsed.data.directory))
+        } catch (error) {
+            if (error instanceof RpcTargetMissingError) {
+                return c.json({
+                    success: false,
+                    error: error.message,
+                    code: RPC_TARGET_MISSING_ERROR_CODE
+                }, 503)
+            }
+            return c.json({
+                success: false,
+                error: error instanceof Error ? error.message : 'Failed to open workspace'
+            }, 500)
         }
     })
 

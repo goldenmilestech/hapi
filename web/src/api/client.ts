@@ -72,6 +72,7 @@ import type {
     OpencodeModelsResponse,
     OpencodeModelVariantsResponse,
     OpencodeReasoningEffortResponse,
+    OpenWorkspaceResponse,
     PiModelsResponse,
     ClaudeModelsResponse,
     QueuedStateResponse,
@@ -1128,6 +1129,16 @@ export class ApiClient {
     async getMachineAgentAvailability(machineId: string): Promise<AgentAvailabilityResponse> {
         return await this.request<AgentAvailabilityResponse>(
             `/api/machines/${encodeURIComponent(machineId)}/agent-availability`
+        )
+    }
+
+    async openWorkspaceInEditor(machineId: string, directory: string): Promise<OpenWorkspaceResponse> {
+        return await this.request<OpenWorkspaceResponse>(
+            `/api/machines/${encodeURIComponent(machineId)}/open-workspace`,
+            {
+                method: 'POST',
+                body: JSON.stringify({ directory })
+            }
         )
     }
 

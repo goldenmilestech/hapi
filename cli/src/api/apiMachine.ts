@@ -14,6 +14,7 @@ import {
     ListCodexSessionsRpcRequestSchema,
     ListOpencodeSessionsRpcRequestSchema,
     ListPiSessionsRpcRequestSchema,
+    OpenWorkspaceRequestSchema,
     type ArchiveCodexSessionRpcResponse,
     type AgentAvailabilityResponse,
     type ListCodexSessionsRpcResponse,
@@ -21,6 +22,7 @@ import {
     type ListPiSessionsRpcResponse,
     type MachineDirectoryEntry,
     type MachineListDirectoryResponse,
+    type OpenWorkspaceResponse,
     type PathExistsResponse
 } from '@hapi/protocol/apiTypes'
 import { RPC_METHODS } from '@hapi/protocol/rpcMethods'
@@ -77,6 +79,7 @@ import { homedir } from 'node:os'
 import type { CursorChatStoreStatus } from '@hapi/protocol/apiTypes'
 import { MachinePathPolicy } from './machinePathPolicy'
 import { getAgentAvailabilityResponse } from '@/agent/agentAvailability'
+import { openWorkspaceInEditor } from '@/modules/common/openWorkspace'
 
 export { normalizeWindowsDriveRoot } from './machinePathPolicy'
 
@@ -151,6 +154,33 @@ export class ApiMachineClient {
         setAgyCatalogChangeListener(() => {
             this.socket.emit('machine-agy-models-changed', { machineId: this.machine.id })
         })
+
+        this.rpcHandlerManager.registerHandler<unknown, OpenWorkspaceResponse>(
+            RPC_METHODS.OpenWorkspace,
+            async (params) => {
+                const parsed = OpenWorkspaceRequestSchema.safeParse(params)
+                if (!parsed.success) {
+                    return { success: false, error: 'Invalid open-workspace request' }
+                }
+
+                const rawDirectory = parsed.data.directory.trim()
+                if (!rawDirectory) {
+                    return { success: false, error: 'Directory is required' }
+                }
+
+                const resolvedDirectory = await this.pathPolicy.resolveForCheck(rawDirectory)
+                if (!this.pathPolicy.isWithinSpawnRoots(resolvedDirectory)) {
+                    return { success: false, error: 'Directory is outside workspace roots' }
+                }
+
+                const directoryStat = await stat(resolvedDirectory).catch(() => null)
+                if (!directoryStat?.isDirectory()) {
+                    return { success: false, error: 'Directory does not exist' }
+                }
+
+                return await openWorkspaceInEditor(resolvedDirectory)
+            }
+        )
 
         this.rpcHandlerManager.registerHandler<unknown, AgentAvailabilityResponse>(
             RPC_METHODS.AgentAvailability,

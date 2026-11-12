@@ -280,6 +280,8 @@ export default {
   'session.title': 'Files',
   'session.view.returnToChat': 'Return to conversation',
   'session.more': 'More actions',
+  'session.openInVscode': 'Open in VS Code',
+  'session.openInVscode.failed': 'Could not open VS Code',
   'session.sidebar.show': 'Show session list',
   'session.outline.open': 'Conversation outline',
   'session.outline.close': 'Close outline',
