@@ -4,6 +4,7 @@ import {
     isBotMentioned,
     parseBindCommand,
     parseFeishuEnvelope,
+    parseHapiCommand,
     parseUnbindCommand,
     stripFeishuMentions,
     type FeishuMessage
@@ -74,6 +75,17 @@ describe('Feishu event parser', () => {
         expect(parseBindCommand('hello')).toBeNull()
         expect(parseUnbindCommand('/unbind')).toBe(true)
         expect(parseUnbindCommand('解绑')).toBe(true)
+    })
+
+    it('parses /hapi commands and leaves ordinary chat to the Manager', () => {
+        expect(parseHapiCommand('/hapi 清理一下')).toEqual({ kind: 'text', text: '清理一下' })
+        expect(parseHapiCommand('/hapi@HapiBot 清理一下')).toEqual({ kind: 'text', text: '清理一下' })
+        expect(parseHapiCommand('／hapi bind ab12cd')).toEqual({ kind: 'bind', code: 'AB12CD' })
+        expect(parseHapiCommand('/hapi unbind')).toEqual({ kind: 'unbind' })
+        expect(parseHapiCommand('/hapi')).toEqual({ kind: 'help' })
+        expect(parseHapiCommand('/hapi help')).toEqual({ kind: 'help' })
+        expect(parseHapiCommand('清理一下')).toBeNull()
+        expect(parseHapiCommand('/bind ab12cd')).toBeNull()
     })
 
     it('recognizes the bot by open id or app mention type', () => {

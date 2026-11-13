@@ -12,6 +12,7 @@ import {
     isBotMentioned,
     parseBindCommand,
     parseFeishuEnvelope,
+    parseHapiCommand,
     parseUnbindCommand,
     stripFeishuMentions,
     type FeishuEventEnvelope,
@@ -28,7 +29,14 @@ const BIND_INSTRUCTIONS = [
     '当前对话还没有绑定 Hapi 会话。',
     '',
     '请打开 Hapi 设置页 → 飞书，选择会话并生成绑定码，',
-    '然后在这里发送：/bind <绑定码>'
+    '然后在这里发送：/hapi bind <绑定码>'
+].join('\n')
+
+const HAPI_USAGE = [
+    'Hapi 命令：',
+    '/hapi <消息> — 发送给绑定会话',
+    '/hapi bind <绑定码> — 绑定当前对话',
+    '/hapi unbind — 解绑'
 ].join('\n')
 
 export type FeishuBotOptions = {
@@ -469,7 +477,7 @@ export class FeishuBot implements NotificationChannel {
 
         const rawText = extractFeishuText(message)
         if (rawText === null) {
-            await this.reply(message, '目前只支持文本消息。')
+            // Attachments and other message types belong to the Manager bot.
             return
         }
 
@@ -478,13 +486,34 @@ export class FeishuBot implements NotificationChannel {
             return
         }
 
-        const bindCode = parseBindCommand(text)
-        if (bindCode) {
-            await this.bindChat(envelope, message, bindCode)
+        const hapiCommand = parseHapiCommand(text)
+        const legacyBindCode = hapiCommand ? null : parseBindCommand(text)
+        const legacyUnbind = hapiCommand ? false : parseUnbindCommand(text)
+        if (!hapiCommand && !legacyBindCode && !legacyUnbind) {
+            // Ordinary chat belongs to the Manager. The Hapi plugin must not
+            // consume or answer it.
             return
         }
-        if (parseUnbindCommand(text)) {
+
+        if (hapiCommand?.kind === 'help') {
+            await this.reply(message, HAPI_USAGE)
+            return
+        }
+        if (hapiCommand?.kind === 'bind') {
+            await this.bindChat(envelope, message, hapiCommand.code)
+            return
+        }
+        if (legacyBindCode) {
+            await this.bindChat(envelope, message, legacyBindCode)
+            return
+        }
+        if (hapiCommand?.kind === 'unbind' || legacyUnbind) {
             await this.unbindChat(envelope, message)
+            return
+        }
+
+        const messageText = hapiCommand?.kind === 'text' ? hapiCommand.text : text
+        if (!messageText) {
             return
         }
 
@@ -514,7 +543,7 @@ export class FeishuBot implements NotificationChannel {
         }
 
         await this.options.syncEngine.sendMessage(binding.sessionId, {
-            text,
+            text: messageText,
             localId: `feishu:${message.messageId}`,
             sentFrom: 'feishu-bot'
         })

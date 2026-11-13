@@ -41,6 +41,29 @@ function cardOf(message: SentMessage | undefined): Record<string, unknown> | nul
         : null
 }
 
+function messageEvent(text: string, eventId: string, messageId: string): string {
+    return JSON.stringify({
+        header: {
+            event_id: eventId,
+            event_type: 'im.message.receive_v1',
+            token: 'token'
+        },
+        event: {
+            sender: {
+                sender_type: 'user',
+                sender_id: { open_id: 'ou_alice' }
+            },
+            message: {
+                message_id: messageId,
+                chat_id: 'oc_chat_1',
+                chat_type: 'p2p',
+                message_type: 'text',
+                content: JSON.stringify({ text })
+            }
+        }
+    })
+}
+
 function answerCardText(card: Record<string, unknown>): string | null {
     const body = card.body as { elements?: Array<{ content?: string }> } | undefined
     return body?.elements?.[0]?.content ?? null
@@ -509,5 +532,57 @@ describe('FeishuBot', () => {
 
         await bot.sendReady({ id: session.id, metadata: { name: 'Unbound' } } as never)
         expect(sent).toEqual([])
+    })
+
+    it('only consumes /hapi commands and leaves ordinary chat to the Manager', async () => {
+        const store = new Store(':memory:')
+        const session = store.sessions.getOrCreateSession(
+            'test-session',
+            { name: 'Manager', path: '/tmp' },
+            {},
+            'default'
+        )
+        store.feishuBotBindings.bind({
+            chatId: 'oc_chat_1',
+            chatType: 'p2p',
+            chatName: null,
+            namespace: 'default',
+            sessionId: session.id,
+            sessionTitle: 'Manager'
+        })
+
+        const sent: SentMessage[] = []
+        const forwarded: Array<{ sessionId: string; text: string; localId?: string | null }> = []
+        const bot = new FeishuBot({
+            store,
+            syncEngine: {
+                getSession: () => ({
+                    id: session.id,
+                    active: true,
+                    metadata: { name: 'Manager', path: '/tmp' }
+                }),
+                sendMessage: async (sessionId: string, payload: { text: string; localId?: string | null }) => {
+                    forwarded.push({ sessionId, text: payload.text, localId: payload.localId })
+                }
+            } as never,
+            config: { appId: 'app', appSecret: 'secret', verificationToken: 'token', encryptKey: null },
+            api: fakeApi(sent)
+        })
+
+        await bot.handleWebhook(messageEvent('普通聊天', 'evt-1', 'om_1'), new Headers())
+        expect(forwarded).toEqual([])
+        expect(sent).toEqual([])
+
+        await bot.handleWebhook(messageEvent('/hapi 清理一下', 'evt-2', 'om_2'), new Headers())
+        expect(forwarded).toEqual([{
+            sessionId: session.id,
+            text: '清理一下',
+            localId: 'feishu:om_2'
+        }])
+        expect(sent).toEqual([])
+
+        await bot.handleWebhook(messageEvent('/hapi', 'evt-3', 'om_3'), new Headers())
+        expect(forwarded).toHaveLength(1)
+        expect(sent[0]).toMatchObject({ kind: 'text', chatId: 'oc_chat_1' })
     })
 })
