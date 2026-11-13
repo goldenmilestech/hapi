@@ -1725,12 +1725,14 @@ function SessionChatInner(props: SessionChatProps) {
     const unseenCount = useUnseenBlockCount(props.viewMode, visibleBlocks)
 
     // The outline lists every prompt in the session, not just the paged-in
-    // window. Fetch the hub-side index while the panel is open; loaded blocks
-    // still win on merge so labels follow live edits and failed local sends.
+    // window. Prefetch the hub-side index with the session so opening the
+    // panel almost always has the complete list; the panel shows a loading
+    // state instead of a partial window-only list until it arrives. Loaded
+    // blocks still win on merge so labels follow live edits and failed local
+    // sends.
     const outlineIndexQuery = useQuery({
         queryKey: queryKeys.sessionOutline(props.session.id),
         queryFn: ({ signal }) => props.api.getSessionOutline(props.session.id, signal),
-        enabled: outlineOpen,
         staleTime: 30_000,
         retry: false,
     })
@@ -2261,6 +2263,7 @@ function SessionChatInner(props: SessionChatProps) {
                         forceScrollToken={forceScrollToken}
                         outlineOpen={outlineOpen}
                         outlineItems={outlineItems}
+                        outlineItemsLoading={outlineIndexQuery.isPending}
                         onOutlineOpenChange={setOutlineOpen}
                         initialTargetMessageId={props.initialTargetMessageId}
                         initialTargetMessageQuery={props.initialTargetMessageQuery}

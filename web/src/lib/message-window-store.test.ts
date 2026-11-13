@@ -2798,3 +2798,72 @@ describe('reasoning snapshot compaction', () => {
         expect(state.newestSeq).toBe(3)
     })
 })
+
+describe('history context window tail-sync protection', () => {
+    function contextApi(contextTarget: DecryptedMessage, getMessages: ReturnType<typeof vi.fn>) {
+        const api = createApi(getMessages as unknown as ApiClient['getMessages'])
+        api.getMessageContext = vi.fn(async () => contextResponse([contextTarget], {
+            epoch: 7,
+            hasMore: false,
+            nextBeforeAt: 40_000,
+            nextBeforeSeq: 40,
+            snapshotHeadAt: 100_000,
+            snapshotHeadSeq: 100,
+            targetMessageId: contextTarget.id
+        }))
+        return api
+    }
+
+    it('keeps a jumped-to context through a background tail sync', async () => {
+        const id = sessionId('history-context-tail-sync')
+        const target = makeAgentMessage({ id: 'target', seq: 40, at: 40_000 })
+        const latest = makeAgentMessage({ id: 'latest', seq: 100, at: 100_000 })
+        const getMessages = vi.fn(async () => latestResponse([latest], { epoch: 7 }))
+        const api = contextApi(target, getMessages)
+
+        await expect(loadMessageContext(api, id, 'target')).resolves.toBe(true)
+        expect(getMessageWindowState(id).viewMode).toBe('history')
+
+        // An initial SSE connect / reconnect / invalidation fires this while
+        // the reader is inspecting the jumped-to context.
+        await syncTailMessages(api, id)
+
+        const state = getMessageWindowState(id)
+        expect(getMessages).not.toHaveBeenCalled()
+        expect(state.messages.map((message) => message.id)).toEqual(['target'])
+        expect(state.viewMode).toBe('history')
+        expect(state.isSyncingTail).toBe(false)
+    })
+
+    it('still resynchronizes when the history window was emptied', async () => {
+        const id = sessionId('history-context-emptied')
+        const target = makeAgentMessage({ id: 'target', seq: 40, at: 40_000 })
+        const latest = makeAgentMessage({ id: 'latest', seq: 100, at: 100_000 })
+        const getMessages = vi.fn(async () => latestResponse([latest], { epoch: 7 }))
+        const api = contextApi(target, getMessages)
+
+        await expect(loadMessageContext(api, id, 'target')).resolves.toBe(true)
+        clearMessageWindow(id)
+        await syncTailMessages(api, id)
+
+        expect(getMessages).toHaveBeenCalledTimes(1)
+        expect(getMessageWindowState(id).messages.map((message) => message.id)).toEqual(['latest'])
+    })
+
+    it('replaces the context when the reader jumps back to the tail', async () => {
+        const id = sessionId('history-context-jump-tail')
+        const target = makeAgentMessage({ id: 'target', seq: 40, at: 40_000 })
+        const latest = makeAgentMessage({ id: 'latest', seq: 100, at: 100_000 })
+        const getMessages = vi.fn(async () => latestResponse([latest], { epoch: 7 }))
+        const api = contextApi(target, getMessages)
+
+        await expect(loadMessageContext(api, id, 'target')).resolves.toBe(true)
+        setMessageViewMode(id, 'tail')
+        await syncTailMessages(api, id)
+
+        expect(getMessages).toHaveBeenCalledTimes(1)
+        const state = getMessageWindowState(id)
+        expect(state.messages.map((message) => message.id)).toEqual(['latest'])
+        expect(state.viewMode).toBe('tail')
+    })
+})

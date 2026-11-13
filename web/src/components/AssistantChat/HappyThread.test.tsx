@@ -142,6 +142,7 @@ function renderPanel(props: Partial<ComponentProps<typeof ConversationOutlinePan
         <I18nProvider>
             <ConversationOutlinePanel
                 items={outlineItems}
+                isLoadingItems={false}
                 hasMoreMessages={false}
                 isLoadingMoreMessages={false}
                 onLoadMore={vi.fn()}
@@ -180,6 +181,14 @@ describe('ConversationOutlinePanel', () => {
         fireEvent.click(screen.getByRole('button', { name: /Load earlier/ }))
 
         expect(onLoadMore).toHaveBeenCalledTimes(1)
+    })
+
+    it('shows a loading state instead of the partial window list while the full index loads', () => {
+        renderPanel({ isLoadingItems: true, hasMoreMessages: true })
+
+        expect(screen.getByRole('status')).toHaveTextContent('Loading the full outline')
+        expect(screen.queryByText('Implement the panel')).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Load earlier/ })).not.toBeInTheDocument()
     })
 
     it('uses a concise placeholder for outline search', () => {

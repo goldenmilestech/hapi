@@ -289,6 +289,7 @@ export default {
   'session.conciseView.disable': '显示完整对话',
   'session.outline.title': '大纲',
   'session.outline.loadOlder': '加载更早',
+  'session.outline.loading': '正在加载全部大纲…',
   'session.outline.empty': '已加载消息中暂无大纲项',
   'session.outline.searchPlaceholder': '搜索大纲',
   'session.outline.searchLabel': '搜索大纲条目',
