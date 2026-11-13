@@ -1,7 +1,7 @@
 import { isObject } from '@hapi/protocol'
 import { extractAssistantPlainText, unwrapRoleWrappedRecordEnvelope } from '@hapi/protocol/messages'
 import type { StoredMessage } from '../../store'
-import { isDeliveredUserPrompt } from '../../sync/userPromptRows'
+import { isDeliveredUserPrompt, isUserPrompt } from '../../sync/userPromptRows'
 
 /** Bounds a single tool/step label so one huge prompt cannot bloat the card. */
 const TOOL_LABEL_LIMIT = 120
@@ -292,6 +292,25 @@ function findPromptStart(messages: StoredMessage[], endExclusive: number): numbe
     return -1
 }
 
+/**
+ * Boundary for the live card. Unlike the finalized-turn boundary this also
+ * recognizes a prompt the CLI has not consumed yet, so the card cannot fall
+ * back to the previous turn while the new message is still queued. Future
+ * scheduled rows are not active prompts.
+ */
+function findActivePromptStart(messages: StoredMessage[], now = Date.now()): number {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index]!
+        if (message.scheduledAt !== null && message.scheduledAt > now) {
+            continue
+        }
+        if (isUserPrompt(message)) {
+            return index + 1
+        }
+    }
+    return -1
+}
+
 function createAccumulator(): TurnAccumulator {
     return {
         thinking: [],
@@ -444,7 +463,7 @@ export function summarizeFeishuTurn(messages: StoredMessage[]): FeishuTurnSummar
  * refresh the Feishu process card while the agent is still working.
  */
 export function summarizeActiveTurn(messages: StoredMessage[]): FeishuTurnSummary {
-    const start = findPromptStart(messages, messages.length)
+    const start = findActivePromptStart(messages)
     const acc = createAccumulator()
     if (start >= 0) {
         collectRange(messages, start, messages.length - 1, acc)

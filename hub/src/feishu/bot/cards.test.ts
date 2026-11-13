@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { buildAnswerCard, buildProgressCard, truncateForCard } from './cards'
+import { buildAnswerCard, buildInputRequestCard, buildProgressCard, truncateForCard } from './cards'
 import type { FeishuTurnSummary } from './turnSummary'
 
 function summary(overrides: Partial<FeishuTurnSummary> = {}): FeishuTurnSummary {
@@ -94,6 +94,36 @@ describe('Feishu cards', () => {
 
     it('returns null when there is no reasoning or tool call', () => {
         expect(buildProgressCard(summary())).toBeNull()
+    })
+
+    it('renders an input request with questions and options', () => {
+        const card = buildInputRequestCard({
+            sessionId: 'session-1',
+            sessionTitle: 'Fix login',
+            tool: 'AskUserQuestion',
+            args: {
+                questions: [{
+                    header: 'Scope',
+                    question: 'Which files should I touch?',
+                    multiSelect: true,
+                    options: [
+                        { label: 'Web', description: 'web/src' },
+                        { label: 'Hub' }
+                    ]
+                }]
+            },
+            publicUrl: 'https://hapi.test/'
+        })
+
+        const header = card?.header as { title?: { content?: string } } | undefined
+        expect(header?.title?.content).toBe('需要你回答：Fix login')
+        const body = card?.body as { elements?: Array<{ content?: string }> } | undefined
+        const content = body?.elements?.[0]?.content ?? ''
+        expect(content).toContain('**问题 1** · Scope')
+        expect(content).toContain('Which files should I touch?')
+        expect(content).toContain('**Web**：web/src')
+        expect(content).toContain('可多选')
+        expect(content).toContain('https://hapi.test/sessions/session-1')
     })
 
     it('truncates oversized markdown while keeping head and tail', () => {
