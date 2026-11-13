@@ -217,42 +217,155 @@ export function buildAnswerCard(sessionTitle: string, answer: string): FeishuCar
     }
 }
 
-type InputRequestQuestion = {
+export type FeishuInputOption = {
+    /** Display text. */
+    label: string
+    /** Value sent back to the agent (Cursor uses stable option ids). */
+    value: string
+    description: string | null
+}
+
+export type FeishuInputQuestion = {
+    /** Stable question id (request_user_input / CursorAskQuestion). */
+    id: string | null
     header: string | null
     question: string
     multiSelect: boolean
-    options: Array<{ label: string; description: string | null }>
+    /** request_user_input optional questions may be left unanswered. */
+    required: boolean
+    options: FeishuInputOption[]
 }
 
-function readInputRequestQuestions(args: unknown): InputRequestQuestion[] {
+/** One answer list per question, in question order. */
+export type FeishuInputSelection = string[][]
+
+export type FeishuInputAnswers =
+    | Record<string, string[]>
+    | Record<string, { answers: string[] }>
+
+function isCodexInputRequest(tool: string): boolean {
+    return tool === 'request_user_input'
+}
+
+function isCursorAskQuestion(tool: string): boolean {
+    return tool === 'CursorAskQuestion'
+}
+
+/** Parse the question payload of every supported input-request tool. */
+export function parseInputRequestQuestions(tool: string, args: unknown): FeishuInputQuestion[] {
     if (!isObject(args) || !Array.isArray(args.questions)) {
         return []
     }
-    const questions: InputRequestQuestion[] = []
+    const cursor = isCursorAskQuestion(tool)
+    const fallbackHeader = cursor && typeof args.title === 'string' ? args.title.trim() : ''
+    const questions: FeishuInputQuestion[] = []
     for (const raw of args.questions) {
         if (!isObject(raw)) continue
-        const question = typeof raw.question === 'string' ? raw.question.trim() : ''
-        const header = typeof raw.header === 'string' ? raw.header.trim() : ''
+        const question = typeof raw.question === 'string'
+            ? raw.question.trim()
+            : cursor && typeof raw.prompt === 'string'
+                ? raw.prompt.trim()
+                : ''
+        const header = typeof raw.header === 'string'
+            ? raw.header.trim()
+            : cursor && typeof raw.title === 'string'
+                ? raw.title.trim()
+                : ''
+        const id = typeof raw.id === 'string' ? raw.id.trim() : ''
+        const multiSelect = raw.multiSelect === true
+            || (cursor && raw.allowMultiple === true)
+            || (isCodexInputRequest(tool) && raw.multiple === true)
         const options = Array.isArray(raw.options)
             ? raw.options.flatMap((option) => {
                 if (!isObject(option)) return []
-                const label = typeof option.label === 'string' ? option.label.trim() : ''
+                const label = typeof option.label === 'string'
+                    ? option.label.trim()
+                    : cursor && typeof option.id === 'string'
+                        ? option.id.trim()
+                        : ''
                 if (!label) return []
+                const value = cursor && typeof option.id === 'string' && option.id.trim()
+                    ? option.id.trim()
+                    : label
                 const description = typeof option.description === 'string'
                     ? option.description.trim()
                     : ''
-                return [{ label, description: description || null }]
+                return [{ label, value, description: description || null }]
             })
             : []
         if (!question && options.length === 0) continue
         questions.push({
-            header: header || null,
+            id: id || null,
+            header: header || fallbackHeader || null,
             question,
-            multiSelect: raw.multiSelect === true,
+            multiSelect,
+            required: isCodexInputRequest(tool) ? raw.required !== false : true,
             options
         })
     }
     return questions
+}
+
+/**
+ * Build the payload consumed by the CLI. AskUserQuestion answers are keyed by
+ * question index; Cursor keys them by stable question id; request_user_input
+ * uses the nested `{ answers: [...] }` shape keyed by question id.
+ */
+export function buildInputRequestAnswers(
+    tool: string,
+    questions: FeishuInputQuestion[],
+    selection: FeishuInputSelection
+): FeishuInputAnswers {
+    if (isCodexInputRequest(tool)) {
+        const nested: Record<string, { answers: string[] }> = {}
+        questions.forEach((question, index) => {
+            nested[question.id ?? String(index)] = { answers: selection[index] ?? [] }
+        })
+        return nested
+    }
+    const flat: Record<string, string[]> = {}
+    questions.forEach((question, index) => {
+        const key = isCursorAskQuestion(tool)
+            ? question.id ?? String(index)
+            : String(index)
+        flat[key] = selection[index] ?? []
+    })
+    return flat
+}
+
+export type FeishuInputCardAction = {
+    kind: 'hapi_input'
+    action: 'toggle' | 'pick' | 'submit'
+    sessionId: string
+    requestId: string
+    question?: number
+    value?: string
+}
+
+function inputActionValue(
+    action: FeishuInputCardAction['action'],
+    sessionId: string,
+    requestId: string,
+    extra: { question?: number; value?: string } = {}
+): FeishuInputCardAction {
+    return { kind: 'hapi_input', action, sessionId, requestId, ...extra }
+}
+
+function callbackBehavior(value: FeishuInputCardAction): FeishuCard {
+    return { type: 'callback', value }
+}
+
+function displayTitle(sessionTitle: string): string {
+    const title = sessionTitle.trim() || 'Hapi'
+    return title.length > SESSION_TITLE_MAX_CHARS
+        ? `${title.slice(0, SESSION_TITLE_MAX_CHARS - 1).trimEnd()}…`
+        : title
+}
+
+function questionHeading(question: FeishuInputQuestion, index: number): string {
+    return question.header
+        ? `**问题 ${index + 1}** · ${question.header}`
+        : `**问题 ${index + 1}**`
 }
 
 function formatInputRequestFallback(args: unknown): string {
@@ -266,56 +379,145 @@ function formatInputRequestFallback(args: unknown): string {
     }
 }
 
+function sessionLink(input: { sessionId: string; publicUrl?: string | null }): string | null {
+    const baseUrl = input.publicUrl?.trim().replace(/\/+$/, '')
+    if (!baseUrl) return null
+    return `${baseUrl}/sessions/${encodeURIComponent(input.sessionId)}`
+}
+
 /**
  * Forward an agent input request (AskUserQuestion / request_user_input) to the
- * bound Feishu chat. Answering still happens in Hapi; the card links straight
- * to the session so the question is not missed.
+ * bound Feishu chat. Options are interactive so the request can be answered
+ * without leaving Feishu, mirroring the Agent Teams approval card. Cards stay
+ * non-interactive when a question has no options (free-text answers only).
  */
 export function buildInputRequestCard(input: {
     sessionId: string
+    requestId: string
     sessionTitle: string
     tool: string
     args: unknown
     publicUrl?: string | null
+    /** Current selections, used when re-rendering after a toggle/pick. */
+    selection?: FeishuInputSelection
 }): FeishuCard | null {
-    const questions = readInputRequestQuestions(input.args)
-    const lines: string[] = []
-    if (questions.length > 0) {
+    const questions = parseInputRequestQuestions(input.tool, input.args)
+    const selection = input.selection ?? questions.map(() => [])
+    const link = sessionLink(input)
+    const interactive = questions.length > 0
+        && questions.every((question) => question.options.length > 0)
+    const elements: FeishuCard[] = []
+
+    if (interactive) {
         questions.forEach((question, index) => {
-            const heading = question.header
-                ? `**问题 ${index + 1}** · ${question.header}`
-                : `**问题 ${index + 1}**`
-            lines.push(heading)
+            const lines = [questionHeading(question, index)]
             if (question.question) {
                 lines.push(question.question)
-            }
-            for (const option of question.options) {
-                lines.push(`- **${option.label}**${option.description ? `：${option.description}` : ''}`)
             }
             if (question.multiSelect) {
                 lines.push('_可多选_')
             }
-            lines.push('')
+            // Single-select shows descriptions above the buttons; multi-select
+            // carries them inside each checker.
+            if (!question.multiSelect) {
+                for (const option of question.options) {
+                    lines.push(`- **${option.label}**${option.description ? `：${option.description}` : ''}`)
+                }
+            }
+            elements.push({
+                tag: 'markdown',
+                content: truncateForCard(sanitizeCardMarkdown(lines.join('\n')), STEPS_MAX_BYTES)
+            })
+
+            const chosen = selection[index] ?? []
+            if (question.multiSelect) {
+                question.options.forEach((option, optionIndex) => {
+                    elements.push({
+                        tag: 'checker',
+                        name: `q${index}_o${optionIndex}`,
+                        checked: chosen.includes(option.value),
+                        text: {
+                            tag: 'lark_md',
+                            content: `**${option.label}**${option.description ? `：${option.description}` : ''}`
+                        },
+                        behaviors: [callbackBehavior(inputActionValue(
+                            'toggle',
+                            input.sessionId,
+                            input.requestId,
+                            { question: index, value: option.value }
+                        ))]
+                    })
+                })
+            } else {
+                for (const option of question.options) {
+                    elements.push({
+                        tag: 'button',
+                        text: { tag: 'plain_text', content: option.label.slice(0, 100) },
+                        type: chosen.includes(option.value) ? 'primary' : 'default',
+                        width: 'fill',
+                        behaviors: [callbackBehavior(inputActionValue(
+                            'pick',
+                            input.sessionId,
+                            input.requestId,
+                            { question: index, value: option.value }
+                        ))]
+                    })
+                }
+            }
         })
-    } else {
-        const fallback = formatInputRequestFallback(input.args).trim()
-        if (!fallback) {
-            return null
+
+        const needsSubmit = questions.length > 1 || questions.some((question) => question.multiSelect)
+        if (needsSubmit) {
+            elements.push({
+                tag: 'button',
+                text: { tag: 'plain_text', content: '提交回答' },
+                type: 'primary_filled',
+                width: 'fill',
+                behaviors: [callbackBehavior(inputActionValue('submit', input.sessionId, input.requestId))]
+            })
         }
-        lines.push(fallback, '')
-    }
-
-    const baseUrl = input.publicUrl?.trim().replace(/\/+$/, '')
-    if (baseUrl) {
-        lines.push(`[打开 Hapi 回答](${baseUrl}/sessions/${encodeURIComponent(input.sessionId)})`)
+        if (link) {
+            elements.push({
+                tag: 'button',
+                text: { tag: 'plain_text', content: '打开 Hapi 回答' },
+                type: 'default',
+                width: 'fill',
+                behaviors: [{ type: 'open_url', default_url: link }]
+            })
+        }
     } else {
-        lines.push('请在 Hapi Web 中打开该会话回答。')
+        const lines: string[] = []
+        if (questions.length > 0) {
+            questions.forEach((question, index) => {
+                lines.push(questionHeading(question, index))
+                if (question.question) {
+                    lines.push(question.question)
+                }
+                for (const option of question.options) {
+                    lines.push(`- **${option.label}**${option.description ? `：${option.description}` : ''}`)
+                }
+                if (question.multiSelect) {
+                    lines.push('_可多选_')
+                }
+                lines.push('')
+            })
+        } else {
+            const fallback = formatInputRequestFallback(input.args).trim()
+            if (!fallback) {
+                return null
+            }
+            lines.push(fallback, '')
+        }
+        if (link) {
+            lines.push(`[打开 Hapi 回答](${link})`)
+        } else {
+            lines.push('请在 Hapi Web 中打开该会话回答。')
+        }
+        elements.push({
+            tag: 'markdown',
+            content: truncateForCard(sanitizeCardMarkdown(lines.join('\n')))
+        })
     }
-
-    const sessionTitle = input.sessionTitle.trim() || 'Hapi'
-    const displayTitle = sessionTitle.length > SESSION_TITLE_MAX_CHARS
-        ? `${sessionTitle.slice(0, SESSION_TITLE_MAX_CHARS - 1).trimEnd()}…`
-        : sessionTitle
 
     return {
         schema: '2.0',
@@ -323,15 +525,60 @@ export function buildInputRequestCard(input: {
         header: {
             title: {
                 tag: 'plain_text',
-                content: `需要你回答：${displayTitle}`
+                content: `需要你回答：${displayTitle(input.sessionTitle)}`
             },
             template: 'orange'
+        },
+        body: { elements }
+    }
+}
+
+/** Card that replaces the interactive one once the request is decided. */
+export function buildInputRequestResolvedCard(input: {
+    sessionTitle: string
+    questions: FeishuInputQuestion[]
+    selection: FeishuInputSelection
+    status: 'answered' | 'expired'
+}): FeishuCard {
+    const lines: string[] = []
+    if (input.status === 'expired') {
+        lines.push('该问题已在 Hapi 中回答或已失效。')
+        lines.push('')
+    }
+    input.questions.forEach((question, index) => {
+        lines.push(questionHeading(question, index))
+        if (question.question) {
+            lines.push(question.question)
+        }
+        const chosen = input.selection[index] ?? []
+        for (const option of question.options) {
+            if (chosen.includes(option.value)) {
+                lines.push(`- **${option.label}**`)
+            }
+        }
+        lines.push('')
+    })
+    if (input.status === 'answered') {
+        lines.push('已在 Hapi 中继续处理。')
+    }
+    const answered = input.status === 'answered'
+    return {
+        schema: '2.0',
+        config: {},
+        header: {
+            title: {
+                tag: 'plain_text',
+                content: answered
+                    ? `已回答：${displayTitle(input.sessionTitle)}`
+                    : `问题已失效：${displayTitle(input.sessionTitle)}`
+            },
+            template: answered ? 'green' : 'grey'
         },
         body: {
             elements: [
                 {
                     tag: 'markdown',
-                    content: truncateForCard(sanitizeCardMarkdown(lines.join('\n')))
+                    content: truncateForCard(sanitizeCardMarkdown(lines.join('\n').trim()))
                 }
             ]
         }

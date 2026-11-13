@@ -16,6 +16,20 @@ export type FeishuMessage = {
     mentions: FeishuMention[]
 }
 
+export type FeishuCardActionEnvelope = {
+    kind: 'card_action'
+    token: string | null
+    eventId: string
+    eventType: string
+    operatorOpenId: string | null
+    chatId: string | null
+    messageId: string | null
+    actionTag: string
+    actionValue: unknown
+    /** Checkbox state for `checker` components; null for buttons. */
+    checked: boolean | null
+}
+
 export type FeishuEventEnvelope =
     | {
         kind: 'url_verification'
@@ -31,6 +45,7 @@ export type FeishuEventEnvelope =
         senderType: string | null
         message: FeishuMessage | null
     }
+    | FeishuCardActionEnvelope
 
 function stringField(value: unknown): string | null {
     return typeof value === 'string' && value.trim() ? value : null
@@ -108,6 +123,28 @@ export function parseFeishuEnvelope(payload: unknown): FeishuEventEnvelope | nul
         return null
     }
 
+    const eventType = stringField(header.event_type) ?? ''
+    if (eventType === 'card.action.trigger') {
+        const operator = isObject(event.operator) ? event.operator : null
+        const context = isObject(event.context) ? event.context : null
+        const action = isObject(event.action) ? event.action : null
+        if (!action) {
+            return null
+        }
+        return {
+            kind: 'card_action',
+            token: stringField(header.token),
+            eventId: stringField(header.event_id) ?? '',
+            eventType,
+            operatorOpenId: operator ? stringField(operator.open_id) : null,
+            chatId: context ? stringField(context.open_chat_id) : null,
+            messageId: context ? stringField(context.open_message_id) : null,
+            actionTag: stringField(action.tag) ?? '',
+            actionValue: action.value ?? null,
+            checked: typeof action.checked === 'boolean' ? action.checked : null
+        }
+    }
+
     const message = parseMessage(event.message)
     const sender = isObject(event.sender) ? event.sender : null
     const senderId = sender && isObject(sender.sender_id) ? sender.sender_id : null
@@ -117,7 +154,7 @@ export function parseFeishuEnvelope(payload: unknown): FeishuEventEnvelope | nul
         token: stringField(header.token),
         eventId: stringField(header.event_id)
             ?? (message ? `message:${message.messageId}` : ''),
-        eventType: stringField(header.event_type) ?? '',
+        eventType,
         senderOpenId: senderId ? stringField(senderId.open_id) : null,
         senderType: sender ? stringField(sender.sender_type) : null,
         message

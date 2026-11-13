@@ -34,7 +34,14 @@ export function createFeishuWebhookRoute(options: {
             const rawBody = await c.req.text()
             try {
                 const result = await bot.handleWebhook(rawBody, c.req.raw.headers)
-                return result ? c.json({ challenge: result.challenge }) : c.json({ ok: true })
+                if (!result) {
+                    return c.json({ ok: true })
+                }
+                // Card callbacks must receive the toast/card payload itself;
+                // URL verification still expects the challenge echo.
+                return 'challenge' in result
+                    ? c.json({ challenge: result.challenge })
+                    : c.json(result.response)
             } catch (error) {
                 if (error instanceof FeishuWebhookVerificationError) {
                     console.warn('[FeishuBot] Rejected webhook:', error.message)

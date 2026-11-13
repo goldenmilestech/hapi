@@ -1,11 +1,24 @@
+import { isObject } from '@hapi/protocol'
 import type { NotificationChannel, TaskNotification } from '../../notifications/notificationTypes'
 import type { NotificationSendContext } from '../../notifications/notificationSendContext'
 import { isInputRequestTool } from '../../notifications/inputRequest'
 import { getSessionName } from '../../notifications/sessionInfo'
 import type { Session, SyncEngine, SyncEvent } from '../../sync/syncEngine'
+import { PermissionRequestNotFoundError } from '../../sync/rpcGateway'
 import type { Store } from '../../store'
 import type { FeishuBotConfig } from '../config'
-import { buildAnswerCard, buildInputRequestCard, buildProgressCard } from './cards'
+import {
+    buildAnswerCard,
+    buildInputRequestAnswers,
+    buildInputRequestCard,
+    buildInputRequestResolvedCard,
+    buildProgressCard,
+    parseInputRequestQuestions,
+    type FeishuCard,
+    type FeishuInputCardAction,
+    type FeishuInputQuestion,
+    type FeishuInputSelection
+} from './cards'
 import { decryptFeishuPayload, verifyFeishuSignature } from './eventCrypto'
 import {
     extractFeishuText,
@@ -14,6 +27,7 @@ import {
     parseFeishuEnvelope,
     parseUnbindCommand,
     stripFeishuMentions,
+    type FeishuCardActionEnvelope,
     type FeishuEventEnvelope,
     type FeishuMessage
 } from './eventParser'
@@ -69,6 +83,58 @@ type LiveProgressState = {
     lastStepCount: number
 }
 
+const INPUT_CARD_STATE_LIMIT = 200
+
+/** Per-card answer state; the message id is the callback's map key. */
+type InputCardState = {
+    sessionId: string
+    requestId: string
+    chatId: string
+    sessionTitle: string
+    tool: string
+    questions: FeishuInputQuestion[]
+    selection: FeishuInputSelection
+}
+
+export type FeishuCardCallbackResponse = {
+    toast?: { type: 'success' | 'info' | 'warning' | 'error'; content: string }
+    card?: { type: 'raw'; data: FeishuCard }
+}
+
+/** Card action values are developer-controlled; parse them defensively. */
+function readCallbackAction(value: unknown): FeishuInputCardAction | null {
+    let parsed = value
+    if (typeof value === 'string') {
+        try {
+            parsed = JSON.parse(value) as unknown
+        } catch {
+            return null
+        }
+    }
+    if (!isObject(parsed) || parsed.kind !== 'hapi_input') {
+        return null
+    }
+    const action = parsed.action
+    if (action !== 'toggle' && action !== 'pick' && action !== 'submit') {
+        return null
+    }
+    const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId.trim() : ''
+    const requestId = typeof parsed.requestId === 'string' ? parsed.requestId.trim() : ''
+    if (!sessionId || !requestId) {
+        return null
+    }
+    return {
+        kind: 'hapi_input',
+        action,
+        sessionId,
+        requestId,
+        question: typeof parsed.question === 'number' && Number.isInteger(parsed.question)
+            ? parsed.question
+            : undefined,
+        value: typeof parsed.value === 'string' ? parsed.value : undefined
+    }
+}
+
 /** A malformed, unsigned, or wrongly-signed webhook must not be retried. */
 export class FeishuWebhookVerificationError extends Error {
     constructor(message: string) {
@@ -122,6 +188,7 @@ export class FeishuBot implements NotificationChannel {
     private readonly lastFinalizedTurn = new Map<string, string>()
     private readonly liveProgress = new Map<string, LiveProgressState>()
     private readonly notifiedInputRequests = new Set<string>()
+    private readonly inputCardStates = new Map<string, InputCardState>()
     private readonly unsubscribeSync: (() => void) | null
     private botOpenId: string | null = null
     private botInfoPromise: Promise<void> | null = null
@@ -147,6 +214,7 @@ export class FeishuBot implements NotificationChannel {
             }
         }
         this.liveProgress.clear()
+        this.inputCardStates.clear()
     }
 
     private handleSyncEvent(event: SyncEvent): void {
@@ -372,7 +440,10 @@ export class FeishuBot implements NotificationChannel {
      * route return 500 so Feishu retries; the event is recorded only after
      * successful handling.
      */
-    async handleWebhook(rawBody: string, headers: Headers): Promise<{ challenge: string } | null> {
+    async handleWebhook(
+        rawBody: string,
+        headers: Headers
+    ): Promise<{ challenge: string } | { response: FeishuCardCallbackResponse } | null> {
         const payload = this.verifyAndDecode(rawBody, headers)
         const envelope = parseFeishuEnvelope(payload)
         if (!envelope) {
@@ -383,6 +454,17 @@ export class FeishuBot implements NotificationChannel {
         }
         if (envelope.kind === 'url_verification') {
             return { challenge: envelope.challenge }
+        }
+        if (envelope.kind === 'card_action') {
+            if (!envelope.eventId) {
+                return null
+            }
+            if (this.options.store.feishuBotBindings.hasEvent(envelope.eventId)) {
+                return null
+            }
+            const response = await this.handleCardAction(envelope)
+            this.options.store.feishuBotBindings.recordEvent(envelope.eventId, this.now())
+            return response ? { response } : null
         }
         if (envelope.eventType !== 'im.message.receive_v1' || !envelope.eventId) {
             return null
@@ -754,6 +836,205 @@ export class FeishuBot implements NotificationChannel {
         this.lastSentAnswer.set(sessionId, messageId)
     }
 
+    private rememberInputCard(messageId: string | null, state: InputCardState): void {
+        if (!messageId) {
+            return
+        }
+        if (this.inputCardStates.size >= INPUT_CARD_STATE_LIMIT) {
+            const oldest = this.inputCardStates.keys().next().value
+            if (oldest) {
+                this.inputCardStates.delete(oldest)
+            }
+        }
+        this.inputCardStates.set(messageId, state)
+    }
+
+    private forgetInputCard(messageId: string | null, state: InputCardState): void {
+        if (messageId && this.inputCardStates.get(messageId) === state) {
+            this.inputCardStates.delete(messageId)
+        }
+    }
+
+    /**
+     * Rebuild answer state from the live request when the hub restarted (or the
+     * card was sent without a message id), so clicks are never silently lost.
+     */
+    private getInputCardState(
+        messageId: string | null,
+        sessionId: string,
+        requestId: string,
+        chatId: string | null
+    ): InputCardState | null {
+        const existing = messageId ? this.inputCardStates.get(messageId) : undefined
+        if (existing && existing.sessionId === sessionId && existing.requestId === requestId) {
+            return existing
+        }
+        const session = this.options.syncEngine.getSession(sessionId)
+        const request = session?.agentState?.requests?.[requestId]
+        if (!session || !request) {
+            return null
+        }
+        const questions = parseInputRequestQuestions(request.tool, request.arguments)
+        const state: InputCardState = {
+            sessionId,
+            requestId,
+            chatId: chatId ?? '',
+            sessionTitle: getSessionName(session),
+            tool: request.tool,
+            questions,
+            selection: questions.map(() => [])
+        }
+        this.rememberInputCard(messageId, state)
+        return state
+    }
+
+    private inputCardExpiredResponse(messageId: string | null, state: InputCardState): FeishuCardCallbackResponse {
+        this.forgetInputCard(messageId, state)
+        return {
+            toast: { type: 'warning', content: '该问题已在 Hapi 中回答或已失效' },
+            card: {
+                type: 'raw',
+                data: buildInputRequestResolvedCard({
+                    sessionTitle: state.sessionTitle,
+                    questions: state.questions,
+                    selection: state.selection,
+                    status: 'expired'
+                })
+            }
+        }
+    }
+
+    private async submitInputCard(
+        messageId: string | null,
+        state: InputCardState
+    ): Promise<FeishuCardCallbackResponse> {
+        const unanswered = state.questions.findIndex((question, index) => (
+            question.required && (state.selection[index] ?? []).length === 0
+        ))
+        if (unanswered !== -1) {
+            return { toast: { type: 'warning', content: `请先回答问题 ${unanswered + 1}` } }
+        }
+
+        const answers = buildInputRequestAnswers(state.tool, state.questions, state.selection)
+        try {
+            await this.options.syncEngine.approvePermission(
+                state.sessionId,
+                state.requestId,
+                undefined,
+                undefined,
+                undefined,
+                answers
+            )
+        } catch (error) {
+            if (error instanceof PermissionRequestNotFoundError) {
+                return this.inputCardExpiredResponse(messageId, state)
+            }
+            console.error(
+                '[FeishuBot] Failed to submit input request:',
+                error instanceof Error ? error.message : error
+            )
+            return { toast: { type: 'error', content: '提交失败，请到 Hapi 中回答' } }
+        }
+
+        this.forgetInputCard(messageId, state)
+        return {
+            toast: { type: 'success', content: '已提交到 Hapi' },
+            card: {
+                type: 'raw',
+                data: buildInputRequestResolvedCard({
+                    sessionTitle: state.sessionTitle,
+                    questions: state.questions,
+                    selection: state.selection,
+                    status: 'answered'
+                })
+            }
+        }
+    }
+
+    /**
+     * Answer a question card in place, the way the Agent Teams approval card
+     * does: the click updates the card and, once every question is answered,
+     * the hub decides the request through the same RPC as the web UI.
+     */
+    private async handleCardAction(
+        envelope: FeishuCardActionEnvelope
+    ): Promise<FeishuCardCallbackResponse | null> {
+        const action = readCallbackAction(envelope.actionValue)
+        if (!action) {
+            return null
+        }
+        const binding = this.options.store.feishuBotBindings.getBySessionId(action.sessionId)
+        if (!binding) {
+            return null
+        }
+        if (envelope.chatId && binding.chatId !== envelope.chatId) {
+            return { toast: { type: 'warning', content: '这张卡片不属于当前会话' } }
+        }
+
+        const state = this.getInputCardState(
+            envelope.messageId,
+            action.sessionId,
+            action.requestId,
+            envelope.chatId
+        )
+        if (!state) {
+            return { toast: { type: 'warning', content: '该问题已失效' } }
+        }
+
+        const session = this.options.syncEngine.getSession(action.sessionId)
+        const request = session?.agentState?.requests?.[action.requestId]
+        if (!session || !request) {
+            return this.inputCardExpiredResponse(envelope.messageId, state)
+        }
+
+        if (action.action === 'submit') {
+            return await this.submitInputCard(envelope.messageId, state)
+        }
+
+        const questionIndex = action.question
+        const optionValue = action.value
+        if (
+            questionIndex === undefined
+            || optionValue === undefined
+            || !state.questions[questionIndex]
+        ) {
+            return null
+        }
+        const question = state.questions[questionIndex]!
+        const option = question.options.find((entry) => entry.value === optionValue)
+        if (!option) {
+            return null
+        }
+
+        const current = state.selection[questionIndex] ?? []
+        if (action.action === 'toggle') {
+            const checked = envelope.checked ?? !current.includes(optionValue)
+            state.selection[questionIndex] = checked
+                ? (current.includes(optionValue) ? current : [...current, optionValue])
+                : current.filter((entry) => entry !== optionValue)
+        } else {
+            state.selection[questionIndex] = [optionValue]
+            // A single single-select question needs no separate submit button.
+            if (state.questions.length === 1) {
+                return await this.submitInputCard(envelope.messageId, state)
+            }
+        }
+
+        const card = buildInputRequestCard({
+            sessionId: state.sessionId,
+            requestId: state.requestId,
+            sessionTitle: state.sessionTitle,
+            tool: state.tool,
+            args: request.arguments,
+            publicUrl: this.options.publicUrl,
+            selection: state.selection
+        })
+        return {
+            toast: { type: 'info', content: `已选择：${option.label}` },
+            ...(card ? { card: { type: 'raw', data: card } } : {})
+        }
+    }
+
     async sendPermissionRequest(session: Session, _ctx?: NotificationSendContext): Promise<void> {
         const binding = this.options.store.feishuBotBindings.getBySessionId(session.id)
         if (!binding) {
@@ -772,9 +1053,12 @@ export class FeishuBot implements NotificationChannel {
             if (this.notifiedInputRequests.has(key)) {
                 continue
             }
+            const questions = parseInputRequestQuestions(request.tool, request.arguments)
+            const sessionTitle = getSessionName(session)
             const card = buildInputRequestCard({
                 sessionId: session.id,
-                sessionTitle: getSessionName(session),
+                requestId,
+                sessionTitle,
                 tool: request.tool,
                 args: request.arguments,
                 publicUrl: this.options.publicUrl
@@ -783,7 +1067,18 @@ export class FeishuBot implements NotificationChannel {
                 continue
             }
             try {
-                await this.api.sendCard(binding.chatId, card)
+                const messageId = await this.api.sendCard(binding.chatId, card)
+                if (questions.length > 0) {
+                    this.rememberInputCard(messageId, {
+                        sessionId: session.id,
+                        requestId,
+                        chatId: binding.chatId,
+                        sessionTitle,
+                        tool: request.tool,
+                        questions,
+                        selection: questions.map(() => [])
+                    })
+                }
                 if (this.notifiedInputRequests.size > 500) {
                     this.notifiedInputRequests.clear()
                 }

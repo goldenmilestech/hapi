@@ -62,6 +62,42 @@ describe('Feishu event parser', () => {
         expect(extractFeishuText(parsed.message)).toBe('hello')
     })
 
+    it('parses a card action callback', () => {
+        const parsed = parseFeishuEnvelope({
+            schema: '2.0',
+            header: {
+                event_id: 'evt-card-1',
+                event_type: 'card.action.trigger',
+                token: 'verify-token'
+            },
+            event: {
+                operator: { open_id: 'ou_alice' },
+                action: {
+                    tag: 'checker',
+                    value: { kind: 'hapi_input', action: 'toggle' },
+                    checked: true
+                },
+                context: {
+                    open_message_id: 'om_card_1',
+                    open_chat_id: 'oc_1'
+                }
+            }
+        })
+
+        expect(parsed).toEqual({
+            kind: 'card_action',
+            token: 'verify-token',
+            eventId: 'evt-card-1',
+            eventType: 'card.action.trigger',
+            operatorOpenId: 'ou_alice',
+            chatId: 'oc_1',
+            messageId: 'om_card_1',
+            actionTag: 'checker',
+            actionValue: { kind: 'hapi_input', action: 'toggle' },
+            checked: true
+        })
+    })
+
     it('strips mention placeholders and detects bind commands', () => {
         const msg = message({
             mentions: [{ key: '@_user_1', name: 'HAPI', mentionedType: 'app', openId: 'ou_bot' }],

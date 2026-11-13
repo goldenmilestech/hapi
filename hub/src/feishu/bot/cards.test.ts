@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'bun:test'
-import { buildAnswerCard, buildInputRequestCard, buildProgressCard, truncateForCard } from './cards'
+import {
+    buildAnswerCard,
+    buildInputRequestAnswers,
+    buildInputRequestCard,
+    buildProgressCard,
+    parseInputRequestQuestions,
+    truncateForCard
+} from './cards'
 import type { FeishuTurnSummary } from './turnSummary'
 
 function summary(overrides: Partial<FeishuTurnSummary> = {}): FeishuTurnSummary {
@@ -96,9 +103,10 @@ describe('Feishu cards', () => {
         expect(buildProgressCard(summary())).toBeNull()
     })
 
-    it('renders an input request with questions and options', () => {
+    it('renders a multi-select input request as checkers plus submit', () => {
         const card = buildInputRequestCard({
             sessionId: 'session-1',
+            requestId: 'req-1',
             sessionTitle: 'Fix login',
             tool: 'AskUserQuestion',
             args: {
@@ -117,13 +125,86 @@ describe('Feishu cards', () => {
 
         const header = card?.header as { title?: { content?: string } } | undefined
         expect(header?.title?.content).toBe('需要你回答：Fix login')
-        const body = card?.body as { elements?: Array<{ content?: string }> } | undefined
-        const content = body?.elements?.[0]?.content ?? ''
-        expect(content).toContain('**问题 1** · Scope')
-        expect(content).toContain('Which files should I touch?')
-        expect(content).toContain('**Web**：web/src')
-        expect(content).toContain('可多选')
-        expect(content).toContain('https://hapi.test/sessions/session-1')
+        const elements = (card?.body as { elements?: Array<Record<string, unknown>> } | undefined)?.elements ?? []
+        const markdown = elements[0]?.content as string
+        expect(markdown).toContain('**问题 1** · Scope')
+        expect(markdown).toContain('Which files should I touch?')
+        expect(markdown).toContain('可多选')
+
+        const checkers = elements.filter((element) => element.tag === 'checker')
+        expect(checkers).toHaveLength(2)
+        expect(checkers[0]?.checked).toBe(false)
+        const checkerText = checkers[0]?.text as { content?: string } | undefined
+        expect(checkerText?.content).toBe('**Web**：web/src')
+        const toggle = (checkers[0]?.behaviors as Array<{ value?: Record<string, unknown> }>)[0]?.value
+        expect(toggle).toEqual({
+            kind: 'hapi_input',
+            action: 'toggle',
+            sessionId: 'session-1',
+            requestId: 'req-1',
+            question: 0,
+            value: 'Web'
+        })
+
+        const submit = elements.find((element) => (
+            (element.behaviors as Array<{ value?: { action?: string } }> | undefined)?.[0]?.value?.action === 'submit'
+        ))
+        expect(submit).toBeDefined()
+
+        const open = elements.find((element) => (
+            (element.behaviors as Array<{ type?: string; default_url?: string }> | undefined)?.[0]?.type === 'open_url'
+        ))
+        expect((open?.behaviors as Array<{ default_url?: string }>)[0]?.default_url)
+            .toBe('https://hapi.test/sessions/session-1')
+    })
+
+    it('renders a single-select question as submit-on-click buttons', () => {
+        const card = buildInputRequestCard({
+            sessionId: 'session-1',
+            requestId: 'req-1',
+            sessionTitle: 'Fix login',
+            tool: 'AskUserQuestion',
+            args: {
+                questions: [{
+                    header: 'Scope',
+                    question: 'Which file?',
+                    options: [{ label: 'Web' }, { label: 'Hub' }]
+                }]
+            }
+        })
+        const elements = (card?.body as { elements?: Array<Record<string, unknown>> } | undefined)?.elements ?? []
+        const buttons = elements.filter((element) => element.tag === 'button')
+        expect(buttons).toHaveLength(2)
+        const pick = (buttons[1]?.behaviors as Array<{ value?: { action?: string; value?: string } }>)[0]?.value
+        expect(pick).toMatchObject({ action: 'pick', question: 0, value: 'Hub' })
+        // No separate submit: a single single-select question answers on click.
+        expect(buttons.some((button) => (
+            (button.behaviors as Array<{ value?: { action?: string } }>)[0]?.value?.action === 'submit'
+        ))).toBe(false)
+    })
+
+    it('builds answers in each tool wire format', () => {
+        const questions = parseInputRequestQuestions('AskUserQuestion', {
+            questions: [{ question: 'Pick', options: [{ label: 'A' }, { label: 'B' }] }]
+        })
+        expect(buildInputRequestAnswers('AskUserQuestion', questions, [['A', 'B']]))
+            .toEqual({ '0': ['A', 'B'] })
+
+        const cursorQuestions = parseInputRequestQuestions('CursorAskQuestion', {
+            questions: [{
+                id: 'scope',
+                prompt: 'Pick',
+                options: [{ id: 'a', label: 'A' }]
+            }]
+        })
+        expect(buildInputRequestAnswers('CursorAskQuestion', cursorQuestions, [['a']]))
+            .toEqual({ scope: ['a'] })
+
+        const codexQuestions = parseInputRequestQuestions('request_user_input', {
+            questions: [{ id: 'scope', question: 'Pick', options: [{ label: 'A' }] }]
+        })
+        expect(buildInputRequestAnswers('request_user_input', codexQuestions, [['A']]))
+            .toEqual({ scope: { answers: ['A'] } })
     })
 
     it('truncates oversized markdown while keeping head and tail', () => {
