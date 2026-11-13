@@ -6,10 +6,9 @@ import { useAppContext } from '@/lib/app-context'
 import { useTranslation } from '@/lib/use-translation'
 import { queryKeys } from '@/lib/query-keys'
 import { useSessions } from '@/hooks/queries/useSessions'
-import { getSessionTitle } from '@/lib/sessionTitle'
+import { SessionPicker } from '@/components/SessionPicker'
 import { SettingsPageContent, SettingsSection } from '@/components/settings/SettingsPrimitives'
 
-const inputClassName = 'w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1.5 text-sm text-[var(--app-fg)] outline-none focus:border-[var(--app-link)] disabled:opacity-60'
 const buttonClassName = 'rounded-lg border border-[var(--app-border)] px-3 py-1.5 text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)] disabled:opacity-60'
 const dangerButtonClassName = `${buttonClassName} text-red-600 dark:text-red-400`
 
@@ -129,9 +128,9 @@ export default function SettingsFeishuPage() {
         onError: () => setError(t('settings.feishu.bind.error'))
     })
 
-    const selectableSessions = useMemo(
-        () => [...sessions].sort((a, b) => b.updatedAt - a.updatedAt),
-        [sessions]
+    const boundSessionIds = useMemo(
+        () => new Set((bindingsQuery.data?.bindings ?? []).map((binding) => binding.sessionId)),
+        [bindingsQuery.data]
     )
 
     const refreshBindings = () => {
@@ -248,25 +247,23 @@ export default function SettingsFeishuPage() {
                         </div>
                     ) : sessionsLoading ? (
                         <div className="text-sm text-[var(--app-hint)]">{t('loading')}</div>
-                    ) : selectableSessions.length === 0 ? (
+                    ) : sessions.length === 0 ? (
                         <div className="text-sm text-[var(--app-hint)]">
                             {t('settings.feishu.bind.noSessions')}
                         </div>
                     ) : (
                         <>
-                            <select
-                                value={selectedSessionId}
-                                onChange={(event) => setSelectedSessionId(event.target.value)}
-                                aria-label={t('settings.feishu.bind.select')}
-                                className={inputClassName}
-                            >
-                                <option value="">{t('settings.feishu.bind.select')}</option>
-                                {selectableSessions.map((session) => (
-                                    <option key={session.id} value={session.id}>
-                                        {getSessionTitle(session)} · {session.id.slice(0, 8)}
-                                    </option>
-                                ))}
-                            </select>
+                            <SessionPicker
+                                sessions={sessions}
+                                selectedId={selectedSessionId}
+                                boundSessionIds={boundSessionIds}
+                                onSelect={setSelectedSessionId}
+                            />
+                            {selectedSessionId && boundSessionIds.has(selectedSessionId) ? (
+                                <div className="text-xs leading-snug text-[var(--app-badge-warning-text)]">
+                                    {t('settings.feishu.bind.rebindWarning')}
+                                </div>
+                            ) : null}
                             <button
                                 type="button"
                                 disabled={!selectedSessionId || createCodeMutation.isPending}

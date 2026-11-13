@@ -166,6 +166,40 @@ export class FeishuBotApi {
     }
 
     /**
+     * Send an interactive card. Feishu renders the card's `markdown` elements
+     * with headings, lists, tables and fenced code, which plain `text` messages
+     * do not support.
+     */
+    async sendCard(chatId: string, card: unknown): Promise<string | null> {
+        const receiveId = chatId.trim()
+        if (!receiveId) {
+            throw new FeishuApiError('Feishu chat id is required')
+        }
+
+        const token = await this.getTenantAccessToken()
+        const { response, payload } = await readJson(
+            this.fetchImpl,
+            `${FEISHU_API_BASE}/im/v1/messages?receive_id_type=chat_id`,
+            {
+                method: 'POST',
+                headers: {
+                    authorization: `Bearer ${token}`,
+                    'content-type': 'application/json'
+                },
+                body: JSON.stringify({
+                    receive_id: receiveId,
+                    msg_type: 'interactive',
+                    content: JSON.stringify(card),
+                    uuid: randomUUID()
+                })
+            },
+            'im/v1/messages'
+        ) as { response: Response; payload: SendMessageResponse }
+        expectSuccess(response, payload, 'im/v1/messages')
+        return payload.data?.message_id?.trim() || null
+    }
+
+    /**
      * Chat metadata is best-effort: a bot without `im:chat:readonly` can still
      * bind and chat, it just cannot show the human-friendly chat name.
      */
