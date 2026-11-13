@@ -158,7 +158,7 @@ describe('Feishu cards', () => {
             .toBe('https://hapi.test/sessions/session-1')
     })
 
-    it('renders single-select options with explicit submit and skip', () => {
+    it('renders single-select options as checkers with explicit submit and skip', () => {
         const card = buildInputRequestCard({
             sessionId: 'session-1',
             requestId: 'req-1',
@@ -173,11 +173,12 @@ describe('Feishu cards', () => {
             }
         })
         const elements = (card?.body as { elements?: Array<Record<string, unknown>> } | undefined)?.elements ?? []
+        const checkers = elements.filter((element) => element.tag === 'checker')
+        expect(checkers).toHaveLength(2)
+        const toggle = (checkers[1]?.behaviors as Array<{ value?: { action?: string; value?: string } }>)[0]?.value
+        expect(toggle).toMatchObject({ action: 'toggle', question: 0, value: 'Hub' })
+        // Only the footer actions are buttons now.
         const buttons = elements.filter((element) => element.tag === 'button')
-        // Two options plus 提交回答 and 跳过.
-        expect(buttons).toHaveLength(4)
-        const pick = (buttons[1]?.behaviors as Array<{ value?: { action?: string; value?: string } }>)[0]?.value
-        expect(pick).toMatchObject({ action: 'pick', question: 0, value: 'Hub' })
         const actions = buttons.map((button) => (
             (button.behaviors as Array<{ value?: { action?: string } }>)[0]?.value?.action
         ))

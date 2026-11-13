@@ -512,6 +512,7 @@ export class FeishuBot implements NotificationChannel {
             return { challenge: envelope.challenge }
         }
         if (envelope.kind === 'card_action') {
+            console.log(`[FeishuBot] Card action callback (${envelope.actionTag})`)
             if (!envelope.eventId) {
                 return null
             }
@@ -966,20 +967,37 @@ export class FeishuBot implements NotificationChannel {
         return state
     }
 
-    private inputCardExpiredResponse(messageId: string | null, state: InputCardState): FeishuCardCallbackResponse {
-        this.forgetInputCard(messageId, state)
-        return {
-            toast: { type: 'warning', content: '该问题已在 Hapi 中回答或已失效' },
-            card: {
-                type: 'raw',
-                data: buildInputRequestResolvedCard({
-                    sessionTitle: state.sessionTitle,
-                    questions: state.questions,
-                    selection: state.selection,
-                    status: 'expired'
-                })
-            }
+    /**
+     * Rewrite the card through the message API. The callback response also
+     * accepts a card, but PATCH is the path already proven by the progress
+     * card, so a click never depends on the callback envelope being applied.
+     */
+    private async updateInputCard(messageId: string | null, card: FeishuCard): Promise<void> {
+        if (!messageId) {
+            return
         }
+        try {
+            await this.api.updateCard(messageId, card)
+        } catch (error) {
+            console.error(
+                '[FeishuBot] Failed to update input card:',
+                error instanceof Error ? error.message : error
+            )
+        }
+    }
+
+    private async inputCardExpiredResponse(
+        messageId: string | null,
+        state: InputCardState
+    ): Promise<FeishuCardCallbackResponse> {
+        this.forgetInputCard(messageId, state)
+        await this.updateInputCard(messageId, buildInputRequestResolvedCard({
+            sessionTitle: state.sessionTitle,
+            questions: state.questions,
+            selection: state.selection,
+            status: 'expired'
+        }))
+        return { toast: { type: 'warning', content: '该问题已在 Hapi 中回答或已失效' } }
     }
 
     private async submitInputCard(
@@ -1022,18 +1040,13 @@ export class FeishuBot implements NotificationChannel {
         }
 
         this.forgetInputCard(messageId, state)
-        return {
-            toast: { type: 'success', content: '已提交到 Hapi' },
-            card: {
-                type: 'raw',
-                data: buildInputRequestResolvedCard({
-                    sessionTitle: state.sessionTitle,
-                    questions: state.questions,
-                    selection: state.selection,
-                    status: 'answered'
-                })
-            }
-        }
+        await this.updateInputCard(messageId, buildInputRequestResolvedCard({
+            sessionTitle: state.sessionTitle,
+            questions: state.questions,
+            selection: state.selection,
+            status: 'answered'
+        }))
+        return { toast: { type: 'success', content: '已提交到 Hapi' } }
     }
 
     /** Skip mirrors the web UI's "esc": deny the request without answers. */
@@ -1062,18 +1075,13 @@ export class FeishuBot implements NotificationChannel {
         }
 
         this.forgetInputCard(messageId, state)
-        return {
-            toast: { type: 'info', content: '已跳过该问题' },
-            card: {
-                type: 'raw',
-                data: buildInputRequestResolvedCard({
-                    sessionTitle: state.sessionTitle,
-                    questions: state.questions,
-                    selection: state.selection,
-                    status: 'skipped'
-                })
-            }
-        }
+        await this.updateInputCard(messageId, buildInputRequestResolvedCard({
+            sessionTitle: state.sessionTitle,
+            questions: state.questions,
+            selection: state.selection,
+            status: 'skipped'
+        }))
+        return { toast: { type: 'info', content: '已跳过该问题' } }
     }
 
     /**
@@ -1086,10 +1094,24 @@ export class FeishuBot implements NotificationChannel {
     ): Promise<FeishuCardCallbackResponse | null> {
         const action = readCallbackAction(envelope.actionValue)
         if (!action) {
+            console.log(
+                '[FeishuBot] Card action ignored: unrecognized value',
+                JSON.stringify(envelope.actionValue)?.slice(0, 300)
+            )
             return null
         }
+        console.log('[FeishuBot] Card action:', JSON.stringify({
+            action: action.action,
+            sessionId: action.sessionId,
+            requestId: action.requestId,
+            question: action.question,
+            value: action.value,
+            checked: envelope.checked,
+            messageId: envelope.messageId
+        }))
         const binding = this.options.store.feishuBotBindings.getBySessionId(action.sessionId)
         if (!binding) {
+            console.log('[FeishuBot] Card action ignored: session is not bound')
             return null
         }
         if (envelope.chatId && binding.chatId !== envelope.chatId) {
@@ -1135,13 +1157,15 @@ export class FeishuBot implements NotificationChannel {
         }
 
         const current = state.selection[questionIndex] ?? []
-        if (action.action === 'toggle') {
-            const checked = envelope.checked ?? !current.includes(optionValue)
+        const checked = envelope.checked ?? !current.includes(optionValue)
+        if (question.multiSelect) {
             state.selection[questionIndex] = checked
                 ? (current.includes(optionValue) ? current : [...current, optionValue])
                 : current.filter((entry) => entry !== optionValue)
         } else {
-            state.selection[questionIndex] = [optionValue]
+            // Single-select behaves like a radio group: checking one option
+            // clears the others, unchecking clears the answer.
+            state.selection[questionIndex] = checked ? [optionValue] : []
         }
 
         const card = buildInputRequestCard({
@@ -1153,9 +1177,17 @@ export class FeishuBot implements NotificationChannel {
             publicUrl: this.options.publicUrl,
             selection: state.selection
         })
+        if (card) {
+            await this.updateInputCard(envelope.messageId, card)
+        }
+        const selectedCount = state.selection.reduce((total, values) => total + values.length, 0)
         return {
-            toast: { type: 'info', content: `已选择：${option.label}` },
-            ...(card ? { card: { type: 'raw', data: card } } : {})
+            toast: {
+                type: 'info',
+                content: checked
+                    ? `已选择：${option.label}`
+                    : `已取消选择${selectedCount > 0 ? `，当前 ${selectedCount} 项` : ''}`
+            }
         }
     }
 

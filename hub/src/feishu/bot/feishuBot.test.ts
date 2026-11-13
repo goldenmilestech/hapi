@@ -583,8 +583,9 @@ describe('FeishuBot', () => {
                 context: { open_message_id: 'om_card_1', open_chat_id: 'oc_chat_1' }
             }
         }), new Headers())
-        const toggleResponse = toggle && 'response' in toggle ? toggle.response : null
-        expect(JSON.stringify(toggleResponse?.card)).toContain('"checked":true')
+        expect(toggle && 'response' in toggle ? toggle.response : null).not.toBeNull()
+        expect(JSON.stringify(cardOf(sent.filter((message) => message.kind === 'card-update').at(-1))))
+            .toContain('"checked":true')
         expect(calls).toHaveLength(0)
 
         const submit = await bot.handleWebhook(JSON.stringify({
@@ -608,7 +609,8 @@ describe('FeishuBot', () => {
         expect(calls[0]).toEqual([session.id, 'req-1', undefined, undefined, undefined, { '0': ['Web'] }])
         const submitResponse = submit && 'response' in submit ? submit.response : null
         expect(submitResponse?.toast?.content).toContain('已提交')
-        expect(JSON.stringify(submitResponse?.card)).toContain('已回答')
+        expect(JSON.stringify(cardOf(sent.filter((message) => message.kind === 'card-update').at(-1))))
+            .toContain('已回答')
     })
 
     it('waits for explicit submit after a single-select pick', async () => {
@@ -668,10 +670,11 @@ describe('FeishuBot', () => {
             event: {
                 operator: { open_id: 'ou_1' },
                 action: {
-                    tag: 'button',
+                    tag: 'checker',
+                    checked: true,
                     value: {
                         kind: 'hapi_input',
-                        action: 'pick',
+                        action: 'toggle',
                         sessionId: session.id,
                         requestId: 'req-1',
                         question: 0,
@@ -682,11 +685,12 @@ describe('FeishuBot', () => {
             }
         }), new Headers())
 
-        const pickResponse = pick && 'response' in pick ? pick.response : null
-        // The chosen option is highlighted, but nothing is submitted yet.
+        const pickedCard = cardOf(sent.filter((message) => message.kind === 'card-update').at(-1))
+        // The chosen option is checked, but nothing is submitted yet.
         expect(calls).toHaveLength(0)
-        expect(JSON.stringify(pickResponse?.card)).toContain('"type":"primary"')
-        expect(JSON.stringify(pickResponse?.card)).toContain('提交回答')
+        expect(pick && 'response' in pick ? pick.response : null).not.toBeNull()
+        expect(JSON.stringify(pickedCard)).toContain('"checked":true')
+        expect(JSON.stringify(pickedCard)).toContain('提交回答')
 
         const submit = await bot.handleWebhook(JSON.stringify({
             schema: '2.0',
@@ -784,7 +788,8 @@ describe('FeishuBot', () => {
         expect(denied[0]).toEqual([session.id, 'req-1'])
         const response = skip && 'response' in skip ? skip.response : null
         expect(response?.toast?.content).toContain('已跳过')
-        expect(JSON.stringify(response?.card)).toContain('已跳过')
+        expect(JSON.stringify(cardOf(sent.filter((message) => message.kind === 'card-update').at(-1))))
+            .toContain('已跳过')
     })
 
     it('reports an expired card when the request was already answered in Hapi', async () => {
@@ -856,7 +861,8 @@ describe('FeishuBot', () => {
 
         const response = submit && 'response' in submit ? submit.response : null
         expect(response?.toast?.content).toContain('已失效')
-        expect(JSON.stringify(response?.card)).toContain('问题已失效')
+        expect(JSON.stringify(cardOf(sent.filter((message) => message.kind === 'card-update').at(-1))))
+            .toContain('问题已失效')
     })
 
     it('settles a tracked question card when it is skipped in the Hapi UI', async () => {

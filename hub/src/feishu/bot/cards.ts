@@ -414,56 +414,33 @@ export function buildInputRequestCard(input: {
             if (question.question) {
                 lines.push(question.question)
             }
-            if (question.multiSelect) {
-                lines.push('_可多选_')
-            }
-            // Single-select shows descriptions above the buttons; multi-select
-            // carries them inside each checker.
-            if (!question.multiSelect) {
-                for (const option of question.options) {
-                    lines.push(`- **${option.label}**${option.description ? `：${option.description}` : ''}`)
-                }
-            }
+            lines.push(question.multiSelect ? '_可多选_' : '_单选_')
             elements.push({
                 tag: 'markdown',
                 content: truncateForCard(sanitizeCardMarkdown(lines.join('\n')), STEPS_MAX_BYTES)
             })
 
+            // Checkbox rows for every question: multi-select keeps them
+            // independent, single-select unchecks the others on the server so
+            // the card reads like a radio group.
             const chosen = selection[index] ?? []
-            if (question.multiSelect) {
-                question.options.forEach((option, optionIndex) => {
-                    elements.push({
-                        tag: 'checker',
-                        name: `q${index}_o${optionIndex}`,
-                        checked: chosen.includes(option.value),
-                        text: {
-                            tag: 'lark_md',
-                            content: `**${option.label}**${option.description ? `：${option.description}` : ''}`
-                        },
-                        behaviors: [callbackBehavior(inputActionValue(
-                            'toggle',
-                            input.sessionId,
-                            input.requestId,
-                            { question: index, value: option.value }
-                        ))]
-                    })
+            question.options.forEach((option, optionIndex) => {
+                elements.push({
+                    tag: 'checker',
+                    name: `q${index}_o${optionIndex}`,
+                    checked: chosen.includes(option.value),
+                    text: {
+                        tag: 'lark_md',
+                        content: `**${option.label}**${option.description ? `：${option.description}` : ''}`
+                    },
+                    behaviors: [callbackBehavior(inputActionValue(
+                        'toggle',
+                        input.sessionId,
+                        input.requestId,
+                        { question: index, value: option.value }
+                    ))]
                 })
-            } else {
-                for (const option of question.options) {
-                    elements.push({
-                        tag: 'button',
-                        text: { tag: 'plain_text', content: option.label.slice(0, 100) },
-                        type: chosen.includes(option.value) ? 'primary' : 'default',
-                        width: 'fill',
-                        behaviors: [callbackBehavior(inputActionValue(
-                            'pick',
-                            input.sessionId,
-                            input.requestId,
-                            { question: index, value: option.value }
-                        ))]
-                    })
-                }
-            }
+            })
         })
 
         // Selection is always confirmed explicitly, even for a single
@@ -486,7 +463,7 @@ export function buildInputRequestCard(input: {
             elements.push({
                 tag: 'button',
                 text: { tag: 'plain_text', content: '打开 Hapi 回答' },
-                type: 'default',
+                type: 'text',
                 width: 'fill',
                 behaviors: [{ type: 'open_url', default_url: link }]
             })
