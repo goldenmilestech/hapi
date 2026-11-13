@@ -1,10 +1,10 @@
-import { extractAssistantPlainText, unwrapRoleWrappedRecordEnvelope } from '@hapi/protocol/messages'
 import type { NotificationChannel, TaskNotification } from '../../notifications/notificationTypes'
 import type { NotificationSendContext } from '../../notifications/notificationSendContext'
 import { getSessionName } from '../../notifications/sessionInfo'
 import type { Session, SyncEngine } from '../../sync/syncEngine'
 import type { Store } from '../../store'
 import type { FeishuBotConfig } from '../config'
+import { buildAnswerCard, buildProgressCard } from './cards'
 import { decryptFeishuPayload, verifyFeishuSignature } from './eventCrypto'
 import {
     extractFeishuText,
@@ -17,10 +17,11 @@ import {
     type FeishuMessage
 } from './eventParser'
 import { FeishuBotApi, type FeishuFetch } from './feishuApi'
+import { summarizeFeishuTurn } from './turnSummary'
 
 const MAX_INBOUND_TEXT_CHARS = 32_000
 const MAX_OUTBOUND_TEXT_CHARS = 8_000
-const ASSISTANT_SCAN_LIMIT = 20
+const TURN_SCAN_LIMIT = 200
 
 const BIND_INSTRUCTIONS = [
     '当前对话还没有绑定 Hapi 会话。',
@@ -69,8 +70,8 @@ export function formatFeishuReply(sessionTitle: string, assistantText: string): 
  * Bidirectional bridge between Feishu chats and HAPI sessions.
  *
  * Inbound: `im.message.receive_v1` → `SyncEngine.sendMessage`.
- * Outbound: the `ready` notification (one final answer per turn, matching the
- * Agent Teams idle-report shape) → `im/v1/messages`.
+ * Outbound: the `ready` notification (one final answer per turn) → an
+ * interactive Markdown card, preceded by a collapsed reasoning/tool-call card.
  *
  * The class owns both directions so the webhook route and the notification
  * channel share one API client and one bot identity.
@@ -78,6 +79,7 @@ export function formatFeishuReply(sessionTitle: string, assistantText: string): 
 export class FeishuBot implements NotificationChannel {
     private readonly api: FeishuBotApi
     private readonly now: () => number
+    private readonly lastSentAnswer = new Map<string, string>()
     private botOpenId: string | null = null
     private botInfoPromise: Promise<void> | null = null
 
@@ -358,22 +360,71 @@ export class FeishuBot implements NotificationChannel {
             return
         }
 
-        const text = this.findLastAssistantText(session.id)
-        if (!text) {
+        const title = getSessionName(session)
+        const summary = summarizeFeishuTurn(
+            this.options.store.messages.getMessages(session.id, TURN_SCAN_LIMIT)
+        )
+
+        // A reconnect or a duplicate `ready` can replay the same completed
+        // turn; the stored answer id makes the second delivery a no-op.
+        if (
+            summary.answerMessageId
+            && this.lastSentAnswer.get(session.id) === summary.answerMessageId
+        ) {
             return
         }
 
+        // Publish the process card first so it sits above the answer in the
+        // chat timeline, matching the Agent Teams output shape.
+        const progressCard = buildProgressCard(summary)
+        if (progressCard) {
+            try {
+                await this.api.sendCard(binding.chatId, progressCard)
+            } catch (error) {
+                console.error(
+                    '[FeishuBot] Failed to send progress card:',
+                    error instanceof Error ? error.message : error
+                )
+            }
+        }
+
+        if (!summary.answer) {
+            return
+        }
+
+        const answerCard = buildAnswerCard(title, summary.answer)
+        if (answerCard) {
+            try {
+                await this.api.sendCard(binding.chatId, answerCard)
+                this.rememberSentAnswer(session.id, summary.answerMessageId)
+                return
+            } catch (error) {
+                console.error(
+                    '[FeishuBot] Failed to send answer card, falling back to text:',
+                    error instanceof Error ? error.message : error
+                )
+            }
+        }
+
         try {
-            await this.api.sendText(
-                binding.chatId,
-                formatFeishuReply(getSessionName(session), text)
-            )
+            await this.api.sendText(binding.chatId, formatFeishuReply(title, summary.answer))
+            this.rememberSentAnswer(session.id, summary.answerMessageId)
         } catch (error) {
             console.error(
                 '[FeishuBot] Failed to send session reply:',
                 error instanceof Error ? error.message : error
             )
         }
+    }
+
+    private rememberSentAnswer(sessionId: string, messageId: string | null): void {
+        if (!messageId) {
+            return
+        }
+        if (this.lastSentAnswer.size > 500) {
+            this.lastSentAnswer.clear()
+        }
+        this.lastSentAnswer.set(sessionId, messageId)
     }
 
     async sendPermissionRequest(_session: Session, _ctx?: NotificationSendContext): Promise<void> {
@@ -386,24 +437,5 @@ export class FeishuBot implements NotificationChannel {
         _ctx?: NotificationSendContext
     ): Promise<void> {
         // Task notices are covered by the turn-end reply.
-    }
-
-    private findLastAssistantText(sessionId: string): string | null {
-        try {
-            const messages = this.options.store.messages.getMessages(sessionId, ASSISTANT_SCAN_LIMIT)
-            for (let index = messages.length - 1; index >= 0; index -= 1) {
-                const record = unwrapRoleWrappedRecordEnvelope(messages[index]!.content)
-                if (record?.role !== 'agent') {
-                    continue
-                }
-                const text = extractAssistantPlainText(record.content)
-                if (text?.trim()) {
-                    return text
-                }
-            }
-        } catch {
-            return null
-        }
-        return null
     }
 }
