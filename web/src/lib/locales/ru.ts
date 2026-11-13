@@ -251,6 +251,7 @@ export default {
   'session.conciseView.disable': 'Показать весь диалог',
   'session.outline.title': 'План',
   'session.outline.loadOlder': 'Загрузить более ранние',
+  'session.outline.loading': 'Загрузка полного плана…',
   'session.outline.empty': 'В загруженных сообщениях нет элементов плана',
   'session.outline.searchPlaceholder': 'Поиск по плану',
   'session.outline.searchLabel': 'Поиск элементов плана',

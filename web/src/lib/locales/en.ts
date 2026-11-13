@@ -289,6 +289,7 @@ export default {
   'session.conciseView.disable': 'Show full conversation',
   'session.outline.title': 'Outline',
   'session.outline.loadOlder': 'Load earlier',
+  'session.outline.loading': 'Loading the full outline…',
   'session.outline.empty': 'No outline items in loaded messages',
   'session.outline.searchPlaceholder': 'Search outline',
   'session.outline.searchLabel': 'Search outline items',

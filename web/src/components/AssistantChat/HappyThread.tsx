@@ -616,6 +616,8 @@ export function ThreadMessagesById({ components }: { components: ThreadMessageCo
 
 export function ConversationOutlinePanel(props: {
     items: readonly ConversationOutlineItem[]
+    /** The session-wide index is in flight; the window-only list would be incomplete. */
+    isLoadingItems: boolean
     hasMoreMessages: boolean
     isLoadingMoreMessages: boolean
     onLoadMore: () => void
@@ -668,7 +670,7 @@ export function ConversationOutlinePanel(props: {
                             className="h-9 w-full rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] py-2 pl-9 pr-3 text-sm text-[var(--app-fg)] outline-none placeholder:text-[var(--app-hint)] focus:border-[var(--app-link)] focus:ring-1 focus:ring-[var(--app-link)]"
                         />
                     </div>
-                    {props.hasMoreMessages ? (
+                    {!props.isLoadingItems && props.hasMoreMessages ? (
                         <Button
                             variant="outline"
                             onClick={props.onLoadMore}
@@ -707,7 +709,16 @@ export function ConversationOutlinePanel(props: {
             </div>
 
             <div className="app-scroll-y min-h-0 flex-1 p-2">
-                {props.items.length === 0 ? (
+                {props.isLoadingItems ? (
+                    <div
+                        className="flex flex-col items-center gap-2 px-2 py-8 text-center text-sm text-[var(--app-hint)]"
+                        role="status"
+                        aria-live="polite"
+                    >
+                        <Spinner size="sm" label={null} />
+                        <span>{t('session.outline.loading')}</span>
+                    </div>
+                ) : props.items.length === 0 ? (
                     <div className="px-2 py-8 text-center text-sm text-[var(--app-hint)]">
                         {t('session.outline.empty')}
                     </div>
@@ -785,6 +796,8 @@ export function HappyThread(props: {
     forceScrollToken: number
     outlineOpen: boolean
     outlineItems: readonly ConversationOutlineItem[]
+    /** The session-wide prompt index is still loading; show a placeholder instead of window items. */
+    outlineItemsLoading?: boolean
     onOutlineOpenChange: (open: boolean) => void
     onOutlineItemClick?: (item: ConversationOutlineItem) => void
     initialTargetMessageId?: string
@@ -2741,6 +2754,7 @@ export function HappyThread(props: {
                         />
                         <ConversationOutlinePanel
                             items={props.outlineItems}
+                            isLoadingItems={props.outlineItemsLoading === true}
                             hasMoreMessages={props.hasMoreMessages}
                             isLoadingMoreMessages={props.isLoadingMoreMessages}
                             onLoadMore={() => {

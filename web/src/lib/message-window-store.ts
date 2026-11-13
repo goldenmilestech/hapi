@@ -863,6 +863,17 @@ async function runTailSync(api: ApiClient, sessionId: string): Promise<void> {
     const generation = beginTailSync(sessionId)
     try {
         const initial = getState(sessionId)
+        // A search or outline jump leaves a bounded history context on screen.
+        // Background tail syncs (initial SSE connect, reconnects, path
+        // invalidations) must not replace it with the latest page while the
+        // reader is inspecting it: the forward pager closes the gap when they
+        // scroll down, and jumping back to the tail replaces the window
+        // explicitly. An emptied window must still resynchronize, or a rewind
+        // or invalidation would leave the reader with nothing.
+        if (initial.viewMode === 'history' && initial.requiresLatestReset && initial.messages.length > 0) {
+            finishTailSync(sessionId, generation, null)
+            return
+        }
         const initialCursor = getNewestCursor(initial)
         const preferLatestOnActivation = initial.preferLatestOnActivation
         const canIncrement = initialCursor !== null
