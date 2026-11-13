@@ -200,6 +200,35 @@ export class FeishuBotApi {
     }
 
     /**
+     * Replace the content of a card this bot already sent. Used to rewrite the
+     * live process card in place while a turn is running.
+     */
+    async updateCard(messageId: string, card: unknown): Promise<void> {
+        const id = messageId.trim()
+        if (!id) {
+            throw new FeishuApiError('Feishu message id is required')
+        }
+
+        const token = await this.getTenantAccessToken()
+        const { response, payload } = await readJson(
+            this.fetchImpl,
+            `${FEISHU_API_BASE}/im/v1/messages/${encodeURIComponent(id)}`,
+            {
+                method: 'PATCH',
+                headers: {
+                    authorization: `Bearer ${token}`,
+                    'content-type': 'application/json'
+                },
+                body: JSON.stringify({
+                    content: JSON.stringify(card)
+                })
+            },
+            'im/v1/messages/:message_id'
+        ) as { response: Response; payload: SendMessageResponse }
+        expectSuccess(response, payload, 'im/v1/messages/:message_id')
+    }
+
+    /**
      * Chat metadata is best-effort: a bot without `im:chat:readonly` can still
      * bind and chat, it just cannot show the human-friendly chat name.
      */

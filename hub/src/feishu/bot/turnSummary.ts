@@ -15,8 +15,12 @@ export type FeishuTurnSummary = {
     answer: string | null
     /** Stored id of the message the answer came from, for cross-ready de-duplication. */
     answerMessageId: string | null
-    /** Sum of Claude's per-message output tokens, when the agent reports them. */
+    /** Identity of the turn (its prompt row), used to rotate live cards. */
+    turnKey: string | null
+    /** Provider-reported turn output tokens, else summed assistant output tokens. */
     outputTokens: number | null
+    /** Provider-reported turn duration, else the stored-message time span. */
+    durationMs: number | null
     /** First and last stored message timestamps for the turn, when known. */
     startedAt: number | null
     endedAt: number | null
@@ -33,6 +37,9 @@ type TurnAccumulator = {
     stepIds: Map<string, number>
     outputTokens: number
     usageIds: Set<string>
+    /** Claude's turn_duration resultSummary is authoritative for the turn. */
+    resultOutputTokens: number | null
+    resultDurationMs: number | null
 }
 
 function normalizeInlineText(value: string): string {
@@ -174,6 +181,54 @@ function readAssistantText(content: unknown): string | null {
     return text && text.trim() ? text : null
 }
 
+function nonNegativeNumber(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+}
+
+/**
+ * Claude's `turn_duration` result envelope carries the provider's authoritative
+ * per-turn usage. Assistant rows also expose usage, but the turn summary is the
+ * only source guaranteed to describe the whole turn.
+ */
+function readTurnDuration(content: unknown): { outputTokens: number | null; durationMs: number | null } | null {
+    if (!isObject(content) || content.type !== 'output') {
+        return null
+    }
+    const data = isObject(content.data) ? content.data : null
+    if (!data || data.type !== 'system' || data.subtype !== 'turn_duration') {
+        return null
+    }
+    const summary = isObject(data.resultSummary) ? data.resultSummary : null
+    if (!summary) {
+        return null
+    }
+
+    const usage = isObject(summary.usage) ? summary.usage : null
+    let outputTokens = nonNegativeNumber(usage?.output_tokens) ?? nonNegativeNumber(usage?.outputTokens)
+    if (outputTokens === null) {
+        const modelUsage = isObject(summary.modelUsage) ? summary.modelUsage : null
+        if (modelUsage) {
+            let sum = 0
+            for (const value of Object.values(modelUsage)) {
+                if (!isObject(value)) continue
+                sum += nonNegativeNumber(value.outputTokens) ?? nonNegativeNumber(value.output_tokens) ?? 0
+            }
+            if (sum > 0) {
+                outputTokens = sum
+            }
+        }
+    }
+
+    const durationMs = nonNegativeNumber(summary.duration_ms)
+        ?? nonNegativeNumber(summary.durationMs)
+        ?? nonNegativeNumber(data.duration_ms)
+        ?? nonNegativeNumber(data.durationMs)
+    if (outputTokens === null && durationMs === null) {
+        return null
+    }
+    return { outputTokens, durationMs }
+}
+
 /** Assistant prose, or the SDK result envelope some Claude runs end with. */
 function readAnswerText(content: unknown): string | null {
     const text = readAssistantText(content)
@@ -244,7 +299,22 @@ function createAccumulator(): TurnAccumulator {
         steps: [],
         stepIds: new Map(),
         outputTokens: 0,
-        usageIds: new Set()
+        usageIds: new Set(),
+        resultOutputTokens: null,
+        resultDurationMs: null
+    }
+}
+
+function collectTurnDuration(acc: TurnAccumulator, content: unknown): void {
+    const turnDuration = readTurnDuration(content)
+    if (!turnDuration) {
+        return
+    }
+    if (turnDuration.outputTokens !== null) {
+        acc.resultOutputTokens = turnDuration.outputTokens
+    }
+    if (turnDuration.durationMs !== null) {
+        acc.resultDurationMs = turnDuration.durationMs
     }
 }
 
@@ -262,6 +332,7 @@ function collectRange(
         }
 
         const content = record.content
+        collectTurnDuration(acc, content)
         if (isObject(content)) {
             const data = isObject(content.data) ? content.data : null
             if (content.type === 'output' && data?.type === 'assistant') {
@@ -270,6 +341,58 @@ function collectRange(
                 collectGenericAgent(acc, data, message.id)
             }
         }
+    }
+}
+
+/** The turn_duration row usually lands after the final assistant prose. */
+function collectTurnDurationTail(
+    messages: StoredMessage[],
+    start: number,
+    acc: TurnAccumulator
+): void {
+    for (let index = start; index < messages.length; index += 1) {
+        if (isDeliveredUserPrompt(messages[index]!)) {
+            break
+        }
+        const record = readRecordContent(messages[index]!)
+        if (!record || record.role !== 'agent' || record.isSidechain) {
+            continue
+        }
+        collectTurnDuration(acc, record.content)
+        if (isObject(record.content)) {
+            const data = isObject(record.content.data) ? record.content.data : null
+            // Usage rows can trail the final prose; only fold their tokens in,
+            // not any late reasoning/tool traffic.
+            if (record.content.type === 'output' && data?.type === 'assistant') {
+                recordOutputTokens(acc, data, messages[index]!.id)
+            }
+        }
+    }
+}
+
+function finalizeSummary(
+    acc: TurnAccumulator,
+    options: {
+        answer: string | null
+        answerMessageId: string | null
+        turnKey: string | null
+        startedAt: number | null
+        endedAt: number | null
+    }
+): FeishuTurnSummary {
+    const span = options.startedAt !== null && options.endedAt !== null && options.endedAt > options.startedAt
+        ? options.endedAt - options.startedAt
+        : null
+    return {
+        thinking: acc.thinking.map((entry) => entry.text).join('\n\n').trim(),
+        steps: acc.steps,
+        answer: options.answer,
+        answerMessageId: options.answerMessageId,
+        turnKey: options.turnKey,
+        outputTokens: acc.resultOutputTokens ?? (acc.outputTokens > 0 ? acc.outputTokens : null),
+        durationMs: acc.resultDurationMs ?? span,
+        startedAt: options.startedAt,
+        endedAt: options.endedAt
     }
 }
 
@@ -291,29 +414,46 @@ export function summarizeFeishuTurn(messages: StoredMessage[]): FeishuTurnSummar
         if (start >= 0) {
             collectRange(messages, start, messages.length - 1, acc)
         }
-        return {
-            thinking: acc.thinking.map((entry) => entry.text).join('\n\n').trim(),
-            steps: acc.steps,
+        return finalizeSummary(acc, {
             answer: null,
             answerMessageId: null,
-            outputTokens: acc.outputTokens > 0 ? acc.outputTokens : null,
+            turnKey: start > 0 ? messages[start - 1]?.id ?? null : null,
             startedAt: start >= 0 ? messages[start]?.createdAt ?? null : null,
             endedAt: start >= 0 ? messages[messages.length - 1]?.createdAt ?? null : null
-        }
+        })
     }
 
     const start = findPromptStart(messages, answer.index)
     if (start >= 0) {
         collectRange(messages, start, answer.index, acc)
+        collectTurnDurationTail(messages, answer.index + 1, acc)
     }
 
-    return {
-        thinking: acc.thinking.map((entry) => entry.text).join('\n\n').trim(),
-        steps: acc.steps,
+    return finalizeSummary(acc, {
         answer: answer.text,
         answerMessageId: answer.messageId,
-        outputTokens: acc.outputTokens > 0 ? acc.outputTokens : null,
+        turnKey: start > 0 ? messages[start - 1]?.id ?? null : null,
         startedAt: start >= 0 ? messages[start]?.createdAt ?? null : null,
         endedAt: start >= 0 ? messages[answer.index]?.createdAt ?? null : null
+    })
+}
+
+/**
+ * Progress view of the turn currently running: everything after the newest
+ * delivered prompt, without requiring an answer yet. Used to publish and
+ * refresh the Feishu process card while the agent is still working.
+ */
+export function summarizeActiveTurn(messages: StoredMessage[]): FeishuTurnSummary {
+    const start = findPromptStart(messages, messages.length)
+    const acc = createAccumulator()
+    if (start >= 0) {
+        collectRange(messages, start, messages.length - 1, acc)
     }
+    return finalizeSummary(acc, {
+        answer: null,
+        answerMessageId: null,
+        turnKey: start > 0 ? messages[start - 1]?.id ?? null : null,
+        startedAt: start >= 0 ? messages[start]?.createdAt ?? null : null,
+        endedAt: start >= 0 ? messages[messages.length - 1]?.createdAt ?? null : null
+    })
 }
