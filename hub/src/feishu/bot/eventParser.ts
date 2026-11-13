@@ -214,9 +214,8 @@ export type FeishuHapiCommand =
     | { kind: 'help' }
 
 /**
- * Only `/hapi ...` commands are consumed by this bot. Every other chat
- * message belongs to the Manager bot, so the plugin must stay silent rather
- * than forwarding it into a HAPI session.
+ * Parse `/hapi ...` commands. Anything else is not a command: group chat stays
+ * with the Manager bot, while 1:1 chat is forwarded to the bound session.
  */
 export function parseHapiCommand(text: string): FeishuHapiCommand | null {
     const trimmed = text.trim().replace(/^／/, '/')
