@@ -575,7 +575,11 @@ export function StatusBar(props: {
                     <div
                         data-testid="session-stats"
                         title={sessionStatsDetails}
-                        className="hidden min-w-0 items-baseline gap-2 sm:flex"
+                        // The context chip is an inline-flex whose first item is
+                        // the progress bar, so its text baseline sits 2px lower
+                        // than a plain 10px line box. Nudge the stats down to
+                        // share that baseline (same trick as the status dot).
+                        className="relative top-0.5 hidden min-w-0 items-baseline gap-2 sm:flex"
                     >
                         {/* Compact below md keeps the row from overflowing on phones:
                             DSH's compact mode shows only speed and cache hit. */}
