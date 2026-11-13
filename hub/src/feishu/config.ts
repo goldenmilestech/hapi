@@ -9,9 +9,17 @@ import type { FeishuIdentityConfig } from './identity'
 
 export type ResolvedFeishuConfig = FeishuOAuthConfig & FeishuIdentityConfig
 
+export type FeishuBotConfig = {
+    appId: string
+    appSecret: string
+    verificationToken: string
+    encryptKey: string | null
+}
+
 /** Safe to expose to the SPA; never includes the app secret. */
 export type PublicFeishuConfig = {
     enabled: boolean
+    botEnabled: boolean
     appId: string | null
     redirectUri: string | null
     scope: string
@@ -41,11 +49,29 @@ export function resolveFeishuConfig(): ResolvedFeishuConfig | null {
     }
 }
 
+export function resolveFeishuBotConfig(): FeishuBotConfig | null {
+    const configuration = getConfiguration()
+    if (
+        !configuration.feishuAppId
+        || !configuration.feishuAppSecret
+        || !configuration.feishuVerificationToken
+    ) {
+        return null
+    }
+    return {
+        appId: configuration.feishuAppId,
+        appSecret: configuration.feishuAppSecret,
+        verificationToken: configuration.feishuVerificationToken,
+        encryptKey: configuration.feishuEncryptKey
+    }
+}
+
 export function publicFeishuConfig(): PublicFeishuConfig {
     const configuration = getConfiguration()
     const enabled = resolveFeishuConfig() !== null
     return {
         enabled,
+        botEnabled: configuration.feishuBotEnabled,
         appId: enabled ? configuration.feishuAppId : null,
         redirectUri: enabled ? configuration.feishuRedirectUri : null,
         scope: configuration.feishuScope,

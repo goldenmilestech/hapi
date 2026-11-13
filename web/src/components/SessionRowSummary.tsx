@@ -210,6 +210,15 @@ export function SessionRowSummary(props: {
                         >
                             {sessionName}
                         </div>
+                        {s.feishuBound ? (
+                            <span
+                                data-testid="session-feishu-bound"
+                                title={t('session.item.feishuBound')}
+                                className="shrink-0 rounded bg-[var(--app-subtle-bg)] px-1 py-0.5 text-[10px] leading-none text-[var(--app-hint)]"
+                            >
+                                {t('session.item.feishuBoundShort')}
+                            </span>
+                        ) : null}
                         {/* The presence pulse alone is easy to miss at a glance, so
                             keep the explicit spinner alongside it. */}
                         {isRunning || isBackgroundOnly ? (

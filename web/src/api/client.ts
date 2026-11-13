@@ -7,8 +7,11 @@ import type {
     PersonalAccessTokenResponse,
     FeishuPublicConfigResponse,
     FeishuBindingsResponse,
+    FeishuBotBindingsResponse,
     CreateFeishuBindingRequest,
     CreateFeishuBindingResponse,
+    CreateFeishuBotBindCodeRequest,
+    CreateFeishuBotBindCodeResponse,
     CreateSessionShareRequest,
     CreateSessionShareResponse,
     RecoverSessionShareResponse,
@@ -1075,6 +1078,25 @@ export class ApiClient {
 
     async removeFeishuBinding(email: string): Promise<void> {
         await this.request(`/api/feishu/bindings/${encodeURIComponent(email)}`, {
+            method: 'DELETE'
+        })
+    }
+
+    async getFeishuBotBindings(): Promise<FeishuBotBindingsResponse> {
+        return await this.request<FeishuBotBindingsResponse>('/api/feishu/bot/bindings')
+    }
+
+    async createFeishuBotBindCode(
+        body: CreateFeishuBotBindCodeRequest
+    ): Promise<CreateFeishuBotBindCodeResponse> {
+        return await this.request<CreateFeishuBotBindCodeResponse>('/api/feishu/bot/bind-codes', {
+            method: 'POST',
+            body: JSON.stringify(body)
+        })
+    }
+
+    async removeFeishuBotBinding(id: string): Promise<void> {
+        await this.request(`/api/feishu/bot/bindings/${encodeURIComponent(id)}`, {
             method: 'DELETE'
         })
     }

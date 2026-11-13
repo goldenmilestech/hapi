@@ -24,6 +24,7 @@ export function SettingsNav(props: { activeId?: string; mobile?: boolean }) {
         chat: t(`settings.chat.enterBehavior.${composerEnterBehavior}`),
         voice: t('settings.hub.voice.summary'),
         machines: t('settings.hub.machines.summary'),
+        feishu: t('settings.feishu.summary'),
         tokens: t('settings.tokens.summary'),
         storage: t('settings.storage.summary'),
         usage: t('settings.usage.summary'),

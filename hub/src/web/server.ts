@@ -36,8 +36,10 @@ import { createVoiceRoutes } from './routes/voice'
 import { createHubSettingsRoutes } from './routes/hubSettings'
 import { createAccessTokensRoutes } from './routes/accessTokens'
 import { createFeishuRoutes } from './routes/feishu'
+import { createFeishuBotRoutes, createFeishuWebhookRoute } from './routes/feishuBot'
 import { createMeAccessTokenRoutes } from './routes/meAccessToken'
 import { createWorkGraphRoutes } from './routes/workGraph'
+import type { FeishuBot } from '../feishu/bot/feishuBot'
 import type { SSEManager } from '../sse/sseManager'
 import type { VisibilityTracker } from '../visibility/visibilityTracker'
 import type { Server as BunServer, ServerWebSocket } from 'bun'
@@ -235,6 +237,7 @@ function createWebApp(options: {
     embeddedAssetMap: Map<string, EmbeddedWebAsset> | null
     relayMode?: boolean
     officialWebUrl?: string
+    getFeishuBot?: () => FeishuBot | null
 }): Hono<WebAppEnv> {
     const app = new Hono<WebAppEnv>()
 
@@ -290,6 +293,12 @@ function createWebApp(options: {
 
     app.route('/api', createAuthRoutes(options.jwtSecret, options.store))
     app.route('/api', createBindRoutes(options.jwtSecret, options.store))
+    // Feishu calls this path without a hub JWT; the bot verifies the Feishu
+    // verification token/signature itself. Registering before the auth
+    // middleware keeps it public without opening the management routes.
+    app.route('/api', createFeishuWebhookRoute({
+        getFeishuBot: options.getFeishuBot ?? (() => null)
+    }))
 
     app.use('/api/*', createAuthMiddleware(options.jwtSecret, {
         isTokenRevoked: (tokenId) => options.store.accessTokens.isTokenIdRevoked(tokenId),
@@ -298,6 +307,10 @@ function createWebApp(options: {
     app.route('/api', createAccessTokensRoutes(options.store, { dataDir: configuration.dataDir }))
     app.route('/api', createMeAccessTokenRoutes(options.store, { dataDir: configuration.dataDir }))
     app.route('/api', createFeishuRoutes(options.store))
+    app.route('/api', createFeishuBotRoutes({
+        store: options.store,
+        getSyncEngine: options.getSyncEngine
+    }))
     app.route('/api', createEventsRoutes(options.getSseManager, options.getSyncEngine, options.getVisibilityTracker))
     app.route('/api', createSessionsRoutes(options.getSyncEngine, options.store, {
         shareTokenSecret: options.shareTokenSecret
@@ -446,6 +459,7 @@ export async function startWebServer(options: {
     corsOrigins?: string[]
     relayMode?: boolean
     officialWebUrl?: string
+    getFeishuBot?: () => FeishuBot | null
 }): Promise<BunServer<WebSocketData>> {
     const isCompiled = isBunCompiled()
     const embeddedAssetMap = isCompiled ? await loadEmbeddedAssetMap() : null
@@ -460,7 +474,8 @@ export async function startWebServer(options: {
         corsOrigins: options.corsOrigins,
         embeddedAssetMap,
         relayMode: options.relayMode,
-        officialWebUrl: options.officialWebUrl
+        officialWebUrl: options.officialWebUrl,
+        getFeishuBot: options.getFeishuBot
     })
 
     const configuration = getConfiguration()

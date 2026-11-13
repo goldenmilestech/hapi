@@ -16,6 +16,10 @@
  * - FEISHU_SCOPE: Space-separated scopes (default: contact:user.email:readonly).
  * - FEISHU_OWNER_OPEN_ID / FEISHU_OWNER_EMAIL: Sign in as the hub owner
  *   (`default` namespace).
+ * - FEISHU_VERIFICATION_TOKEN: Feishu event subscription verification token.
+ *   Required to enable the hub bot (chat bridge).
+ * - FEISHU_ENCRYPT_KEY: Optional Feishu event encryption key. When set, the
+ *   hub decrypts event bodies and verifies the request signature.
  * - TELEGRAM_BOT_TOKEN: Telegram Bot API token from @BotFather
  * - TELEGRAM_NOTIFICATION: Enable/disable Telegram notifications (default: true)
  * - SERVERCHAN_SENDKEY: Server酱 SendKey/AppKey for push notifications
@@ -116,6 +120,11 @@ class Configuration {
     public readonly feishuOwnerOpenId: string | null
     public readonly feishuOwnerEmail: string | null
     public readonly feishuEnabled: boolean
+    /** Event subscription token; present only when the bot is configured. */
+    public readonly feishuVerificationToken: string | null
+    /** Optional AES key for encrypted Feishu event bodies. */
+    public readonly feishuEncryptKey: string | null
+    public readonly feishuBotEnabled: boolean
 
     /** Path to settings.json file */
     public readonly settingsFile: string
@@ -215,6 +224,13 @@ class Configuration {
         this.feishuOwnerOpenId = process.env.FEISHU_OWNER_OPEN_ID?.trim() || null
         this.feishuOwnerEmail = process.env.FEISHU_OWNER_EMAIL?.trim().toLowerCase() || null
         this.feishuEnabled = Boolean(this.feishuAppId && this.feishuAppSecret && this.feishuRedirectUri)
+        this.feishuVerificationToken = process.env.FEISHU_VERIFICATION_TOKEN?.trim() || null
+        this.feishuEncryptKey = process.env.FEISHU_ENCRYPT_KEY?.trim() || null
+        // The bot reuses the login app credentials; the verification token is
+        // what makes the public event endpoint meaningful.
+        this.feishuBotEnabled = Boolean(
+            this.feishuAppId && this.feishuAppSecret && this.feishuVerificationToken
+        )
 
         // Store sources for logging (cliApiToken will be set by _setCliApiToken)
         this.sources = {
