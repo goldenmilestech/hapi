@@ -132,13 +132,13 @@ export class FeishuBotApi {
         return token
     }
 
-    async sendText(chatId: string, text: string): Promise<void> {
+    async sendText(chatId: string, text: string): Promise<string | null> {
         const receiveId = chatId.trim()
         if (!receiveId) {
             throw new FeishuApiError('Feishu chat id is required')
         }
         if (!text.trim()) {
-            return
+            return null
         }
 
         const token = await this.getTenantAccessToken()
@@ -163,6 +163,7 @@ export class FeishuBotApi {
             'im/v1/messages'
         ) as { response: Response; payload: SendMessageResponse }
         expectSuccess(response, payload, 'im/v1/messages')
+        return payload.data?.message_id?.trim() || null
     }
 
     /**
@@ -226,6 +227,34 @@ export class FeishuBotApi {
             'im/v1/messages/:message_id'
         ) as { response: Response; payload: SendMessageResponse }
         expectSuccess(response, payload, 'im/v1/messages/:message_id')
+    }
+
+    /**
+     * Add an emoji reaction to a message. Mirrors the Agent Teams feedback:
+     * "Typing" on the user's message, "DONE" on the finished reply.
+     */
+    async addReaction(messageId: string, emojiType: string): Promise<void> {
+        const id = messageId.trim()
+        if (!id || !emojiType.trim()) {
+            return
+        }
+        const token = await this.getTenantAccessToken()
+        const { response, payload } = await readJson(
+            this.fetchImpl,
+            `${FEISHU_API_BASE}/im/v1/messages/${encodeURIComponent(id)}/reactions`,
+            {
+                method: 'POST',
+                headers: {
+                    authorization: `Bearer ${token}`,
+                    'content-type': 'application/json'
+                },
+                body: JSON.stringify({
+                    reaction_type: { emoji_type: emojiType.trim() }
+                })
+            },
+            'im/v1/messages/:message_id/reactions'
+        ) as { response: Response; payload: { code?: number; msg?: string } }
+        expectSuccess(response, payload, 'im/v1/messages/:message_id/reactions')
     }
 
     /**

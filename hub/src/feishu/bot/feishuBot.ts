@@ -709,6 +709,9 @@ export class FeishuBot implements NotificationChannel {
             return
         }
 
+        // Agent Teams feedback: mark the prompt as being worked on.
+        await this.addReaction(message.messageId, 'Typing')
+
         if (await this.tryAnswerInputRequest(message, session, messageText)) {
             return
         }
@@ -922,8 +925,9 @@ export class FeishuBot implements NotificationChannel {
         const answerCard = buildAnswerCard(title, summary.answer)
         if (answerCard) {
             try {
-                await this.api.sendCard(binding.chatId, answerCard)
+                const messageId = await this.api.sendCard(binding.chatId, answerCard)
                 this.rememberSentAnswer(session.id, summary.answerMessageId)
+                await this.addReaction(messageId, 'DONE')
                 return
             } catch (error) {
                 console.error(
@@ -934,8 +938,12 @@ export class FeishuBot implements NotificationChannel {
         }
 
         try {
-            await this.api.sendText(binding.chatId, formatFeishuReply(title, summary.answer))
+            const messageId = await this.api.sendText(
+                binding.chatId,
+                formatFeishuReply(title, summary.answer)
+            )
             this.rememberSentAnswer(session.id, summary.answerMessageId)
+            await this.addReaction(messageId, 'DONE')
         } catch (error) {
             console.error(
                 '[FeishuBot] Failed to send session reply:',
@@ -1011,6 +1019,21 @@ export class FeishuBot implements NotificationChannel {
      * accepts a card, but PATCH is the path already proven by the progress
      * card, so a click never depends on the callback envelope being applied.
      */
+    /** Best-effort reaction so chat feedback never blocks message handling. */
+    private async addReaction(messageId: string | null, emojiType: string): Promise<void> {
+        if (!messageId) {
+            return
+        }
+        try {
+            await this.api.addReaction(messageId, emojiType)
+        } catch (error) {
+            console.error(
+                '[FeishuBot] Failed to add reaction:',
+                error instanceof Error ? error.message : error
+            )
+        }
+    }
+
     private async updateInputCard(messageId: string | null, card: FeishuCard): Promise<void> {
         if (!messageId) {
             return

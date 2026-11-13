@@ -35,4 +35,18 @@ describe('FeishuBotApi', () => {
         const body = JSON.parse(String(patch?.init?.body)) as { content: string }
         expect(JSON.parse(body.content)).toEqual({ schema: '2.0' })
     })
+
+    it('adds a reaction through the message reactions endpoint', async () => {
+        const calls: Array<{ url: string; init?: RequestInit }> = []
+        const api = new FeishuBotApi({ appId: 'app', appSecret: 'secret' }, fakeFetch(calls))
+
+        await api.addReaction('om_card_1', 'Typing')
+
+        const post = calls.find((call) => call.url.includes('/reactions'))
+        expect(post?.url).toContain('/open-apis/im/v1/messages/om_card_1/reactions')
+        expect(post?.init?.method).toBe('POST')
+        expect(JSON.parse(String(post?.init?.body))).toEqual({
+            reaction_type: { emoji_type: 'Typing' }
+        })
+    })
 })
