@@ -207,6 +207,37 @@ export function isBotMentioned(message: FeishuMessage, botOpenId: string | null)
     return message.mentions.every((mention) => mention.mentionedType === null)
 }
 
+export type FeishuHapiCommand =
+    | { kind: 'text'; text: string }
+    | { kind: 'bind'; code: string }
+    | { kind: 'unbind' }
+    | { kind: 'help' }
+
+/**
+ * Only `/hapi ...` commands are consumed by this bot. Every other chat
+ * message belongs to the Manager bot, so the plugin must stay silent rather
+ * than forwarding it into a HAPI session.
+ */
+export function parseHapiCommand(text: string): FeishuHapiCommand | null {
+    const trimmed = text.trim().replace(/^／/, '/')
+    const match = trimmed.match(/^\/hapi(?:@[A-Za-z0-9_]+)?(?:\s+([\s\S]*))?$/i)
+    if (!match) {
+        return null
+    }
+    const rest = (match[1] ?? '').trim()
+    if (!rest || /^(?:help|\?)$/i.test(rest)) {
+        return { kind: 'help' }
+    }
+    const bind = rest.match(/^(?:bind|绑定)\s+([A-Za-z0-9]{4,32})$/i)
+    if (bind) {
+        return { kind: 'bind', code: bind[1]!.toUpperCase() }
+    }
+    if (/^(?:unbind|解绑)$/i.test(rest)) {
+        return { kind: 'unbind' }
+    }
+    return { kind: 'text', text: rest }
+}
+
 export function parseBindCommand(text: string): string | null {
     const match = text.trim().match(/^(?:\/bind|绑定)\s+([A-Za-z0-9]{4,32})$/i)
     return match ? match[1]!.toUpperCase() : null

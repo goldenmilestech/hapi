@@ -141,7 +141,7 @@ export default function SettingsFeishuPage() {
     const copyCommand = async () => {
         if (!bindCode) return
         try {
-            await navigator.clipboard.writeText(`/bind ${bindCode.code}`)
+            await navigator.clipboard.writeText(`/hapi bind ${bindCode.code}`)
             setCopied(true)
             window.setTimeout(() => setCopied(false), 2000)
         } catch {
@@ -221,7 +221,7 @@ export default function SettingsFeishuPage() {
                                 {t('settings.feishu.bind.codeHint')}
                             </div>
                             <code className="block break-all rounded-lg bg-[var(--app-subtle-bg)] px-2 py-1.5 font-mono text-sm text-[var(--app-fg)]">
-                                /bind {bindCode.code}
+                                /hapi bind {bindCode.code}
                             </code>
                             <div className="text-xs leading-snug text-[var(--app-hint)]">
                                 {t('settings.feishu.bind.codeExpires', {
