@@ -342,19 +342,6 @@ export type FeishuInputCardAction = {
     value?: string
 }
 
-function inputActionValue(
-    action: FeishuInputCardAction['action'],
-    sessionId: string,
-    requestId: string,
-    extra: { question?: number; value?: string } = {}
-): FeishuInputCardAction {
-    return { kind: 'hapi_input', action, sessionId, requestId, ...extra }
-}
-
-function callbackBehavior(value: FeishuInputCardAction): FeishuCard {
-    return { type: 'callback', value }
-}
-
 function displayTitle(sessionTitle: string): string {
     const title = sessionTitle.trim() || 'Hapi'
     return title.length > SESSION_TITLE_MAX_CHARS
@@ -402,104 +389,52 @@ export function buildInputRequestCard(input: {
     selection?: FeishuInputSelection
 }): FeishuCard | null {
     const questions = parseInputRequestQuestions(input.tool, input.args)
-    const selection = input.selection ?? questions.map(() => [])
     const link = sessionLink(input)
-    const interactive = questions.length > 0
+    const answerable = questions.length > 0
         && questions.every((question) => question.options.length > 0)
-    const elements: FeishuCard[] = []
+    const lines: string[] = []
 
-    if (interactive) {
+    if (questions.length > 0) {
         questions.forEach((question, index) => {
-            const lines = [questionHeading(question, index)]
+            lines.push(questionHeading(question, index))
             if (question.question) {
                 lines.push(question.question)
             }
-            lines.push(question.multiSelect ? '_可多选_' : '_单选_')
-            elements.push({
-                tag: 'markdown',
-                content: truncateForCard(sanitizeCardMarkdown(lines.join('\n')), STEPS_MAX_BYTES)
-            })
-
-            // Checkbox rows for every question: multi-select keeps them
-            // independent, single-select unchecks the others on the server so
-            // the card reads like a radio group.
-            const chosen = selection[index] ?? []
             question.options.forEach((option, optionIndex) => {
-                elements.push({
-                    tag: 'checker',
-                    name: `q${index}_o${optionIndex}`,
-                    checked: chosen.includes(option.value),
-                    text: {
-                        tag: 'lark_md',
-                        content: `**${option.label}**${option.description ? `：${option.description}` : ''}`
-                    },
-                    behaviors: [callbackBehavior(inputActionValue(
-                        'toggle',
-                        input.sessionId,
-                        input.requestId,
-                        { question: index, value: option.value }
-                    ))]
-                })
+                lines.push(
+                    `${optionIndex + 1}. **${option.label}**${option.description ? `：${option.description}` : ''}`
+                )
             })
+            if (answerable) {
+                if (questions.length > 1) {
+                    lines.push(question.multiSelect ? '_可多选，数字用逗号分隔（如 1,3）_' : '_单选_')
+                } else {
+                    lines.push(question.multiSelect ? '_可多选，回复数字如 1,3_' : '_回复数字选择_')
+                }
+            }
+            lines.push('')
         })
-
-        // Selection is always confirmed explicitly, even for a single
-        // single-select question: no accidental answer from a stray click.
-        elements.push({
-            tag: 'button',
-            text: { tag: 'plain_text', content: '提交回答' },
-            type: 'primary_filled',
-            width: 'fill',
-            behaviors: [callbackBehavior(inputActionValue('submit', input.sessionId, input.requestId))]
-        })
-        elements.push({
-            tag: 'button',
-            text: { tag: 'plain_text', content: '跳过' },
-            type: 'default',
-            width: 'fill',
-            behaviors: [callbackBehavior(inputActionValue('skip', input.sessionId, input.requestId))]
-        })
-        if (link) {
-            elements.push({
-                tag: 'button',
-                text: { tag: 'plain_text', content: '打开 Hapi 回答' },
-                type: 'text',
-                width: 'fill',
-                behaviors: [{ type: 'open_url', default_url: link }]
-            })
+        if (answerable) {
+            lines.push(
+                questions.length > 1
+                    ? '_按问题顺序回复，用 ; 分隔（例如 1;2）。回复「跳过」可跳过该问题。_'
+                    : '_直接回复数字即可回答；回复「跳过」可跳过该问题。_'
+            )
+        } else {
+            lines.push('_该问题包含自由输入，请在 Hapi 中回答。_')
         }
     } else {
-        const lines: string[] = []
-        if (questions.length > 0) {
-            questions.forEach((question, index) => {
-                lines.push(questionHeading(question, index))
-                if (question.question) {
-                    lines.push(question.question)
-                }
-                for (const option of question.options) {
-                    lines.push(`- **${option.label}**${option.description ? `：${option.description}` : ''}`)
-                }
-                if (question.multiSelect) {
-                    lines.push('_可多选_')
-                }
-                lines.push('')
-            })
-        } else {
-            const fallback = formatInputRequestFallback(input.args).trim()
-            if (!fallback) {
-                return null
-            }
-            lines.push(fallback, '')
+        const fallback = formatInputRequestFallback(input.args).trim()
+        if (!fallback) {
+            return null
         }
-        if (link) {
-            lines.push(`[打开 Hapi 回答](${link})`)
-        } else {
-            lines.push('请在 Hapi Web 中打开该会话回答。')
-        }
-        elements.push({
-            tag: 'markdown',
-            content: truncateForCard(sanitizeCardMarkdown(lines.join('\n')))
-        })
+        lines.push(fallback, '')
+    }
+
+    if (link) {
+        lines.push(`[打开 Hapi 回答](${link})`)
+    } else if (questions.length === 0) {
+        lines.push('请在 Hapi Web 中打开该会话回答。')
     }
 
     return {
@@ -512,7 +447,14 @@ export function buildInputRequestCard(input: {
             },
             template: 'orange'
         },
-        body: { elements }
+        body: {
+            elements: [
+                {
+                    tag: 'markdown',
+                    content: truncateForCard(sanitizeCardMarkdown(lines.join('\n')))
+                }
+            ]
+        }
     }
 }
 

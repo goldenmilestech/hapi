@@ -145,6 +145,41 @@ function readCallbackAction(value: unknown): FeishuInputCardAction | null {
     }
 }
 
+/**
+ * Parse a numeric reply: `1` / `1,3` for one question, `1;2` / `1,3;2` for
+ * several. Returns the one-based option numbers chosen per question.
+ */
+function parseNumericSelection(text: string, questionCount: number): number[][] | null {
+    const trimmed = text.trim()
+    if (!trimmed) {
+        return null
+    }
+    const parseNumbers = (part: string): number[] | null => {
+        const tokens = part.split(/[,，、\s]+/).filter(Boolean)
+        if (tokens.length === 0 || !tokens.every((token) => /^\d+$/.test(token))) {
+            return null
+        }
+        return tokens.map((token) => Number(token))
+    }
+    if (questionCount <= 1) {
+        const parsed = parseNumbers(trimmed)
+        return parsed ? [parsed] : null
+    }
+    const groups = trimmed.split(/[;；]/)
+    if (groups.length !== questionCount) {
+        return null
+    }
+    const parsed: number[][] = []
+    for (const group of groups) {
+        const options = parseNumbers(group)
+        if (!options) {
+            return null
+        }
+        parsed.push(options)
+    }
+    return parsed
+}
+
 /** A malformed, unsigned, or wrongly-signed webhook must not be retried. */
 export class FeishuWebhookVerificationError extends Error {
     constructor(message: string) {
@@ -674,6 +709,10 @@ export class FeishuBot implements NotificationChannel {
             return
         }
 
+        if (await this.tryAnswerInputRequest(message, session, messageText)) {
+            return
+        }
+
         await this.options.syncEngine.sendMessage(binding.sessionId, {
             text: messageText,
             localId: `feishu:${message.messageId}`,
@@ -1189,6 +1228,154 @@ export class FeishuBot implements NotificationChannel {
                     : `已取消选择${selectedCount > 0 ? `，当前 ${selectedCount} 项` : ''}`
             }
         }
+    }
+
+    private inputAnswerHelp(questions: FeishuInputQuestion[]): string {
+        if (questions.length > 1) {
+            return `请按问题顺序回复选项数字，用 ; 分隔（例如 1;2），共 ${questions.length} 个问题。`
+        }
+        return questions[0]?.multiSelect
+            ? '请回复选项数字，多选用逗号分隔（例如 1,3）。'
+            : '请回复选项数字。'
+    }
+
+    private async resolveTrackedInputCard(
+        sessionId: string,
+        requestId: string,
+        status: 'answered' | 'skipped',
+        selection: FeishuInputSelection
+    ): Promise<void> {
+        for (const [messageId, state] of this.inputCardStates) {
+            if (state.sessionId !== sessionId || state.requestId !== requestId) {
+                continue
+            }
+            // Drop the state first so the settle pass cannot rewrite the card
+            // to "expired" while this answer is being recorded.
+            this.forgetInputCard(messageId, state)
+            await this.updateInputCard(messageId, buildInputRequestResolvedCard({
+                sessionTitle: state.sessionTitle,
+                questions: state.questions,
+                selection: selection.length > 0 ? selection : state.selection,
+                status
+            }))
+            return
+        }
+    }
+
+    /**
+     * The question card lists numbered options, so a plain chat reply like
+     * `1` or `1,3` answers it without needing Feishu card callbacks.
+     */
+    private async tryAnswerInputRequest(
+        message: FeishuMessage,
+        session: Session,
+        text: string
+    ): Promise<boolean> {
+        const requests = session.agentState?.requests
+        if (!requests) {
+            return false
+        }
+        const pending = Object.entries(requests)
+            .filter(([, request]) => isInputRequestTool(request.tool))
+        if (pending.length === 0) {
+            return false
+        }
+        const [requestId, request] = pending[0]!
+        const questions = parseInputRequestQuestions(request.tool, request.arguments)
+        if (questions.length === 0 || questions.some((question) => question.options.length === 0)) {
+            return false
+        }
+
+        const trimmed = text.trim()
+        if (/^(跳过|略过|skip)$/i.test(trimmed)) {
+            try {
+                await this.options.syncEngine.denyPermission(session.id, requestId)
+            } catch (error) {
+                if (error instanceof PermissionRequestNotFoundError) {
+                    await this.reply(message, '该问题已在 Hapi 中回答或已失效。')
+                    return true
+                }
+                console.error(
+                    '[FeishuBot] Failed to skip input request:',
+                    error instanceof Error ? error.message : error
+                )
+                await this.reply(message, '跳过失败，请到 Hapi 中操作。')
+                return true
+            }
+            await this.reply(message, '已跳过该问题。')
+            await this.resolveTrackedInputCard(session.id, requestId, 'skipped', [])
+            return true
+        }
+
+        const parsed = parseNumericSelection(trimmed, questions.length)
+        if (!parsed) {
+            // A numeric-looking reply is an attempted answer, not a prompt.
+            if (/^[\d\s,，、;；]+$/.test(trimmed)) {
+                await this.reply(message, this.inputAnswerHelp(questions))
+                return true
+            }
+            return false
+        }
+
+        const selection: string[][] = []
+        for (let index = 0; index < questions.length; index += 1) {
+            const question = questions[index]!
+            const picked = parsed[index] ?? []
+            if (!question.multiSelect && picked.length > 1) {
+                await this.reply(message, `问题 ${index + 1} 是单选，请只回复一个数字。`)
+                return true
+            }
+            const values: string[] = []
+            for (const optionNumber of picked) {
+                const option = question.options[optionNumber - 1]
+                if (!option) {
+                    await this.reply(message, `问题 ${index + 1} 没有第 ${optionNumber} 个选项。`)
+                    return true
+                }
+                values.push(option.value)
+            }
+            selection.push(values)
+        }
+        const unanswered = questions.findIndex((question, index) => (
+            question.required && (selection[index] ?? []).length === 0
+        ))
+        if (unanswered !== -1) {
+            await this.reply(message, `问题 ${unanswered + 1} 还没有选择，请一并回复。`)
+            return true
+        }
+
+        const answers = buildInputRequestAnswers(request.tool, questions, selection)
+        try {
+            await this.options.syncEngine.approvePermission(
+                session.id,
+                requestId,
+                undefined,
+                undefined,
+                undefined,
+                answers
+            )
+        } catch (error) {
+            if (error instanceof PermissionRequestNotFoundError) {
+                await this.reply(message, '该问题已在 Hapi 中回答或已失效。')
+                return true
+            }
+            console.error(
+                '[FeishuBot] Failed to answer input request:',
+                error instanceof Error ? error.message : error
+            )
+            await this.reply(message, '提交失败，请在 Hapi 中回答。')
+            return true
+        }
+
+        const summary = questions.map((question, index) => {
+            const labels = (selection[index] ?? []).map((value) => (
+                question.options.find((option) => option.value === value)?.label ?? value
+            ))
+            return `问题 ${index + 1}：${labels.join('、') || '未选择'}`
+        }).join('\n')
+        await this.reply(message, `已提交回答：\n${summary}`)
+        await this.resolveTrackedInputCard(session.id, requestId, 'answered', selection)
+        return true
     }
 
     async sendPermissionRequest(session: Session, _ctx?: NotificationSendContext): Promise<void> {

@@ -509,6 +509,145 @@ describe('FeishuBot', () => {
         expect(JSON.stringify(cardOf(cards[0]))).not.toContain('command')
     })
 
+    it('answers a question by numeric chat reply', async () => {
+        const store = new Store(':memory:')
+        const session = store.sessions.getOrCreateSession(
+            'test-session',
+            { name: 'Fix login', path: '/tmp' },
+            {},
+            'default'
+        )
+        store.feishuBotBindings.bind({
+            chatId: 'oc_chat_1',
+            chatType: 'p2p',
+            chatName: null,
+            namespace: 'default',
+            sessionId: session.id,
+            sessionTitle: 'Fix login'
+        })
+
+        const pendingSession = {
+            id: session.id,
+            active: true,
+            metadata: { name: 'Fix login', path: '/tmp' },
+            agentState: {
+                requests: {
+                    'req-1': {
+                        tool: 'AskUserQuestion',
+                        arguments: {
+                            questions: [{
+                                question: 'Which files?',
+                                multiSelect: true,
+                                options: [{ label: 'Web' }, { label: 'Hub' }]
+                            }]
+                        }
+                    }
+                }
+            }
+        }
+        const calls: unknown[][] = []
+        const sent: SentMessage[] = []
+        const bot = new FeishuBot({
+            store,
+            syncEngine: {
+                getSession: () => pendingSession,
+                approvePermission: async (...args: unknown[]) => {
+                    calls.push(args)
+                }
+            } as never,
+            config: { appId: 'app', appSecret: 'secret', verificationToken: 'token', encryptKey: null },
+            api: fakeApi(sent)
+        })
+
+        await bot.sendPermissionRequest(pendingSession as never)
+        await bot.handleWebhook(JSON.stringify({
+            header: { event_id: 'evt-num', event_type: 'im.message.receive_v1', token: 'token' },
+            event: {
+                sender: { sender_id: { open_id: 'ou_1' }, sender_type: 'user' },
+                message: {
+                    message_id: 'om_msg_1',
+                    chat_id: 'oc_chat_1',
+                    chat_type: 'p2p',
+                    message_type: 'text',
+                    content: JSON.stringify({ text: '2' })
+                }
+            }
+        }), new Headers())
+
+        expect(calls).toHaveLength(1)
+        expect(calls[0]).toEqual([session.id, 'req-1', undefined, undefined, undefined, { '0': ['Hub'] }])
+        const texts = sent.filter((message) => message.kind === 'text').map((message) => message.text)
+        expect(texts.at(-1)).toContain('已提交回答')
+        expect(texts.at(-1)).toContain('问题 1：Hub')
+        expect(JSON.stringify(cardOf(sent.filter((message) => message.kind === 'card-update').at(-1))))
+            .toContain('已回答')
+    })
+
+    it('skips a question by chat reply', async () => {
+        const store = new Store(':memory:')
+        const session = store.sessions.getOrCreateSession(
+            'test-session',
+            { name: 'Fix login', path: '/tmp' },
+            {},
+            'default'
+        )
+        store.feishuBotBindings.bind({
+            chatId: 'oc_chat_1',
+            chatType: 'p2p',
+            chatName: null,
+            namespace: 'default',
+            sessionId: session.id,
+            sessionTitle: 'Fix login'
+        })
+        const pendingSession = {
+            id: session.id,
+            active: true,
+            metadata: { name: 'Fix login', path: '/tmp' },
+            agentState: {
+                requests: {
+                    'req-1': {
+                        tool: 'AskUserQuestion',
+                        arguments: {
+                            questions: [{ question: 'Which files?', options: [{ label: 'Web' }] }]
+                        }
+                    }
+                }
+            }
+        }
+        const denied: unknown[][] = []
+        const sent: SentMessage[] = []
+        const bot = new FeishuBot({
+            store,
+            syncEngine: {
+                getSession: () => pendingSession,
+                denyPermission: async (...args: unknown[]) => {
+                    denied.push(args)
+                }
+            } as never,
+            config: { appId: 'app', appSecret: 'secret', verificationToken: 'token', encryptKey: null },
+            api: fakeApi(sent)
+        })
+
+        await bot.sendPermissionRequest(pendingSession as never)
+        await bot.handleWebhook(JSON.stringify({
+            header: { event_id: 'evt-skip-text', event_type: 'im.message.receive_v1', token: 'token' },
+            event: {
+                sender: { sender_id: { open_id: 'ou_1' }, sender_type: 'user' },
+                message: {
+                    message_id: 'om_msg_2',
+                    chat_id: 'oc_chat_1',
+                    chat_type: 'p2p',
+                    message_type: 'text',
+                    content: JSON.stringify({ text: '跳过' })
+                }
+            }
+        }), new Headers())
+
+        expect(denied).toHaveLength(1)
+        expect(denied[0]).toEqual([session.id, 'req-1'])
+        expect(sent.filter((message) => message.kind === 'text').at(-1)?.text).toContain('已跳过')
+    })
+
     it('answers an input request from card actions and submits once', async () => {
         const store = new Store(':memory:')
         const session = store.sessions.getOrCreateSession(
@@ -583,9 +722,10 @@ describe('FeishuBot', () => {
                 context: { open_message_id: 'om_card_1', open_chat_id: 'oc_chat_1' }
             }
         }), new Headers())
-        expect(toggle && 'response' in toggle ? toggle.response : null).not.toBeNull()
-        expect(JSON.stringify(cardOf(sent.filter((message) => message.kind === 'card-update').at(-1))))
-            .toContain('"checked":true')
+        // Legacy card buttons still record the selection; the rendered card is
+        // the numbered list, so the feedback is the toast.
+        expect(toggle && 'response' in toggle ? toggle.response?.toast?.content : null)
+            .toContain('已选择：Web')
         expect(calls).toHaveLength(0)
 
         const submit = await bot.handleWebhook(JSON.stringify({
@@ -685,12 +825,10 @@ describe('FeishuBot', () => {
             }
         }), new Headers())
 
-        const pickedCard = cardOf(sent.filter((message) => message.kind === 'card-update').at(-1))
-        // The chosen option is checked, but nothing is submitted yet.
+        // Legacy card buttons only record the selection; nothing is submitted.
         expect(calls).toHaveLength(0)
-        expect(pick && 'response' in pick ? pick.response : null).not.toBeNull()
-        expect(JSON.stringify(pickedCard)).toContain('"checked":true')
-        expect(JSON.stringify(pickedCard)).toContain('提交回答')
+        expect(pick && 'response' in pick ? pick.response?.toast?.content : null)
+            .toContain('已选择：Reboot')
 
         const submit = await bot.handleWebhook(JSON.stringify({
             schema: '2.0',
