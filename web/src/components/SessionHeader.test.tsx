@@ -534,3 +534,14 @@ describe('SessionHeader', () => {
         expect(screen.queryByRole('button', { name: 'Open in VS Code' })).not.toBeInTheDocument()
     })
 })
+
+describe('SessionHeader Feishu binding', () => {
+    it('shows a header-sized Feishu tag at the start of the metadata line', () => {
+        const { container } = renderHeader(baseSession({ feishuBound: true }))
+        const tag = container.querySelector('[data-testid="session-header-feishu-bound"]')
+        expect(tag).not.toBeNull()
+        expect(tag).toHaveClass('text-xs')
+        expect(tag?.querySelector('svg')).not.toBeNull()
+        expect(tag?.textContent).toContain('Feishu')
+    })
+})

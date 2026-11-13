@@ -402,6 +402,8 @@ export const SessionSchema = z.object({
     agentStateVersion: z.number(),
     thinking: z.boolean(),
     thinkingAt: z.number(),
+    /** True when this session is bound to a Feishu chat; populated by hub routes. */
+    feishuBound: z.boolean().optional(),
     activeTurnStartedAt: z.number().nullable().optional(),
     backgroundTaskCount: z.number().optional(),
     backgroundTasks: z.array(BackgroundTaskSchema).optional(),

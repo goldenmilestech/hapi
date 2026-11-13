@@ -2008,6 +2008,32 @@ describe('sessions routes', () => {
         expect(unlimitedBody.sessions).toHaveLength(3)
     })
 
+    it('marks a Feishu-bound session on the detail route', async () => {
+        const session = createSession()
+        const { app } = createApp(session)
+
+        const before = await app.request('/api/sessions/session-1')
+        const beforeBody = await before.json() as { session: { feishuBound?: boolean } }
+        expect(beforeBody.session.feishuBound).toBeUndefined()
+
+        store.feishuBotBindings.bind({
+            chatId: 'oc_feishu_detail_test',
+            chatType: 'p2p',
+            chatName: null,
+            namespace: 'default',
+            sessionId: session.id,
+            sessionTitle: 'Feishu detail test'
+        })
+        try {
+            const response = await app.request('/api/sessions/session-1')
+            expect(response.status).toBe(200)
+            const body = await response.json() as { session: { feishuBound?: boolean } }
+            expect(body.session.feishuBound).toBe(true)
+        } finally {
+            store.feishuBotBindings.removeByChatId('oc_feishu_detail_test')
+        }
+    })
+
     it('searches message content only through the explicit content endpoint', async () => {
         const session = createSession({ id: 'content-session' })
         const engine = {
