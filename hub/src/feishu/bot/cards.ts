@@ -1,3 +1,4 @@
+import { isObject } from '@hapi/protocol'
 import type { FeishuTurnSummary } from './turnSummary'
 
 /**
@@ -210,6 +211,127 @@ export function buildAnswerCard(sessionTitle: string, answer: string): FeishuCar
                 {
                     tag: 'markdown',
                     content: truncateForCard(text)
+                }
+            ]
+        }
+    }
+}
+
+type InputRequestQuestion = {
+    header: string | null
+    question: string
+    multiSelect: boolean
+    options: Array<{ label: string; description: string | null }>
+}
+
+function readInputRequestQuestions(args: unknown): InputRequestQuestion[] {
+    if (!isObject(args) || !Array.isArray(args.questions)) {
+        return []
+    }
+    const questions: InputRequestQuestion[] = []
+    for (const raw of args.questions) {
+        if (!isObject(raw)) continue
+        const question = typeof raw.question === 'string' ? raw.question.trim() : ''
+        const header = typeof raw.header === 'string' ? raw.header.trim() : ''
+        const options = Array.isArray(raw.options)
+            ? raw.options.flatMap((option) => {
+                if (!isObject(option)) return []
+                const label = typeof option.label === 'string' ? option.label.trim() : ''
+                if (!label) return []
+                const description = typeof option.description === 'string'
+                    ? option.description.trim()
+                    : ''
+                return [{ label, description: description || null }]
+            })
+            : []
+        if (!question && options.length === 0) continue
+        questions.push({
+            header: header || null,
+            question,
+            multiSelect: raw.multiSelect === true,
+            options
+        })
+    }
+    return questions
+}
+
+function formatInputRequestFallback(args: unknown): string {
+    if (typeof args === 'string') {
+        return args.trim()
+    }
+    try {
+        return JSON.stringify(args)
+    } catch {
+        return ''
+    }
+}
+
+/**
+ * Forward an agent input request (AskUserQuestion / request_user_input) to the
+ * bound Feishu chat. Answering still happens in Hapi; the card links straight
+ * to the session so the question is not missed.
+ */
+export function buildInputRequestCard(input: {
+    sessionId: string
+    sessionTitle: string
+    tool: string
+    args: unknown
+    publicUrl?: string | null
+}): FeishuCard | null {
+    const questions = readInputRequestQuestions(input.args)
+    const lines: string[] = []
+    if (questions.length > 0) {
+        questions.forEach((question, index) => {
+            const heading = question.header
+                ? `**问题 ${index + 1}** · ${question.header}`
+                : `**问题 ${index + 1}**`
+            lines.push(heading)
+            if (question.question) {
+                lines.push(question.question)
+            }
+            for (const option of question.options) {
+                lines.push(`- **${option.label}**${option.description ? `：${option.description}` : ''}`)
+            }
+            if (question.multiSelect) {
+                lines.push('_可多选_')
+            }
+            lines.push('')
+        })
+    } else {
+        const fallback = formatInputRequestFallback(input.args).trim()
+        if (!fallback) {
+            return null
+        }
+        lines.push(fallback, '')
+    }
+
+    const baseUrl = input.publicUrl?.trim().replace(/\/+$/, '')
+    if (baseUrl) {
+        lines.push(`[打开 Hapi 回答](${baseUrl}/sessions/${encodeURIComponent(input.sessionId)})`)
+    } else {
+        lines.push('请在 Hapi Web 中打开该会话回答。')
+    }
+
+    const sessionTitle = input.sessionTitle.trim() || 'Hapi'
+    const displayTitle = sessionTitle.length > SESSION_TITLE_MAX_CHARS
+        ? `${sessionTitle.slice(0, SESSION_TITLE_MAX_CHARS - 1).trimEnd()}…`
+        : sessionTitle
+
+    return {
+        schema: '2.0',
+        config: {},
+        header: {
+            title: {
+                tag: 'plain_text',
+                content: `需要你回答：${displayTitle}`
+            },
+            template: 'orange'
+        },
+        body: {
+            elements: [
+                {
+                    tag: 'markdown',
+                    content: truncateForCard(sanitizeCardMarkdown(lines.join('\n')))
                 }
             ]
         }

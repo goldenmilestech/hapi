@@ -1,10 +1,11 @@
 import type { NotificationChannel, TaskNotification } from '../../notifications/notificationTypes'
 import type { NotificationSendContext } from '../../notifications/notificationSendContext'
+import { isInputRequestTool } from '../../notifications/inputRequest'
 import { getSessionName } from '../../notifications/sessionInfo'
 import type { Session, SyncEngine, SyncEvent } from '../../sync/syncEngine'
 import type { Store } from '../../store'
 import type { FeishuBotConfig } from '../config'
-import { buildAnswerCard, buildProgressCard } from './cards'
+import { buildAnswerCard, buildInputRequestCard, buildProgressCard } from './cards'
 import { decryptFeishuPayload, verifyFeishuSignature } from './eventCrypto'
 import {
     extractFeishuText,
@@ -36,6 +37,8 @@ export type FeishuBotOptions = {
     config: FeishuBotConfig
     /** Hub owner open_id, used when the owner has not completed a web login. */
     ownerOpenId?: string | null
+    /** Public hub URL used by input-request cards to link back to the session. */
+    publicUrl?: string | null
     /** Minimum gap between live progress-card rewrites. */
     liveProgressThrottleMs?: number
     /** Test seams. */
@@ -118,6 +121,7 @@ export class FeishuBot implements NotificationChannel {
     private readonly lastSentAnswer = new Map<string, string>()
     private readonly lastFinalizedTurn = new Map<string, string>()
     private readonly liveProgress = new Map<string, LiveProgressState>()
+    private readonly notifiedInputRequests = new Set<string>()
     private readonly unsubscribeSync: (() => void) | null
     private botOpenId: string | null = null
     private botInfoPromise: Promise<void> | null = null
@@ -148,6 +152,17 @@ export class FeishuBot implements NotificationChannel {
     private handleSyncEvent(event: SyncEvent): void {
         if (event.type === 'session-removed') {
             this.clearLiveProgress(event.sessionId)
+            return
+        }
+        if (event.type === 'session-updated') {
+            const session = this.options.syncEngine.getSession(event.sessionId)
+            if (!session?.thinking) {
+                return
+            }
+            if (!this.options.store.feishuBotBindings.getBySessionId(event.sessionId)) {
+                return
+            }
+            this.scheduleLiveProgress(event.sessionId)
             return
         }
         if (event.type !== 'message-received') {
@@ -284,6 +299,12 @@ export class FeishuBot implements NotificationChannel {
                 this.clearLiveProgress(sessionId)
                 return
             }
+            // Once the agent stops thinking the turn is over; sendReady owns the
+            // final rewrite. Without this, a user prompt queued for the next
+            // turn can resurrect the previous turn's card.
+            if (!session.thinking) {
+                return
+            }
 
             const summary = summarizeActiveTurn(
                 this.options.store.messages.getMessages(sessionId, TURN_SCAN_LIMIT)
@@ -297,17 +318,13 @@ export class FeishuBot implements NotificationChannel {
                 return
             }
             if (state.turnKey !== summary.turnKey) {
-                // A new prompt started a new turn; leave the previous card as
-                // the record of that turn and publish a fresh one.
-                state.cardMessageId = null
-                state.lastCardJson = null
+                // Keep the existing card: this is either the same thinking
+                // stretch with a shifted prompt boundary, or a steered prompt.
+                // Creating a new card here is what produced back-to-back
+                // process cards for two messages.
                 state.turnKey = summary.turnKey
+                state.lastCardJson = null
                 state.failures = 0
-                state.thinkingStartedAt = null
-                state.thinkingLastAt = null
-                state.thinkingEndedAt = null
-                state.lastThinkingLength = 0
-                state.lastStepCount = 0
             }
 
             this.trackThinkingWindow(state, summary.thinking.length, summary.steps.length)
@@ -639,11 +656,11 @@ export class FeishuBot implements NotificationChannel {
             ...summary,
             durationMs: thinkingDurationMs(liveState)
         })
-        const liveCardOwnedByThisTurn = Boolean(
-            liveState?.cardMessageId
-            && liveState.turnKey
-            && summary.turnKey
-            && liveState.turnKey === summary.turnKey
+        const liveCardOwnedByThisTurn = Boolean(liveState?.cardMessageId) && (
+            // `ready` means the agent has stopped; the live card belongs to
+            // the turn that just ended even if a prompt-boundary row shifted.
+            !session.thinking
+            || (liveState?.turnKey && summary.turnKey && liveState.turnKey === summary.turnKey)
         )
         // A reconnect or a duplicate `ready` can replay the same completed
         // turn; the stored answer id makes the second delivery a no-op.
@@ -737,8 +754,47 @@ export class FeishuBot implements NotificationChannel {
         this.lastSentAnswer.set(sessionId, messageId)
     }
 
-    async sendPermissionRequest(_session: Session, _ctx?: NotificationSendContext): Promise<void> {
-        // Approvals stay in the Hapi UI; forwarding cards is a separate feature.
+    async sendPermissionRequest(session: Session, _ctx?: NotificationSendContext): Promise<void> {
+        const binding = this.options.store.feishuBotBindings.getBySessionId(session.id)
+        if (!binding) {
+            return
+        }
+        const requests = session.agentState?.requests
+        if (!requests) {
+            return
+        }
+
+        for (const [requestId, request] of Object.entries(requests)) {
+            if (!isInputRequestTool(request.tool)) {
+                continue
+            }
+            const key = `${session.id}:${requestId}`
+            if (this.notifiedInputRequests.has(key)) {
+                continue
+            }
+            const card = buildInputRequestCard({
+                sessionId: session.id,
+                sessionTitle: getSessionName(session),
+                tool: request.tool,
+                args: request.arguments,
+                publicUrl: this.options.publicUrl
+            })
+            if (!card) {
+                continue
+            }
+            try {
+                await this.api.sendCard(binding.chatId, card)
+                if (this.notifiedInputRequests.size > 500) {
+                    this.notifiedInputRequests.clear()
+                }
+                this.notifiedInputRequests.add(key)
+            } catch (error) {
+                console.error(
+                    '[FeishuBot] Failed to send input request card:',
+                    error instanceof Error ? error.message : error
+                )
+            }
+        }
     }
 
     async sendTaskNotification(

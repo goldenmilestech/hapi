@@ -332,7 +332,8 @@ export async function startHub(options: StartHubOptions = {}): Promise<HubInstan
             syncEngine,
             store,
             config: feishuBotConfig,
-            ownerOpenId: config.feishuOwnerOpenId
+            ownerOpenId: config.feishuOwnerOpenId,
+            publicUrl: config.publicUrl
         })
         notificationChannels.push(feishuBot)
         console.log('[Hub] Feishu bot: enabled')

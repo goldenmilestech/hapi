@@ -22,6 +22,14 @@ function userPrompt(text: string): StoredMessage {
     return message({ content: { role: 'user', content: { type: 'text', text } } })
 }
 
+function queuedUserPrompt(text: string, id: string): StoredMessage {
+    return message({
+        content: { role: 'user', content: { type: 'text', text } },
+        localId: id,
+        invokedAt: null
+    })
+}
+
 function claudeAssistant(
     blocks: unknown[],
     options: { uuid?: string; usage?: unknown; isSidechain?: boolean } = {}
@@ -171,6 +179,23 @@ describe('summarizeFeishuTurn', () => {
 
         expect(summary.outputTokens).toBe(1234)
         expect(summary.durationMs).toBe(8200)
+    })
+
+    it('does not fall back to the previous turn while the next prompt is queued', () => {
+        const answer = claudeAssistant([
+            { type: 'thinking', thinking: 'previous thought' },
+            { type: 'text', text: 'Previous answer' }
+        ], { uuid: 'previous' })
+        const next = queuedUserPrompt('next request', 'queued-next')
+        const summary = summarizeActiveTurn([
+            userPrompt('first request'),
+            answer,
+            next
+        ])
+
+        expect(summary.turnKey).toBe(next.id)
+        expect(summary.thinking).toBe('')
+        expect(summary.steps).toEqual([])
     })
 
     it('summarizes the in-progress turn without requiring an answer', () => {

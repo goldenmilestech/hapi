@@ -158,6 +158,7 @@ describe('FeishuBot', () => {
                 },
                 getSession: () => ({
                     id: session.id,
+                    thinking: true,
                     metadata: { name: 'Fix login', path: '/tmp' }
                 })
             } as never,
@@ -273,6 +274,7 @@ describe('FeishuBot', () => {
                 },
                 getSession: () => ({
                     id: session.id,
+                    thinking: true,
                     metadata: { name: 'Fix login', path: '/tmp' }
                 })
             } as never,
@@ -336,6 +338,146 @@ describe('FeishuBot', () => {
             .toContain('8.2 秒')
 
         bot.stop()
+    })
+
+    it('does not resurrect the previous turn card when the next prompt is queued', async () => {
+        const store = new Store(':memory:')
+        const session = store.sessions.getOrCreateSession(
+            'test-session',
+            { name: 'Fix login', path: '/tmp' },
+            {},
+            'default'
+        )
+        store.feishuBotBindings.bind({
+            chatId: 'oc_chat_1',
+            chatType: 'p2p',
+            chatName: null,
+            namespace: 'default',
+            sessionId: session.id,
+            sessionTitle: 'Fix login'
+        })
+        store.messages.addMessage(session.id, {
+            role: 'user',
+            content: { type: 'text', text: 'First request' }
+        })
+        store.messages.addMessage(session.id, {
+            role: 'agent',
+            content: {
+                type: 'output',
+                data: {
+                    uuid: 'first-answer',
+                    type: 'assistant',
+                    message: {
+                        content: [
+                            { type: 'thinking', thinking: 'First thought' },
+                            { type: 'text', text: 'First answer' }
+                        ]
+                    }
+                }
+            }
+        })
+
+        let listener: ((event: never) => void) | null = null
+        const sent: SentMessage[] = []
+        const bot = new FeishuBot({
+            store,
+            syncEngine: {
+                subscribe: (fn: (event: never) => void) => {
+                    listener = fn
+                    return () => { listener = null }
+                },
+                getSession: () => ({ id: session.id, thinking: true, metadata: { name: 'Fix login', path: '/tmp' } })
+            } as never,
+            config: { appId: 'app', appSecret: 'secret', verificationToken: 'token', encryptKey: null },
+            api: fakeApi(sent),
+            liveProgressThrottleMs: 0
+        })
+
+        await bot.sendReady({ id: session.id, metadata: { name: 'Fix login' } } as never)
+        sent.length = 0
+        // Simulate a hub restart: a fresh bot has no finalized-turn memory.
+        const restarted = new FeishuBot({
+            store,
+            syncEngine: {
+                subscribe: (fn: (event: never) => void) => {
+                    listener = fn
+                    return () => { listener = null }
+                },
+                getSession: () => ({ id: session.id, thinking: true, metadata: { name: 'Fix login', path: '/tmp' } })
+            } as never,
+            config: { appId: 'app', appSecret: 'secret', verificationToken: 'token', encryptKey: null },
+            api: fakeApi(sent),
+            liveProgressThrottleMs: 0
+        })
+        bot.stop()
+
+        store.messages.addMessage(
+            session.id,
+            { role: 'user', content: { type: 'text', text: 'Queued next request' } },
+            'queued-next',
+            undefined
+        )
+        const currentListener = listener as ((event: never) => void) | null
+        currentListener?.({ type: 'message-received', sessionId: session.id } as never)
+        await new Promise((resolve) => setTimeout(resolve, 100))
+
+        expect(sent).toEqual([])
+        restarted.stop()
+    })
+
+    it('forwards AskUserQuestion requests to the bound chat once', async () => {
+        const store = new Store(':memory:')
+        const session = store.sessions.getOrCreateSession(
+            'test-session',
+            { name: 'Fix login', path: '/tmp' },
+            {},
+            'default'
+        )
+        store.feishuBotBindings.bind({
+            chatId: 'oc_chat_1',
+            chatType: 'p2p',
+            chatName: null,
+            namespace: 'default',
+            sessionId: session.id,
+            sessionTitle: 'Fix login'
+        })
+
+        const sent: SentMessage[] = []
+        const bot = new FeishuBot({
+            store,
+            syncEngine: {} as never,
+            config: { appId: 'app', appSecret: 'secret', verificationToken: 'token', encryptKey: null },
+            api: fakeApi(sent),
+            publicUrl: 'https://hapi.test'
+        })
+        const pendingSession = {
+            id: session.id,
+            metadata: { name: 'Fix login', path: '/tmp' },
+            agentState: {
+                requests: {
+                    'req-1': {
+                        tool: 'AskUserQuestion',
+                        arguments: {
+                            questions: [{
+                                header: 'Scope',
+                                question: 'Which files?',
+                                options: [{ label: 'Web' }, { label: 'Hub' }]
+                            }]
+                        }
+                    },
+                    'req-2': { tool: 'Bash', arguments: { command: 'ls' } }
+                }
+            }
+        } as never
+
+        await bot.sendPermissionRequest(pendingSession)
+        await bot.sendPermissionRequest(pendingSession)
+
+        const cards = sent.filter((message) => message.kind === 'card')
+        expect(cards).toHaveLength(1)
+        expect(JSON.stringify(cardOf(cards[0]))).toContain('Which files?')
+        expect(JSON.stringify(cardOf(cards[0]))).toContain('https://hapi.test/sessions/')
+        expect(JSON.stringify(cardOf(cards[0]))).not.toContain('command')
     })
 
     it('does not send when the session is not bound', async () => {
