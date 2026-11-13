@@ -103,7 +103,7 @@ describe('Feishu cards', () => {
         expect(buildProgressCard(summary())).toBeNull()
     })
 
-    it('renders a multi-select input request as checkers plus submit', () => {
+    it('renders a multi-select input request as a numbered reply list', () => {
         const card = buildInputRequestCard({
             sessionId: 'session-1',
             requestId: 'req-1',
@@ -126,64 +126,36 @@ describe('Feishu cards', () => {
         const header = card?.header as { title?: { content?: string } } | undefined
         expect(header?.title?.content).toBe('需要你回答：Fix login')
         const elements = (card?.body as { elements?: Array<Record<string, unknown>> } | undefined)?.elements ?? []
+        // The card is a single markdown block: no interactive components.
+        expect(elements).toHaveLength(1)
         const markdown = elements[0]?.content as string
         expect(markdown).toContain('**问题 1** · Scope')
         expect(markdown).toContain('Which files should I touch?')
-        expect(markdown).toContain('可多选')
-
-        const checkers = elements.filter((element) => element.tag === 'checker')
-        expect(checkers).toHaveLength(2)
-        expect(checkers[0]?.checked).toBe(false)
-        const checkerText = checkers[0]?.text as { content?: string } | undefined
-        expect(checkerText?.content).toBe('**Web**：web/src')
-        const toggle = (checkers[0]?.behaviors as Array<{ value?: Record<string, unknown> }>)[0]?.value
-        expect(toggle).toEqual({
-            kind: 'hapi_input',
-            action: 'toggle',
-            sessionId: 'session-1',
-            requestId: 'req-1',
-            question: 0,
-            value: 'Web'
-        })
-
-        const submit = elements.find((element) => (
-            (element.behaviors as Array<{ value?: { action?: string } }> | undefined)?.[0]?.value?.action === 'submit'
-        ))
-        expect(submit).toBeDefined()
-
-        const open = elements.find((element) => (
-            (element.behaviors as Array<{ type?: string; default_url?: string }> | undefined)?.[0]?.type === 'open_url'
-        ))
-        expect((open?.behaviors as Array<{ default_url?: string }>)[0]?.default_url)
-            .toBe('https://hapi.test/sessions/session-1')
+        expect(markdown).toContain('1. **Web**：web/src')
+        expect(markdown).toContain('2. **Hub**')
+        expect(markdown).toContain('可多选，回复数字如 1,3')
+        expect(markdown).toContain('回复「跳过」')
+        expect(markdown).toContain('https://hapi.test/sessions/session-1')
     })
 
-    it('renders single-select options as checkers with explicit submit and skip', () => {
+    it('numbers options for several questions and explains the reply format', () => {
         const card = buildInputRequestCard({
             sessionId: 'session-1',
             requestId: 'req-1',
             sessionTitle: 'Fix login',
             tool: 'AskUserQuestion',
             args: {
-                questions: [{
-                    header: 'Scope',
-                    question: 'Which file?',
-                    options: [{ label: 'Web' }, { label: 'Hub' }]
-                }]
+                questions: [
+                    { question: 'First?', options: [{ label: 'A' }, { label: 'B' }] },
+                    { question: 'Second?', options: [{ label: 'C' }] }
+                ]
             }
         })
-        const elements = (card?.body as { elements?: Array<Record<string, unknown>> } | undefined)?.elements ?? []
-        const checkers = elements.filter((element) => element.tag === 'checker')
-        expect(checkers).toHaveLength(2)
-        const toggle = (checkers[1]?.behaviors as Array<{ value?: { action?: string; value?: string } }>)[0]?.value
-        expect(toggle).toMatchObject({ action: 'toggle', question: 0, value: 'Hub' })
-        // Only the footer actions are buttons now.
-        const buttons = elements.filter((element) => element.tag === 'button')
-        const actions = buttons.map((button) => (
-            (button.behaviors as Array<{ value?: { action?: string } }>)[0]?.value?.action
-        ))
-        expect(actions).toContain('submit')
-        expect(actions).toContain('skip')
+        const markdown = (card?.body as { elements?: Array<{ content?: string }> } | undefined)?.elements?.[0]?.content ?? ''
+        expect(markdown).toContain('1. **A**')
+        expect(markdown).toContain('2. **B**')
+        expect(markdown).toContain('1. **C**')
+        expect(markdown).toContain('按问题顺序回复，用 ; 分隔（例如 1;2）')
     })
 
     it('builds answers in each tool wire format', () => {
