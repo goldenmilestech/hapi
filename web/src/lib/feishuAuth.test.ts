@@ -3,6 +3,7 @@ import { buildFeishuAuthorizeUrl, createFeishuState } from './feishuAuth'
 
 const baseConfig = {
     enabled: true,
+    botEnabled: false,
     appId: 'cli_test',
     redirectUri: 'https://hub.example.com/auth/feishu',
     scope: 'contact:user.email:readonly',

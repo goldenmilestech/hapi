@@ -65,6 +65,7 @@ describe('LoginPrompt redirected hub requests', () => {
         // the fetch sequence the redirect scenarios script below.
         vi.spyOn(ApiClient.prototype, 'getFeishuConfig').mockResolvedValue({
             enabled: false,
+            botEnabled: false,
             appId: null,
             redirectUri: null,
             scope: '',

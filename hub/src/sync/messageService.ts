@@ -985,7 +985,7 @@ export class MessageService {
             text: string
             localId?: string | null
             attachments?: AttachmentMetadata[]
-            sentFrom?: 'telegram-bot' | 'webapp'
+            sentFrom?: 'telegram-bot' | 'feishu-bot' | 'webapp'
             scheduledAt?: number | null
             deliveryMode?: MessageDeliveryMode
         }

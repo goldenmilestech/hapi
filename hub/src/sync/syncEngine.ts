@@ -1339,7 +1339,7 @@ export class SyncEngine {
                 path: string
                 previewUrl?: string
             }>
-            sentFrom?: 'telegram-bot' | 'webapp'
+            sentFrom?: 'telegram-bot' | 'feishu-bot' | 'webapp'
             scheduledAt?: number | null
             deliveryMode?: MessageDeliveryMode
         }

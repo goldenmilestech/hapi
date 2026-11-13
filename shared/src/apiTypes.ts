@@ -884,6 +884,8 @@ export const AuthRequestSchema = z.union([
 
 export type FeishuPublicConfigResponse = {
     enabled: boolean
+    /** True when the app is configured as a bot and can receive events. */
+    botEnabled: boolean
     appId: string | null
     redirectUri: string | null
     scope: string
@@ -911,6 +913,40 @@ export type CreateFeishuBindingRequest = z.infer<typeof CreateFeishuBindingReque
 
 export type CreateFeishuBindingResponse = {
     binding: FeishuEmailBindingSummary
+}
+
+/**
+ * A Feishu chat and a HAPI session are bound 1:1: binding a chat that is
+ * already bound moves it, and binding a session that is already bound moves
+ * the session. The Feishu chat is the authorization boundary for inbound
+ * messages.
+ */
+export type FeishuBotBindingSummary = {
+    id: string
+    chatId: string
+    chatType: string
+    chatName: string | null
+    namespace: string
+    sessionId: string
+    sessionTitle: string
+    createdAt: number
+}
+
+export type FeishuBotBindingsResponse = {
+    bindings: FeishuBotBindingSummary[]
+}
+
+export const CreateFeishuBotBindCodeRequestSchema = z.object({
+    sessionId: z.string().trim().min(1).max(128)
+})
+export type CreateFeishuBotBindCodeRequest = z.infer<typeof CreateFeishuBotBindCodeRequestSchema>
+
+export type CreateFeishuBotBindCodeResponse = {
+    /** Short, single-use, uppercase code the user sends to the bot. */
+    code: string
+    expiresAt: number
+    sessionId: string
+    sessionTitle: string
 }
 
 export const CreateSessionShareRequestSchema = z.object({

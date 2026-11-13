@@ -4,6 +4,8 @@ import { SyncEngine, type SyncEvent } from './sync/syncEngine'
 import { NotificationHub } from './notifications/notificationHub'
 import type { NotificationChannel } from './notifications/notificationTypes'
 import { HappyBot } from './telegram/bot'
+import { FeishuBot } from './feishu/bot/feishuBot'
+import { resolveFeishuBotConfig } from './feishu/config'
 import { startWebServer } from './web/server'
 import { getOrCreateJwtSecret } from './config/jwtSecret'
 import { getOrCreateShareTokenSecret } from './config/shareTokenSecret'
@@ -113,6 +115,7 @@ export async function startHub(options: StartHubOptions = {}): Promise<HubInstan
 
     let syncEngine: SyncEngine | null = null
     let happyBot: HappyBot | null = null
+    let feishuBot: FeishuBot | null = null
     let webServer: BunServer<WebSocketData> | null = null
     let sseManager: SSEManager | null = null
     let visibilityTracker: VisibilityTracker | null = null
@@ -308,6 +311,23 @@ export async function startHub(options: StartHubOptions = {}): Promise<HubInstan
         }
     }
 
+    // Feishu bot (optional). Reuses the login app credentials; the event
+    // subscription token is what turns the public callback into a usable
+    // chat bridge.
+    const feishuBotConfig = resolveFeishuBotConfig()
+    if (feishuBotConfig) {
+        feishuBot = new FeishuBot({
+            syncEngine,
+            store,
+            config: feishuBotConfig,
+            ownerOpenId: config.feishuOwnerOpenId
+        })
+        notificationChannels.push(feishuBot)
+        console.log('[Hub] Feishu bot: enabled')
+    } else if (config.feishuAppId && config.feishuAppSecret) {
+        console.log('[Hub] Feishu bot: disabled (set FEISHU_VERIFICATION_TOKEN)')
+    }
+
     notificationHub = new NotificationHub(syncEngine, notificationChannels)
 
     // Start HTTP service first (before tunnel, so tunnel has something to forward to)
@@ -315,6 +335,7 @@ export async function startHub(options: StartHubOptions = {}): Promise<HubInstan
         getSyncEngine: () => syncEngine,
         getSseManager: () => sseManager,
         getVisibilityTracker: () => visibilityTracker,
+        getFeishuBot: () => feishuBot,
         jwtSecret,
         shareTokenSecret,
         store,

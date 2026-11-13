@@ -112,6 +112,11 @@ export type SessionSummary = {
     effort: string | null
     /** Per-session context ceiling in tokens; null means the native window. */
     contextLimit?: number | null
+    /**
+     * True when this session is bound to a Feishu chat through the hub bot.
+     * Populated by `GET /sessions`; absent on older hubs and other surfaces.
+     */
+    feishuBound?: boolean
 }
 
 // Re-exported as a standalone derivation so SSE patch handlers can recompute

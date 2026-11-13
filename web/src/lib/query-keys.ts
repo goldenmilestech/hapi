@@ -12,6 +12,7 @@ export const queryKeys = {
     personalAccessToken: ['personal-access-token'] as const,
     feishuConfig: ['feishu-config'] as const,
     feishuBindings: ['feishu-bindings'] as const,
+    feishuBotBindings: ['feishu-bot-bindings'] as const,
     usageSummary: (range: string, timeZone: string) => ['usage-summary', range, timeZone] as const,
     machineCodexModels: (machineId: string) => ['machine-codex-models', machineId] as const,
     machineAgentAvailability: (machineId: string) => ['machine-agent-availability', machineId] as const,

@@ -112,6 +112,7 @@ export function createSessionsRoutes(
         }
 
         const namespace = c.get('namespace')
+        const feishuBoundSessionIds = store.feishuBotBindings.getSessionIdsByNamespace(namespace)
         const limitRaw = c.req.query('limit')
         const parsedLimit = limitRaw === undefined ? null : Number(limitRaw)
         const limit = parsedLimit !== null && Number.isFinite(parsedLimit)
@@ -147,7 +148,8 @@ export function createSessionsRoutes(
             return {
                 ...summary,
                 futureScheduledMessageCount: scheduledCounts.get(session.id) ?? 0,
-                nextScheduledAt: nextScheduledAt.get(session.id) ?? null
+                nextScheduledAt: nextScheduledAt.get(session.id) ?? null,
+                ...(feishuBoundSessionIds.has(session.id) ? { feishuBound: true } : {})
             }
         })
 
