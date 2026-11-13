@@ -5,8 +5,9 @@ import { NotificationHub } from './notifications/notificationHub'
 import type { NotificationChannel } from './notifications/notificationTypes'
 import { HappyBot } from './telegram/bot'
 import { FeishuBot } from './feishu/bot/feishuBot'
-import { resolveFeishuBotConfig } from './feishu/config'
+import { resolveFeishuBotConfig, resolveFeishuSendConfig } from './feishu/config'
 import { startWebServer } from './web/server'
+import { FeishuSendService } from './feishu/outbound/service'
 import { getOrCreateJwtSecret } from './config/jwtSecret'
 import { getOrCreateShareTokenSecret } from './config/shareTokenSecret'
 import { getOrCreateOwnerId } from './config/ownerId'
@@ -121,6 +122,7 @@ export async function startHub(options: StartHubOptions = {}): Promise<HubInstan
     let visibilityTracker: VisibilityTracker | null = null
     let notificationHub: NotificationHub | null = null
     let tunnelManager: TunnelManager | null = null
+    let feishuSendService: FeishuSendService | null = null
 
     // Load configuration (async - loads from env/file with persistence)
     const relayApiDomain = process.env.HAPI_RELAY_API || 'relay.hapi.run'
@@ -204,6 +206,16 @@ export async function startHub(options: StartHubOptions = {}): Promise<HubInstan
             )
         }
     }
+    // Agent-initiated Feishu sends reuse the login app's bot credentials; the
+    // OAuth redirect URI is irrelevant here.
+    const feishuSendConfig = resolveFeishuSendConfig()
+    if (feishuSendConfig) {
+        feishuSendService = new FeishuSendService({ store, config: feishuSendConfig })
+        console.log('[Hub] Feishu agent sends: enabled (FEISHU_APP_ID / FEISHU_APP_SECRET)')
+    } else {
+        console.log('[Hub] Feishu agent sends: disabled (set FEISHU_APP_ID and FEISHU_APP_SECRET)')
+    }
+
     const jwtSecret = await getOrCreateJwtSecret()
     const shareTokenSecret = await getOrCreateShareTokenSecret(config.dataDir)
     const vapidKeys = await getOrCreateVapidKeys(config.dataDir)
@@ -336,6 +348,7 @@ export async function startHub(options: StartHubOptions = {}): Promise<HubInstan
         getSseManager: () => sseManager,
         getVisibilityTracker: () => visibilityTracker,
         getFeishuBot: () => feishuBot,
+        getFeishuSendService: () => feishuSendService,
         jwtSecret,
         shareTokenSecret,
         store,

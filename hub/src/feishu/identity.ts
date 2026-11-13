@@ -58,6 +58,25 @@ export function resolveFeishuNamespace(
     config: FeishuIdentityConfig,
     user: FeishuUserInfo
 ): string {
+    const namespace = resolveFeishuNamespaceRow(store, config, user)
+    // The bot needs a display name (group @-mentions, approval cards) and an
+    // email (self-DM detection) without an extra contact-API round trip.
+    store.feishuProfiles.upsert({
+        openId: user.openId,
+        namespace,
+        name: user.name,
+        email: user.email,
+        enterpriseEmail: user.enterpriseEmail,
+        avatarUrl: user.avatarUrl
+    })
+    return namespace
+}
+
+function resolveFeishuNamespaceRow(
+    store: Store,
+    config: FeishuIdentityConfig,
+    user: FeishuUserInfo
+): string {
     const ownerNamespace = matchOwnerNamespace(user, config)
     if (ownerNamespace) {
         // Upsert: adding the owner env later must move an existing user.

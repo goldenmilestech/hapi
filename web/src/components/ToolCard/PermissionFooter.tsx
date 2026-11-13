@@ -7,6 +7,7 @@ import { Spinner } from '@/components/Spinner'
 import { isCodexFamilyFlavor } from '@hapi/protocol'
 import { getInputStringAny } from '@/lib/toolInputUtils'
 import { useTranslation } from '@/lib/use-translation'
+import { resolveToolNameAlias } from '@/components/ToolCard/toolNameAliases'
 
 function isToolAllowedForSession(toolName: string, toolInput: unknown, allowedTools: string[] | undefined): boolean {
     if (!allowedTools || allowedTools.length === 0) return false
@@ -135,11 +136,15 @@ export function PermissionFooter(props: {
     }
 
     const toolName = props.tool.name
+    // Feishu sends are approved one message at a time: there is no
+    // "allow for session" or bulk edit decision that could satisfy the rule.
+    const isFeishuSend = resolveToolNameAlias(toolName) === 'FeishuSendMessage'
     const isEditTool = toolName === 'Edit'
         || toolName === 'MultiEdit'
         || toolName === 'Write'
         || toolName === 'NotebookEdit'
-    const hideAllowForSession = toolName === 'Edit'
+    const hideAllowForSession = isFeishuSend
+        || toolName === 'Edit'
         || toolName === 'MultiEdit'
         || toolName === 'Write'
         || toolName === 'NotebookEdit'
@@ -148,7 +153,7 @@ export function PermissionFooter(props: {
         || toolName === 'CursorCreatePlan'
 
     const canAllowForSession = !codex && isPending && !hideAllowForSession
-    const canAllowAllEdits = claude && isPending && isEditTool
+    const canAllowAllEdits = claude && isPending && isEditTool && !isFeishuSend
 
     const approve = async () => {
         if (!isPending || loading || loadingAllEdits || loadingForSession) return
@@ -257,7 +262,7 @@ export function PermissionFooter(props: {
                 ) : (
                     <>
                         <PermissionRowButton
-                            label={t('tool.allow')}
+                            label={isFeishuSend ? t('tool.feishu.approve') : t('tool.allow')}
                             tone="allow"
                             loading={loading === 'allow'}
                             disabled={props.disabled || loading !== null || loadingAllEdits || loadingForSession}
@@ -282,7 +287,7 @@ export function PermissionFooter(props: {
                             />
                         ) : null}
                         <PermissionRowButton
-                            label={t('tool.deny')}
+                            label={isFeishuSend ? t('tool.feishu.deny') : t('tool.deny')}
                             tone="deny"
                             loading={loading === 'deny'}
                             disabled={props.disabled || loading !== null || loadingAllEdits || loadingForSession}

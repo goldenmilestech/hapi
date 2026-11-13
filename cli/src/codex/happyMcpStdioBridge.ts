@@ -34,7 +34,7 @@ import { CREATABLE_AGENT_FLAVORS } from '@hapi/protocol/modes';
 import { PermissionModeSchema } from '@hapi/protocol/schemas';
 import { isPeerToolsDisabled, PEER_TOOL_NAMES } from '@/modules/common/peerTools';
 
-const DEFAULT_TOOL_NAMES = ['change_title', 'display_image', 'display_video', 'display_media', 'list_peers', 'ping_peer', 'inspect_peer', 'spawn_peer'];
+const DEFAULT_TOOL_NAMES = ['change_title', 'display_image', 'display_video', 'display_media', 'feishu_send_message', 'feishu_send_status', 'list_peers', 'ping_peer', 'inspect_peer', 'spawn_peer'];
 
 function parseArgs(argv: string[]): { url: string | null; toolNames: Set<string> } {
   let url: string | null = null;
@@ -212,6 +212,73 @@ export async function runHappyMcpStdioBridge(argv: string[]): Promise<void> {
           } catch (error) {
             return {
               content: [{ type: 'text' as const, text: `Failed to display media: ${error instanceof Error ? error.message : String(error)}` }],
+              isError: true,
+            };
+          }
+        }
+      );
+    }
+
+    const feishuSendInputSchema: z.ZodTypeAny = z.discriminatedUnion('kind', [
+      z.object({
+        kind: z.literal('dm'),
+        to: z.string().describe('Recipient: "me", open_id, email, or exact display name'),
+        text: z.string().describe('Plain text; do not include <at> tags'),
+      }),
+      z.object({
+        kind: z.literal('group'),
+        chat: z.string().describe('Group chat_id or exact group name'),
+        text: z.string().describe('Plain text; Hapi adds the sender mention'),
+      }),
+    ]);
+
+    if (toolNames.has('feishu_send_message')) {
+      server.registerTool<any, any>(
+        'feishu_send_message',
+        {
+          description:
+            'Send a Feishu message through the Hapi bot. DMing the session owner ("to":"me") sends immediately; ' +
+            'other DMs and all group messages require the user to approve an in-chat card. Group messages name and @-mention the sender.',
+          title: 'Send Feishu Message',
+          inputSchema: feishuSendInputSchema,
+        },
+        async (args: Record<string, unknown>) => {
+          try {
+            const client = await ensureHttpClient();
+            return await client.callTool({ name: 'feishu_send_message', arguments: args }) as any;
+          } catch (error) {
+            return {
+              content: [
+                { type: 'text' as const, text: `Failed to send Feishu message: ${error instanceof Error ? error.message : String(error)}` },
+              ],
+              isError: true,
+            };
+          }
+        }
+      );
+    }
+
+    const feishuSendStatusInputSchema: z.ZodTypeAny = z.object({
+      request_id: z.string().describe('request_id returned by feishu_send_message'),
+    });
+
+    if (toolNames.has('feishu_send_status')) {
+      server.registerTool<any, any>(
+        'feishu_send_status',
+        {
+          description: 'Check a Feishu send approval by request_id.',
+          title: 'Feishu Send Status',
+          inputSchema: feishuSendStatusInputSchema,
+        },
+        async (args: Record<string, unknown>) => {
+          try {
+            const client = await ensureHttpClient();
+            return await client.callTool({ name: 'feishu_send_status', arguments: args }) as any;
+          } catch (error) {
+            return {
+              content: [
+                { type: 'text' as const, text: `Failed to read Feishu send status: ${error instanceof Error ? error.message : String(error)}` },
+              ],
               isError: true,
             };
           }

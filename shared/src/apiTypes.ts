@@ -1482,3 +1482,60 @@ export type AgentActivityResponse = {
     generatedAt: number
     sessions: AgentActivitySession[]
 }
+
+/** Maximum user-visible characters in one bot-sent Feishu message. */
+export const FEISHU_SEND_TEXT_MAX_CHARS = 8_000
+
+/**
+ * Agent-initiated Feishu message. `to` accepts an open_id, an email, a known
+ * display name, or `me`; `chat` accepts a chat_id or a group name. The hub
+ * resolves names and rejects ambiguous matches instead of guessing.
+ */
+export const FeishuSendRequestSchema = z.discriminatedUnion('kind', [
+    z.object({
+        kind: z.literal('dm'),
+        to: z.string().trim().min(1).max(320),
+        text: z.string().min(1).max(FEISHU_SEND_TEXT_MAX_CHARS)
+    }),
+    z.object({
+        kind: z.literal('group'),
+        chat: z.string().trim().min(1).max(320),
+        text: z.string().min(1).max(FEISHU_SEND_TEXT_MAX_CHARS)
+    })
+])
+
+export type FeishuSendRequest = z.infer<typeof FeishuSendRequestSchema>
+
+export type FeishuSendReceipt = {
+    requestId: string
+    messageId: string
+    chatId: string | null
+    kind: 'dm' | 'group'
+    targetLabel: string
+    senderLabel: string
+    sentAt: number
+}
+
+/** Server-side approval card payload; also stored in agentState.requests. */
+export type FeishuSendApprovalSummary = {
+    requestId: string
+    kind: 'dm' | 'group'
+    targetLabel: string
+    senderLabel: string
+    text: string
+    preview: string
+    expiresAt: number
+}
+
+export type FeishuSendStatus = 'pending_approval' | 'sent' | 'denied' | 'expired' | 'failed'
+
+export type FeishuSendResponse =
+    | { status: 'sent'; requestId: string; receipt: FeishuSendReceipt }
+    | { status: 'pending_approval'; requestId: string; approval: FeishuSendApprovalSummary }
+
+export type FeishuSendStatusResponse = {
+    requestId: string
+    status: FeishuSendStatus
+    receipt?: FeishuSendReceipt
+    error?: string
+}

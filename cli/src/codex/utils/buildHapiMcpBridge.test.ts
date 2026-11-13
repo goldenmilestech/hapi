@@ -14,8 +14,8 @@ vi.mock('@/claude/utils/startHappyServer', () => ({
         return {
             url: 'http://127.0.0.1:43006/',
             toolNames: options.skillLookup
-                ? ['change_title', 'display_image', 'display_video', 'display_media', 'list_peers', 'ping_peer', 'inspect_peer', 'spawn_peer', 'skill_lookup']
-                : ['change_title', 'display_image', 'display_video', 'display_media', 'list_peers', 'ping_peer', 'inspect_peer', 'spawn_peer'],
+                ? ['change_title', 'display_image', 'display_video', 'display_media', 'feishu_send_message', 'feishu_send_status', 'list_peers', 'ping_peer', 'inspect_peer', 'spawn_peer', 'skill_lookup']
+                : ['change_title', 'display_image', 'display_video', 'display_media', 'feishu_send_message', 'feishu_send_status', 'list_peers', 'ping_peer', 'inspect_peer', 'spawn_peer'],
             stop: vi.fn()
         }
     })
@@ -73,7 +73,7 @@ describe('buildHapiMcpBridge skill lookup config', () => {
             '--url',
             'http://127.0.0.1:43006/',
             '--tools',
-            'change_title,display_image,display_video,display_media,list_peers,ping_peer,inspect_peer,spawn_peer,skill_lookup',
+            'change_title,display_image,display_video,display_media,feishu_send_message,feishu_send_status,list_peers,ping_peer,inspect_peer,spawn_peer,skill_lookup',
             '--hapi-session-id',
             'hub-session-1',
         ])
@@ -82,6 +82,8 @@ describe('buildHapiMcpBridge skill lookup config', () => {
             display_image: { approval_mode: 'prompt' },
             display_video: { approval_mode: 'prompt' },
             display_media: { approval_mode: 'prompt' },
+            feishu_send_message: { approval_mode: 'approve' },
+            feishu_send_status: { approval_mode: 'approve' },
             list_peers: { approval_mode: 'approve' },
             skill_lookup: { approval_mode: 'approve' }
         })
@@ -95,7 +97,7 @@ describe('buildHapiMcpBridge skill lookup config', () => {
             '--url',
             'http://127.0.0.1:43006/',
             '--tools',
-            'change_title,display_image,display_video,display_media,list_peers,ping_peer,inspect_peer,spawn_peer',
+            'change_title,display_image,display_video,display_media,feishu_send_message,feishu_send_status,list_peers,ping_peer,inspect_peer,spawn_peer',
             '--hapi-session-id',
             'hub-session-1',
         ])
@@ -104,6 +106,8 @@ describe('buildHapiMcpBridge skill lookup config', () => {
             display_image: { approval_mode: 'prompt' },
             display_video: { approval_mode: 'prompt' },
             display_media: { approval_mode: 'prompt' },
+            feishu_send_message: { approval_mode: 'approve' },
+            feishu_send_status: { approval_mode: 'approve' },
             list_peers: { approval_mode: 'approve' }
         })
     })

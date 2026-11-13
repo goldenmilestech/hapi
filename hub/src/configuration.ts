@@ -20,6 +20,12 @@
  *   Required to enable the hub bot (chat bridge).
  * - FEISHU_ENCRYPT_KEY: Optional Feishu event encryption key. When set, the
  *   hub decrypts event bodies and verifies the request signature.
+ * - FEISHU_SEND_APPROVAL_TTL_SECONDS: How long an agent-initiated Feishu send
+ *   waits for approval (default: 600).
+ * - FEISHU_SEND_MAX_PER_MINUTE: Per-namespace send/approval rate limit
+ *   (default: 30).
+ * - FEISHU_DIRECTORY_SEARCH: Set to `off` to skip the contact-directory walk
+ *   used for name addressing (email/open_id always work).
  * - TELEGRAM_BOT_TOKEN: Telegram Bot API token from @BotFather
  * - TELEGRAM_NOTIFICATION: Enable/disable Telegram notifications (default: true)
  * - SERVERCHAN_SENDKEY: Server酱 SendKey/AppKey for push notifications

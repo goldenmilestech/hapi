@@ -5,6 +5,7 @@ import { dirname } from 'node:path'
 import { AccessTokenStore } from './accessTokens'
 import { FeishuBindingStore } from './feishuBindings'
 import { FeishuBotBindingStore } from './feishuBotBindings'
+import { FeishuProfileStore } from './feishuProfiles'
 import { MachineStore } from './machineStore'
 import { MessageStore } from './messageStore'
 import { addMessage } from './messages'
@@ -87,6 +88,7 @@ export class Store {
     readonly accessTokens: AccessTokenStore
     readonly feishuBindings: FeishuBindingStore
     readonly feishuBotBindings: FeishuBotBindingStore
+    readonly feishuProfiles: FeishuProfileStore
     readonly machines: MachineStore
     readonly messages: MessageStore
     readonly users: UserStore
@@ -139,6 +141,7 @@ export class Store {
         this.accessTokens = new AccessTokenStore(this.db)
         this.feishuBindings = new FeishuBindingStore(this.db)
         this.feishuBotBindings = new FeishuBotBindingStore(this.db)
+        this.feishuProfiles = new FeishuProfileStore(this.db)
 
         if (dbPath !== ':memory:' && !dbPath.startsWith('file::memory:')) {
             for (const path of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {

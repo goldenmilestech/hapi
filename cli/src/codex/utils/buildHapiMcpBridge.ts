@@ -110,6 +110,14 @@ export async function buildHapiMcpBridge(
         },
         display_media: {
             approval_mode: 'prompt'
+        },
+        // The hub enforces one approval per Feishu message; an extra Codex
+        // prompt would be redundant and could be "always allowed".
+        feishu_send_message: {
+            approval_mode: 'approve'
+        },
+        feishu_send_status: {
+            approval_mode: 'approve'
         }
     };
     if (options.enableChangeTitle !== false) {

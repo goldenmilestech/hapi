@@ -234,6 +234,8 @@ describe('runHappyMcpStdioBridge tool forwarding', () => {
             'display_image',
             'display_video',
             'display_media',
+            'feishu_send_message',
+            'feishu_send_status',
             'ping_peer',
             'spawn_peer',
             'inspect_peer',
@@ -251,7 +253,9 @@ describe('runHappyMcpStdioBridge tool forwarding', () => {
                 'change_title',
                 'display_image',
                 'display_video',
-                'display_media'
+                'display_media',
+                'feishu_send_message',
+                'feishu_send_status'
             ])
         } finally {
             delete process.env.HAPI_DISABLE_PEER_TOOLS

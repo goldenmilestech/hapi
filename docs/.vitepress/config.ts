@@ -49,7 +49,8 @@ export default defineConfig({
         items: [
           { text: 'Namespace', link: '/guide/namespace' },
           { text: 'Deployment', link: '/guide/deployment' },
-          { text: 'Notifications', link: '/guide/notifications' }
+          { text: 'Notifications', link: '/guide/notifications' },
+          { text: 'Feishu bot sends', link: '/guide/feishu-bot-send' }
         ]
       },
       {

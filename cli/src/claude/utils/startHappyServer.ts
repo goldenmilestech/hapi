@@ -40,17 +40,32 @@ import { PermissionModeSchema } from '@hapi/protocol/schemas'
 import { PingPeerError, formatInspectPeerReport, formatPeerSessionsList, forwardPeerReply, inspectPeer, listPeerSessions, peerListFetchLimit, pingPeer, supportsPeerReply } from "@/modules/pingPeer/pingPeer";
 import { applySessionDisplayRename, normalizeSessionDisplayTitle } from "@/agent/sessionDisplayRename";
 import { SpawnPeerError, spawnPeer } from "@/modules/spawnPeer/spawnPeer";
+import {
+    createFeishuSend,
+    formatFeishuReceipt,
+    formatFeishuSendOutcome,
+    getFeishuSendStatus,
+} from "@/modules/feishu/feishuSend";
+import {
+    getFeishuApprovalTracker,
+    trackFeishuApproval,
+} from "@/modules/feishu/feishuApprovalTracker";
 
 export type HapiMcpToolName =
     | 'change_title'
     | 'display_image'
     | 'display_video'
     | 'display_media'
+    | 'feishu_send_message'
+    | 'feishu_send_status'
     | 'list_peers'
     | 'ping_peer'
     | 'inspect_peer'
     | 'spawn_peer'
     | 'skill_lookup';
+
+/** How long the MCP tool waits for an approval before returning a request id. */
+const FEISHU_APPROVAL_WAIT_MS = 25_000;
 
 type StartHappyServerOptions = {
     /**
@@ -432,6 +447,98 @@ function createHapiMcpServer(
         }
     });
 
+    const feishuSendInputSchema = z.discriminatedUnion('kind', [
+        z.object({
+            kind: z.literal('dm'),
+            to: z.string().trim().min(1).describe(
+                'Recipient: "me" for the session owner, or a Feishu open_id (ou_...), email, or exact display name. Anyone other than the session owner requires the user\'s approval.'
+            ),
+            text: z.string().min(1).describe('Plain text. Do not include <at> tags; Hapi adds the group sender mention.'),
+        }),
+        z.object({
+            kind: z.literal('group'),
+            chat: z.string().trim().min(1).describe(
+                'Group chat_id (oc_...) or exact group name. The bot must be in the group and the session owner must be a member; otherwise the send is refused.'
+            ),
+            text: z.string().min(1).describe('Plain text. Hapi automatically adds the sender and @-mentions them.'),
+        }),
+    ]);
+
+    const feishuSendStatusInputSchema = z.object({
+        request_id: z.string().trim().min(1).describe(
+            'The request_id returned by feishu_send_message when an approval was requested.'
+        ),
+    });
+
+    const feishuSendText = (text: string, isError = false) => ({
+        content: [{ type: 'text' as const, text }],
+        isError,
+    });
+
+    registerTool('feishu_send_message', {
+        description:
+            'Send a Feishu message through the Hapi bot. '
+            + 'A DM to the session owner ("to":"me") sends immediately. '
+            + 'DMing anyone else and every group message requires the user to approve an in-chat approval card. '
+            + 'Group messages are prefixed with the sender and @-mention them, and are refused when the sender is not in the group.',
+        title: 'Send Feishu Message',
+        inputSchema: feishuSendInputSchema,
+    }, async (args: { kind: 'dm'; to: string; text: string } | { kind: 'group'; chat: string; text: string }) => {
+        logger.debug('[hapiMCP] feishu_send_message:', args.kind);
+        try {
+            const result = await createFeishuSend({
+                sessionId: client.sessionId,
+                request: args,
+            });
+            if (result.status === 'sent') {
+                return feishuSendText(formatFeishuReceipt(result.receipt));
+            }
+            const tracker = trackFeishuApproval(client, result.approval);
+            const terminal = await tracker.waitFor(FEISHU_APPROVAL_WAIT_MS);
+            if (terminal) {
+                return feishuSendText(
+                    formatFeishuSendOutcome(terminal),
+                    terminal.status === 'failed' || terminal.status === 'expired'
+                );
+            }
+            return feishuSendText(
+                `Approval requested to send to ${result.approval.targetLabel}; request_id=${result.requestId}. `
+                + 'The message will be sent automatically after the user approves. '
+                + 'The approval card and the receipt are visible in this session; use feishu_send_status to check later.'
+            );
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            logger.debug('[hapiMCP] feishu_send_message failed:', message);
+            return feishuSendText(`Failed to send Feishu message: ${message}`, true);
+        }
+    });
+
+    registerTool('feishu_send_status', {
+        description:
+            'Check a Feishu send approval by request_id. Terminal results also update the in-chat approval card and post a receipt message.',
+        title: 'Feishu Send Status',
+        inputSchema: feishuSendStatusInputSchema,
+    }, async (args: { request_id: string }) => {
+        logger.debug('[hapiMCP] feishu_send_status:', args.request_id);
+        try {
+            const result = await getFeishuSendStatus({
+                sessionId: client.sessionId,
+                requestId: args.request_id,
+            });
+            if (result.status !== 'pending_approval') {
+                getFeishuApprovalTracker(args.request_id)?.applyExternalStatus(result);
+            }
+            return feishuSendText(
+                formatFeishuSendOutcome(result),
+                result.status === 'failed' || result.status === 'expired'
+            );
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            logger.debug('[hapiMCP] feishu_send_status failed:', message);
+            return feishuSendText(`Failed to read Feishu send status: ${message}`, true);
+        }
+    });
+
     if (!peerToolsDisabled) {
         registerTool('ping_peer', {
             description: PING_PEER_TOOL_DESCRIPTION,
@@ -702,7 +809,7 @@ export async function startHappyServer(client: ApiSessionClient, options: StartH
     const peerToolsDisabled = isPeerToolsDisabled();
     const toolNames: HapiMcpToolName[] = [];
     if (enableChangeTitle && includeTool('change_title')) toolNames.push('change_title');
-    for (const name of ['display_image', 'display_video', 'display_media'] as const) {
+    for (const name of ['display_image', 'display_video', 'display_media', 'feishu_send_message', 'feishu_send_status'] as const) {
         if (includeTool(name)) toolNames.push(name);
     }
     if (!peerToolsDisabled) {
