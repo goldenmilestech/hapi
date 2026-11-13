@@ -7,11 +7,13 @@ type SentMessage =
     | { kind: 'text'; chatId: string; text: string }
     | { kind: 'card'; chatId: string; card: Record<string, unknown> }
     | { kind: 'card-update'; messageId: string; card: Record<string, unknown> }
+    | { kind: 'reaction'; messageId: string; emojiType: string }
 
 function fakeApi(sent: SentMessage[]): FeishuBotApi {
     return {
         sendText: async (chatId: string, text: string) => {
             sent.push({ kind: 'text', chatId, text })
+            return 'om_text_1'
         },
         sendCard: async (chatId: string, card: unknown) => {
             sent.push({ kind: 'card', chatId, card: card as Record<string, unknown> })
@@ -19,6 +21,9 @@ function fakeApi(sent: SentMessage[]): FeishuBotApi {
         },
         updateCard: async (messageId: string, card: unknown) => {
             sent.push({ kind: 'card-update', messageId, card: card as Record<string, unknown> })
+        },
+        addReaction: async (messageId: string, emojiType: string) => {
+            sent.push({ kind: 'reaction', messageId, emojiType })
         },
         getChatInfo: async () => null,
         getBotInfo: async () => null
@@ -137,20 +142,24 @@ describe('FeishuBot', () => {
             metadata: { name: 'Fix login' }
         } as never)
 
-        expect(sent).toHaveLength(2)
-        expect(sent[0]?.kind).toBe('card')
-        expect(sent[1]?.kind).toBe('card')
-        if (sent[0]?.kind !== 'card' || sent[1]?.kind !== 'card') {
+        const messages = sent.filter((message) => message.kind !== 'reaction')
+        expect(messages).toHaveLength(2)
+        expect(messages[0]?.kind).toBe('card')
+        expect(messages[1]?.kind).toBe('card')
+        if (messages[0]?.kind !== 'card' || messages[1]?.kind !== 'card') {
             throw new Error('expected two cards')
         }
-        expect(sent[0].chatId).toBe('oc_chat_1')
-        expect(JSON.stringify(sent[0].card)).toContain('Inspect the redirect first.')
-        expect(answerCardTitle(sent[1].card)).toBe('会话来自：Fix login')
-        expect(answerCardText(sent[1].card)).toBe('All done')
+        expect(messages[0].chatId).toBe('oc_chat_1')
+        expect(JSON.stringify(messages[0].card)).toContain('Inspect the redirect first.')
+        expect(answerCardTitle(messages[1].card)).toBe('会话来自：Fix login')
+        expect(answerCardText(messages[1].card)).toBe('All done')
+        // The finished reply carries the Agent Teams DONE reaction.
+        expect(sent.filter((message) => message.kind === 'reaction'))
+            .toContainEqual({ kind: 'reaction', messageId: 'om_card_1', emojiType: 'DONE' })
 
         // A duplicate ready for the same stored answer must not resend.
         await bot.sendReady({ id: session.id, metadata: { name: 'Fix login' } } as never)
-        expect(sent).toHaveLength(2)
+        expect(sent.filter((message) => message.kind !== 'reaction')).toHaveLength(2)
     })
 
     it('publishes a live process card before the answer and finalizes it in place', async () => {
@@ -263,7 +272,8 @@ describe('FeishuBot', () => {
         // Agent Teams parity: never fall back to the provider turn duration.
         expect(JSON.stringify(cardOf(updates.at(-1)))).not.toContain('秒')
         expect(sent.filter((message) => message.kind === 'card')).toHaveLength(2)
-        expect(answerCardText(cardOf(sent.at(-1)) ?? {})).toBe('Live answer')
+        expect(answerCardText(cardOf(sent.filter((message) => message.kind === 'card').at(-1)) ?? {}))
+            .toBe('Live answer')
 
         bot.stop()
     })
@@ -1216,7 +1226,8 @@ describe('FeishuBot', () => {
             text: '普通聊天',
             localId: 'feishu:om_1'
         }])
-        expect(sent).toEqual([])
+        // The prompt is acknowledged with the Agent Teams typing reaction.
+        expect(sent).toEqual([{ kind: 'reaction', messageId: 'om_1', emojiType: 'Typing' }])
 
         // Group chatter goes to the Manager bot; the Hapi plugin stays silent.
         await bot.handleWebhook(
@@ -1224,7 +1235,7 @@ describe('FeishuBot', () => {
             new Headers()
         )
         expect(forwarded).toHaveLength(1)
-        expect(sent).toEqual([])
+        expect(sent).toHaveLength(1)
 
         // A /hapi command in a group is addressed to the plugin.
         await bot.handleWebhook(messageEvent(
@@ -1247,11 +1258,12 @@ describe('FeishuBot', () => {
             text: '清理一下',
             localId: 'feishu:om_g2'
         })
-        expect(sent).toEqual([])
+        expect(sent).toHaveLength(2)
 
         await bot.handleWebhook(messageEvent('/hapi', 'evt-3', 'om_3'), new Headers())
         expect(forwarded).toHaveLength(2)
-        expect(sent[0]).toMatchObject({ kind: 'text', chatId: 'oc_chat_1' })
-        expect((sent[0] as { kind: 'text'; text: string }).text).toContain('/hapi <消息>')
+        const help = sent.find((message) => message.kind === 'text')
+        expect(help).toMatchObject({ kind: 'text', chatId: 'oc_chat_1' })
+        expect((help as { kind: 'text'; text: string }).text).toContain('/hapi <消息>')
     })
 })
