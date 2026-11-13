@@ -417,8 +417,8 @@ export function buildInputRequestCard(input: {
         if (answerable) {
             lines.push(
                 questions.length > 1
-                    ? '_按问题顺序回复，用 ; 分隔（例如 1;2）。回复「跳过」可跳过该问题。_'
-                    : '_直接回复数字即可回答；回复「跳过」可跳过该问题。_'
+                    ? '_按问题顺序回复，用 ; 分隔（例如 1;2）。回复「跳过」或其他内容会跳过该问题。_'
+                    : '_直接回复数字即可回答；回复「跳过」或其他内容会跳过该问题。_'
             )
         } else {
             lines.push('_该问题包含自由输入，请在 Hapi 中回答。_')
