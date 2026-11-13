@@ -580,22 +580,22 @@ export function StatusBar(props: {
                         {/* Compact below md keeps the row from overflowing on phones:
                             DSH's compact mode shows only speed and cache hit. */}
                         {sessionStatsActivity ? (
-                            <span className="hidden whitespace-nowrap text-xs text-[var(--app-hint)] md:inline">
+                            <span className="hidden whitespace-nowrap text-[10px] leading-4 text-[var(--app-hint)] md:inline">
                                 {sessionStatsActivity}
                             </span>
                         ) : null}
                         {sessionStatsSpeed ? (
-                            <span className="whitespace-nowrap text-xs text-[var(--app-hint)] md:hidden">
+                            <span className="whitespace-nowrap text-[10px] leading-4 text-[var(--app-hint)] md:hidden">
                                 {sessionStatsSpeed}
                             </span>
                         ) : null}
                         {sessionStatsUsage ? (
-                            <span className="hidden whitespace-nowrap text-xs text-[var(--app-hint)] md:inline">
+                            <span className="hidden whitespace-nowrap text-[10px] leading-4 text-[var(--app-hint)] md:inline">
                                 {sessionStatsUsage}
                             </span>
                         ) : null}
                         {sessionStatsCacheHit ? (
-                            <span className="whitespace-nowrap text-xs text-[var(--app-hint)] md:hidden">
+                            <span className="whitespace-nowrap text-[10px] leading-4 text-[var(--app-hint)] md:hidden">
                                 {sessionStatsCacheHit}
                             </span>
                         ) : null}
