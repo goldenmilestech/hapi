@@ -335,7 +335,7 @@ export function buildInputRequestAnswers(
 
 export type FeishuInputCardAction = {
     kind: 'hapi_input'
-    action: 'toggle' | 'pick' | 'submit'
+    action: 'toggle' | 'pick' | 'submit' | 'skip'
     sessionId: string
     requestId: string
     question?: number
@@ -466,16 +466,22 @@ export function buildInputRequestCard(input: {
             }
         })
 
-        const needsSubmit = questions.length > 1 || questions.some((question) => question.multiSelect)
-        if (needsSubmit) {
-            elements.push({
-                tag: 'button',
-                text: { tag: 'plain_text', content: '提交回答' },
-                type: 'primary_filled',
-                width: 'fill',
-                behaviors: [callbackBehavior(inputActionValue('submit', input.sessionId, input.requestId))]
-            })
-        }
+        // Selection is always confirmed explicitly, even for a single
+        // single-select question: no accidental answer from a stray click.
+        elements.push({
+            tag: 'button',
+            text: { tag: 'plain_text', content: '提交回答' },
+            type: 'primary_filled',
+            width: 'fill',
+            behaviors: [callbackBehavior(inputActionValue('submit', input.sessionId, input.requestId))]
+        })
+        elements.push({
+            tag: 'button',
+            text: { tag: 'plain_text', content: '跳过' },
+            type: 'default',
+            width: 'fill',
+            behaviors: [callbackBehavior(inputActionValue('skip', input.sessionId, input.requestId))]
+        })
         if (link) {
             elements.push({
                 tag: 'button',
@@ -538,11 +544,15 @@ export function buildInputRequestResolvedCard(input: {
     sessionTitle: string
     questions: FeishuInputQuestion[]
     selection: FeishuInputSelection
-    status: 'answered' | 'expired'
+    status: 'answered' | 'expired' | 'skipped'
 }): FeishuCard {
     const lines: string[] = []
     if (input.status === 'expired') {
         lines.push('该问题已在 Hapi 中回答或已失效。')
+        lines.push('')
+    }
+    if (input.status === 'skipped') {
+        lines.push('已跳过该问题，未向 agent 提交答案。')
         lines.push('')
     }
     input.questions.forEach((question, index) => {
@@ -561,18 +571,17 @@ export function buildInputRequestResolvedCard(input: {
     if (input.status === 'answered') {
         lines.push('已在 Hapi 中继续处理。')
     }
-    const answered = input.status === 'answered'
+    const title = input.status === 'answered'
+        ? `已回答：${displayTitle(input.sessionTitle)}`
+        : input.status === 'skipped'
+            ? `已跳过：${displayTitle(input.sessionTitle)}`
+            : `问题已失效：${displayTitle(input.sessionTitle)}`
     return {
         schema: '2.0',
         config: {},
         header: {
-            title: {
-                tag: 'plain_text',
-                content: answered
-                    ? `已回答：${displayTitle(input.sessionTitle)}`
-                    : `问题已失效：${displayTitle(input.sessionTitle)}`
-            },
-            template: answered ? 'green' : 'grey'
+            title: { tag: 'plain_text', content: title },
+            template: input.status === 'answered' ? 'green' : 'grey'
         },
         body: {
             elements: [

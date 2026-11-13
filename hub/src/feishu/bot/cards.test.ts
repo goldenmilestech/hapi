@@ -158,7 +158,7 @@ describe('Feishu cards', () => {
             .toBe('https://hapi.test/sessions/session-1')
     })
 
-    it('renders a single-select question as submit-on-click buttons', () => {
+    it('renders single-select options with explicit submit and skip', () => {
         const card = buildInputRequestCard({
             sessionId: 'session-1',
             requestId: 'req-1',
@@ -174,13 +174,15 @@ describe('Feishu cards', () => {
         })
         const elements = (card?.body as { elements?: Array<Record<string, unknown>> } | undefined)?.elements ?? []
         const buttons = elements.filter((element) => element.tag === 'button')
-        expect(buttons).toHaveLength(2)
+        // Two options plus 提交回答 and 跳过.
+        expect(buttons).toHaveLength(4)
         const pick = (buttons[1]?.behaviors as Array<{ value?: { action?: string; value?: string } }>)[0]?.value
         expect(pick).toMatchObject({ action: 'pick', question: 0, value: 'Hub' })
-        // No separate submit: a single single-select question answers on click.
-        expect(buttons.some((button) => (
-            (button.behaviors as Array<{ value?: { action?: string } }>)[0]?.value?.action === 'submit'
-        ))).toBe(false)
+        const actions = buttons.map((button) => (
+            (button.behaviors as Array<{ value?: { action?: string } }>)[0]?.value?.action
+        ))
+        expect(actions).toContain('submit')
+        expect(actions).toContain('skip')
     })
 
     it('builds answers in each tool wire format', () => {
