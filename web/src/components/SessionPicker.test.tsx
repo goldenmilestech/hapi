@@ -75,6 +75,9 @@ describe('SessionPicker', () => {
         expect(screen.getByText('Running')).toBeTruthy()
         expect(screen.getByText('Not running')).toBeTruthy()
         expect(screen.getByText('Bound')).toBeTruthy()
+        // Sticky headers need an opaque background or the rows show through.
+        expect(screen.getAllByTestId('session-picker-group')[0])
+            .toHaveClass('bg-[var(--app-secondary-bg)]')
     })
 
     it('filters by title and selects a session', () => {

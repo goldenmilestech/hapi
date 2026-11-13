@@ -83,7 +83,7 @@ export function SessionPicker(props: SessionPickerProps) {
                     </div>
                 ) : groups.map((group) => (
                     <div key={group.key}>
-                        <div className="sticky top-0 z-[1] flex items-center justify-between gap-2 border-b border-[var(--app-divider)] bg-[var(--app-subtle-bg)] px-3 py-1.5">
+                        <div data-testid="session-picker-group" className="sticky top-0 z-[1] flex items-center justify-between gap-2 border-b border-[var(--app-divider)] bg-[var(--app-secondary-bg)] px-3 py-1.5">
                             <span className="min-w-0 truncate text-[11px] font-medium uppercase tracking-wide text-[var(--app-hint)]" title={group.path || undefined}>
                                 {group.label}
                             </span>
