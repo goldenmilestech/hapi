@@ -125,7 +125,7 @@ function readCallbackAction(value: unknown): FeishuInputCardAction | null {
         return null
     }
     const action = parsed.action
-    if (action !== 'toggle' && action !== 'pick' && action !== 'submit') {
+    if (action !== 'toggle' && action !== 'pick' && action !== 'submit' && action !== 'skip') {
         return null
     }
     const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId.trim() : ''
@@ -1036,10 +1036,50 @@ export class FeishuBot implements NotificationChannel {
         }
     }
 
+    /** Skip mirrors the web UI's "esc": deny the request without answers. */
+    private async skipInputCard(
+        messageId: string | null,
+        state: InputCardState
+    ): Promise<FeishuCardCallbackResponse> {
+        if (messageId) {
+            this.submittingInputCards.add(messageId)
+        }
+        try {
+            await this.options.syncEngine.denyPermission(state.sessionId, state.requestId)
+        } catch (error) {
+            if (error instanceof PermissionRequestNotFoundError) {
+                return this.inputCardExpiredResponse(messageId, state)
+            }
+            console.error(
+                '[FeishuBot] Failed to skip input request:',
+                error instanceof Error ? error.message : error
+            )
+            return { toast: { type: 'error', content: '跳过失败，请到 Hapi 中操作' } }
+        } finally {
+            if (messageId) {
+                this.submittingInputCards.delete(messageId)
+            }
+        }
+
+        this.forgetInputCard(messageId, state)
+        return {
+            toast: { type: 'info', content: '已跳过该问题' },
+            card: {
+                type: 'raw',
+                data: buildInputRequestResolvedCard({
+                    sessionTitle: state.sessionTitle,
+                    questions: state.questions,
+                    selection: state.selection,
+                    status: 'skipped'
+                })
+            }
+        }
+    }
+
     /**
      * Answer a question card in place, the way the Agent Teams approval card
-     * does: the click updates the card and, once every question is answered,
-     * the hub decides the request through the same RPC as the web UI.
+     * does: clicks update the card and explicit submit decides the request
+     * through the same RPC as the web UI.
      */
     private async handleCardAction(
         envelope: FeishuCardActionEnvelope
@@ -1075,6 +1115,9 @@ export class FeishuBot implements NotificationChannel {
         if (action.action === 'submit') {
             return await this.submitInputCard(envelope.messageId, state)
         }
+        if (action.action === 'skip') {
+            return await this.skipInputCard(envelope.messageId, state)
+        }
 
         const questionIndex = action.question
         const optionValue = action.value
@@ -1099,10 +1142,6 @@ export class FeishuBot implements NotificationChannel {
                 : current.filter((entry) => entry !== optionValue)
         } else {
             state.selection[questionIndex] = [optionValue]
-            // A single single-select question needs no separate submit button.
-            if (state.questions.length === 1) {
-                return await this.submitInputCard(envelope.messageId, state)
-            }
         }
 
         const card = buildInputRequestCard({

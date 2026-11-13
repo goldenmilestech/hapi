@@ -611,6 +611,182 @@ describe('FeishuBot', () => {
         expect(JSON.stringify(submitResponse?.card)).toContain('已回答')
     })
 
+    it('waits for explicit submit after a single-select pick', async () => {
+        const store = new Store(':memory:')
+        const session = store.sessions.getOrCreateSession(
+            'test-session',
+            { name: 'Fix login', path: '/tmp' },
+            {},
+            'default'
+        )
+        store.feishuBotBindings.bind({
+            chatId: 'oc_chat_1',
+            chatType: 'p2p',
+            chatName: null,
+            namespace: 'default',
+            sessionId: session.id,
+            sessionTitle: 'Fix login'
+        })
+
+        const pendingSession = {
+            id: session.id,
+            metadata: { name: 'Fix login', path: '/tmp' },
+            agentState: {
+                requests: {
+                    'req-1': {
+                        tool: 'AskUserQuestion',
+                        arguments: {
+                            questions: [{
+                                header: 'Next step',
+                                question: 'What first?',
+                                options: [{ label: 'Reboot' }, { label: 'Clean disk' }]
+                            }]
+                        }
+                    }
+                }
+            }
+        }
+        const calls: unknown[][] = []
+        const sent: SentMessage[] = []
+        const bot = new FeishuBot({
+            store,
+            syncEngine: {
+                getSession: () => pendingSession,
+                approvePermission: async (...args: unknown[]) => {
+                    calls.push(args)
+                }
+            } as never,
+            config: { appId: 'app', appSecret: 'secret', verificationToken: 'token', encryptKey: null },
+            api: fakeApi(sent)
+        })
+
+        await bot.sendPermissionRequest(pendingSession as never)
+
+        const pick = await bot.handleWebhook(JSON.stringify({
+            schema: '2.0',
+            header: { event_id: 'evt-pick', event_type: 'card.action.trigger', token: 'token' },
+            event: {
+                operator: { open_id: 'ou_1' },
+                action: {
+                    tag: 'button',
+                    value: {
+                        kind: 'hapi_input',
+                        action: 'pick',
+                        sessionId: session.id,
+                        requestId: 'req-1',
+                        question: 0,
+                        value: 'Reboot'
+                    }
+                },
+                context: { open_message_id: 'om_card_1', open_chat_id: 'oc_chat_1' }
+            }
+        }), new Headers())
+
+        const pickResponse = pick && 'response' in pick ? pick.response : null
+        // The chosen option is highlighted, but nothing is submitted yet.
+        expect(calls).toHaveLength(0)
+        expect(JSON.stringify(pickResponse?.card)).toContain('"type":"primary"')
+        expect(JSON.stringify(pickResponse?.card)).toContain('提交回答')
+
+        const submit = await bot.handleWebhook(JSON.stringify({
+            schema: '2.0',
+            header: { event_id: 'evt-submit', event_type: 'card.action.trigger', token: 'token' },
+            event: {
+                operator: { open_id: 'ou_1' },
+                action: {
+                    tag: 'button',
+                    value: {
+                        kind: 'hapi_input',
+                        action: 'submit',
+                        sessionId: session.id,
+                        requestId: 'req-1'
+                    }
+                },
+                context: { open_message_id: 'om_card_1', open_chat_id: 'oc_chat_1' }
+            }
+        }), new Headers())
+
+        expect(calls).toHaveLength(1)
+        expect(calls[0]).toEqual([session.id, 'req-1', undefined, undefined, undefined, { '0': ['Reboot'] }])
+        const submitResponse = submit && 'response' in submit ? submit.response : null
+        expect(submitResponse?.toast?.content).toContain('已提交')
+    })
+
+    it('skips a question card through denyPermission', async () => {
+        const store = new Store(':memory:')
+        const session = store.sessions.getOrCreateSession(
+            'test-session',
+            { name: 'Fix login', path: '/tmp' },
+            {},
+            'default'
+        )
+        store.feishuBotBindings.bind({
+            chatId: 'oc_chat_1',
+            chatType: 'p2p',
+            chatName: null,
+            namespace: 'default',
+            sessionId: session.id,
+            sessionTitle: 'Fix login'
+        })
+
+        const pendingSession = {
+            id: session.id,
+            metadata: { name: 'Fix login', path: '/tmp' },
+            agentState: {
+                requests: {
+                    'req-1': {
+                        tool: 'AskUserQuestion',
+                        arguments: {
+                            questions: [{
+                                question: 'Which file?',
+                                options: [{ label: 'Web' }]
+                            }]
+                        }
+                    }
+                }
+            }
+        }
+        const denied: unknown[][] = []
+        const sent: SentMessage[] = []
+        const bot = new FeishuBot({
+            store,
+            syncEngine: {
+                getSession: () => pendingSession,
+                denyPermission: async (...args: unknown[]) => {
+                    denied.push(args)
+                }
+            } as never,
+            config: { appId: 'app', appSecret: 'secret', verificationToken: 'token', encryptKey: null },
+            api: fakeApi(sent)
+        })
+
+        await bot.sendPermissionRequest(pendingSession as never)
+
+        const skip = await bot.handleWebhook(JSON.stringify({
+            schema: '2.0',
+            header: { event_id: 'evt-skip', event_type: 'card.action.trigger', token: 'token' },
+            event: {
+                operator: { open_id: 'ou_1' },
+                action: {
+                    tag: 'button',
+                    value: {
+                        kind: 'hapi_input',
+                        action: 'skip',
+                        sessionId: session.id,
+                        requestId: 'req-1'
+                    }
+                },
+                context: { open_message_id: 'om_card_1', open_chat_id: 'oc_chat_1' }
+            }
+        }), new Headers())
+
+        expect(denied).toHaveLength(1)
+        expect(denied[0]).toEqual([session.id, 'req-1'])
+        const response = skip && 'response' in skip ? skip.response : null
+        expect(response?.toast?.content).toContain('已跳过')
+        expect(JSON.stringify(response?.card)).toContain('已跳过')
+    })
+
     it('reports an expired card when the request was already answered in Hapi', async () => {
         const store = new Store(':memory:')
         const session = store.sessions.getOrCreateSession(
