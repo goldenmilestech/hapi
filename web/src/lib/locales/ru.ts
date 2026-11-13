@@ -1296,6 +1296,10 @@ export default {
   'misc.contextLimitAuto': 'Авто',
   'misc.contextAutoCompactHint': 'Авто-сжатие при приближении к лимиту',
   'misc.compactContext': 'Сжать контекст',
+  'misc.statsCounts': '{turns} раундов · {steps} шагов',
+  'misc.statsTurns': '{turns} раундов',
+  'misc.statsCacheHit': 'Кэш {percent}%',
+  'misc.statsDetails': 'Всего {total} tok · вход {input} · чтение кэша {cacheRead} · запись кэша {cacheWrite} · выход {output}',
 
   // Выбор цели Web Share
   'share.title': 'Поделиться в HAPI',

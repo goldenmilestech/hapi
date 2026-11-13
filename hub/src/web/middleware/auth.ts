@@ -79,6 +79,7 @@ function isShareRequestAllowed(
         { pattern: /^\/messages$/, methods: ['GET', 'POST'] },
         { pattern: /^\/messages\/[^/]+$/, methods: ['DELETE'] },
         { pattern: /^\/outline$/, methods: ['GET'] },
+        { pattern: /^\/stats$/, methods: ['GET'] },
         { pattern: /^\/messages\/queued-state$/, methods: ['POST'] },
         { pattern: /^\/messages\/[^/]+\/retry$/, methods: ['POST'] },
         { pattern: /^\/messages\/[^/]+\/steer$/, methods: ['POST'] },

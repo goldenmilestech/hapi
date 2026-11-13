@@ -55,7 +55,12 @@ function sessionModel(session: StoredSession): string | null {
     return typeof session.model === 'string' && session.model.trim() ? session.model.trim() : null
 }
 
-function parseUsageEvent(session: StoredSession, message: StoredMessage): UsageEvent | null {
+/**
+ * Parse one stored message into a usage event, or `null` when it carries no
+ * billable usage. Exported so session stats can read usage straight from the
+ * message log with the dashboard's exact provider semantics.
+ */
+export function parseUsageEvent(session: StoredSession, message: StoredMessage): UsageEvent | null {
     const envelope = asRecord(message.content)
     if (envelope?.role !== 'agent') return null
 
@@ -305,57 +310,24 @@ function cumulativeSnapshotDelta(
     return current.map((value, index) => value - previous[index]) as UsageSnapshot
 }
 
-function toBucket(key: string, totals: Totals): UsageSummaryBucket {
-    return { key, ...totals }
+/** One provider request after stream normalization. */
+export type NormalizedUsageEvent = {
+    event: UsageEvent
+    inputTokens: number
+    outputTokens: number
+    cacheReadTokens: number
+    cacheCreationTokens: number
 }
 
-function createDayFormatter(timeZone: string): Intl.DateTimeFormat {
-    return new Intl.DateTimeFormat('en-CA', {
-        timeZone,
-        calendar: 'iso8601',
-        numberingSystem: 'latn',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit'
-    })
-}
-
-function dayKey(timestamp: number, formatter: Intl.DateTimeFormat): string {
-    const parts = formatter.formatToParts(new Date(timestamp))
-    const year = parts.find((part) => part.type === 'year')?.value
-    const month = parts.find((part) => part.type === 'month')?.value
-    const day = parts.find((part) => part.type === 'day')?.value
-    if (!year || !month || !day) throw new Error('Failed to format usage day')
-    return `${year}-${month}-${day}`
-}
-
-export function getUsageSummary(
-    store: Store,
-    namespace: string,
-    range: string | undefined,
-    timeZone: string = 'UTC'
-): UsageSummaryResponse {
-    const sessions = store.sessions.getSessionsByNamespace(namespace)
-    // This is intentionally lazy. Existing HAPI databases have no usage table;
-    // the first dashboard request backfills history, while later requests only
-    // update the idempotent event rows.
-    collectUsageEvents(store, sessions)
-
-    const now = Date.now()
-    const days = range === '30d' ? 30 : range === 'all' ? null : 7
-    const from = days === null ? null : now - days * 24 * 60 * 60 * 1000
-    const sessionIds = new Set(sessions.map((session) => session.id))
-    const events = store.usage.getEvents(Array.from(sessionIds))
-    const isInRange = (event: UsageEvent) => (from === null || event.createdAt >= from) && event.createdAt <= now
-
-    const totals = emptyTotals()
-    const daily = new Map<string, Totals>()
-    const byAgent = new Map<string, Totals>()
-    const byModel = new Map<string, Totals>()
-    const sessionsWithUsage = new Set<string>()
+/**
+ * Fold cumulative provider snapshots into per-request deltas and drop replay
+ * duplicates plus impossible cache partitions. Both the usage dashboard and
+ * the per-session stats read through this so their totals agree.
+ */
+export function normalizeUsageEvents(events: UsageEvent[]): NormalizedUsageEvent[] {
     const cumulativePrevious = new Map<string, UsageSnapshot>()
     const cumulativeFingerprints = new Set<string>()
-    const dayFormatter = createDayFormatter(timeZone)
+    const normalized: NormalizedUsageEvent[] = []
 
     for (const event of events) {
         let inputTokens = event.inputTokens
@@ -408,7 +380,7 @@ export function getUsageSummary(
                 cumulativeFingerprints.add(fingerprint)
             }
         }
-        if (duplicateCumulativeEvent || !isInRange(event) || inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens <= 0) continue
+        if (duplicateCumulativeEvent || inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens <= 0) continue
         // Cache reads and writes partition processed input. Preserve the
         // request and its primary token counts when a provider emits an
         // impossible partition, but conservatively decline to credit either
@@ -417,6 +389,64 @@ export function getUsageSummary(
             cacheReadTokens = 0
             cacheCreationTokens = 0
         }
+        normalized.push({ event, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens })
+    }
+
+    return normalized
+}
+
+function toBucket(key: string, totals: Totals): UsageSummaryBucket {
+    return { key, ...totals }
+}
+
+function createDayFormatter(timeZone: string): Intl.DateTimeFormat {
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone,
+        calendar: 'iso8601',
+        numberingSystem: 'latn',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    })
+}
+
+function dayKey(timestamp: number, formatter: Intl.DateTimeFormat): string {
+    const parts = formatter.formatToParts(new Date(timestamp))
+    const year = parts.find((part) => part.type === 'year')?.value
+    const month = parts.find((part) => part.type === 'month')?.value
+    const day = parts.find((part) => part.type === 'day')?.value
+    if (!year || !month || !day) throw new Error('Failed to format usage day')
+    return `${year}-${month}-${day}`
+}
+
+export function getUsageSummary(
+    store: Store,
+    namespace: string,
+    range: string | undefined,
+    timeZone: string = 'UTC'
+): UsageSummaryResponse {
+    const sessions = store.sessions.getSessionsByNamespace(namespace)
+    // This is intentionally lazy. Existing HAPI databases have no usage table;
+    // the first dashboard request backfills history, while later requests only
+    // update the idempotent event rows.
+    collectUsageEvents(store, sessions)
+
+    const now = Date.now()
+    const days = range === '30d' ? 30 : range === 'all' ? null : 7
+    const from = days === null ? null : now - days * 24 * 60 * 60 * 1000
+    const sessionIds = new Set(sessions.map((session) => session.id))
+    const events = store.usage.getEvents(Array.from(sessionIds))
+    const isInRange = (event: UsageEvent) => (from === null || event.createdAt >= from) && event.createdAt <= now
+
+    const totals = emptyTotals()
+    const daily = new Map<string, Totals>()
+    const byAgent = new Map<string, Totals>()
+    const byModel = new Map<string, Totals>()
+    const sessionsWithUsage = new Set<string>()
+    const dayFormatter = createDayFormatter(timeZone)
+
+    for (const { event, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens } of normalizeUsageEvents(events)) {
+        if (!isInRange(event)) continue
         addTotals(totals, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
         const eventDayKey = dayKey(event.createdAt, dayFormatter)
         const dailyTotals = daily.get(eventDayKey) ?? emptyTotals()

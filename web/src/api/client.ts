@@ -49,6 +49,7 @@ import type {
     SessionResponse,
     SessionContentMatchesResponse,
     SessionOutlineResponse,
+    SessionStatsResponse,
     SessionTitleSuggestionResponse,
     SessionsResponse,
     SessionContentSearchResponse
@@ -650,6 +651,13 @@ export class ApiClient {
     async getSessionOutline(sessionId: string, signal?: AbortSignal): Promise<SessionOutlineResponse> {
         return await this.request<SessionOutlineResponse>(
             `/api/sessions/${encodeURIComponent(sessionId)}/outline`,
+            { signal }
+        )
+    }
+
+    async getSessionStats(sessionId: string, signal?: AbortSignal): Promise<SessionStatsResponse> {
+        return await this.request<SessionStatsResponse>(
+            `/api/sessions/${encodeURIComponent(sessionId)}/stats`,
             { signal }
         )
     }

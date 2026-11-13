@@ -1436,6 +1436,10 @@ export default {
   'misc.contextLimitAuto': 'Auto',
   'misc.contextAutoCompactHint': 'Auto-compacts near the limit',
   'misc.compactContext': 'Compact context',
+  'misc.statsCounts': '{turns} rounds {steps} steps',
+  'misc.statsTurns': '{turns} rounds',
+  'misc.statsCacheHit': 'Cache hit {percent}%',
+  'misc.statsDetails': 'Total {total} tok · input {input} · cache read {cacheRead} · cache write {cacheWrite} · output {output}',
 
   // Web Share Target picker
   'share.title': 'Share to HAPI',

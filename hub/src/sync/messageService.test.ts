@@ -2083,3 +2083,25 @@ describe('MessageService session outline', () => {
         store.close()
     })
 })
+
+describe('MessageService.getSessionStats', () => {
+    function makeService(store: Store): MessageService {
+        return new MessageService(store, makeIo(() => {}), makePublisher() as any)
+    }
+
+    it('reuses the computed snapshot until the message log changes', () => {
+        const store = makeStore()
+        const session = makeSession(store, 'stats-cache')
+        store.messages.addMessage(session.id, { role: 'user', content: { type: 'text', text: 'first' } })
+        const service = makeService(store)
+
+        const first = service.getSessionStats(session.id)
+        expect(first.turns).toBe(1)
+        // Identical object identity proves the hub did not rescan the log.
+        expect(service.getSessionStats(session.id)).toBe(first)
+
+        store.messages.addMessage(session.id, { role: 'user', content: { type: 'text', text: 'second' } })
+
+        expect(service.getSessionStats(session.id).turns).toBe(2)
+    })
+})
