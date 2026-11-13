@@ -54,6 +54,16 @@ type LiveProgressState = {
     pending: boolean
     failures: number
     finalized: boolean
+    /**
+     * Reasoning window, mirroring the Agent Teams progress card. Timing starts
+     * at the first thinking row and stops when the agent moves on to a tool,
+     * so idle/queue time never leaks into the header.
+     */
+    thinkingStartedAt: number | null
+    thinkingLastAt: number | null
+    thinkingEndedAt: number | null
+    lastThinkingLength: number
+    lastStepCount: number
 }
 
 /** A malformed, unsigned, or wrongly-signed webhook must not be retried. */
@@ -66,6 +76,17 @@ export class FeishuWebhookVerificationError extends Error {
 
 function isHexSignature(value: string): boolean {
     return /^[0-9a-f]{64}$/i.test(value)
+}
+
+/** Header duration: reasoning only, and only once the window has settled. */
+function thinkingDurationMs(state: LiveProgressState | undefined): number | null {
+    if (!state || state.thinkingStartedAt === null || state.thinkingEndedAt === null) {
+        return null
+    }
+    if (state.thinkingEndedAt <= state.thinkingStartedAt) {
+        return null
+    }
+    return state.thinkingEndedAt - state.thinkingStartedAt
 }
 
 function truncate(text: string, limit: number): string {
@@ -151,11 +172,44 @@ export class FeishuBot implements NotificationChannel {
                 running: false,
                 pending: false,
                 failures: 0,
-                finalized: false
+                finalized: false,
+                thinkingStartedAt: null,
+                thinkingLastAt: null,
+                thinkingEndedAt: null,
+                lastThinkingLength: 0,
+                lastStepCount: 0
             }
             this.liveProgress.set(sessionId, state)
         }
         return state
+    }
+
+    /**
+     * Track the reasoning window the way the Agent Teams card does: start on
+     * the first thinking row, extend while thinking keeps growing, and stop as
+     * soon as the agent moves on to a tool call.
+     */
+    private trackThinkingWindow(
+        state: LiveProgressState,
+        thinkingLength: number,
+        stepCount: number
+    ): void {
+        const now = this.now()
+        const grew = thinkingLength > state.lastThinkingLength
+        if (thinkingLength > 0 && state.thinkingStartedAt === null) {
+            state.thinkingStartedAt = now
+        }
+        if (grew) {
+            state.thinkingLastAt = now
+            state.lastThinkingLength = thinkingLength
+        } else if (
+            state.thinkingStartedAt !== null
+            && state.thinkingEndedAt === null
+            && stepCount > state.lastStepCount
+        ) {
+            state.thinkingEndedAt = state.thinkingLastAt ?? now
+        }
+        state.lastStepCount = stepCount
     }
 
     private clearLiveProgress(sessionId: string): void {
@@ -249,9 +303,20 @@ export class FeishuBot implements NotificationChannel {
                 state.lastCardJson = null
                 state.turnKey = summary.turnKey
                 state.failures = 0
+                state.thinkingStartedAt = null
+                state.thinkingLastAt = null
+                state.thinkingEndedAt = null
+                state.lastThinkingLength = 0
+                state.lastStepCount = 0
             }
 
-            const card = buildProgressCard(summary, { live: true })
+            this.trackThinkingWindow(state, summary.thinking.length, summary.steps.length)
+            const card = buildProgressCard({
+                ...summary,
+                durationMs: thinkingDurationMs(state),
+                // Agent Teams reads usage only when the turn completes.
+                outputTokens: null
+            })
             if (!card) {
                 return
             }
@@ -562,8 +627,18 @@ export class FeishuBot implements NotificationChannel {
         const summary = summarizeFeishuTurn(
             this.options.store.messages.getMessages(session.id, TURN_SCAN_LIMIT)
         )
-        const progressCard = buildProgressCard(summary)
         const liveState = this.liveProgress.get(session.id)
+        if (liveState && liveState.thinkingStartedAt !== null && liveState.thinkingEndedAt === null) {
+            // The turn ended while reasoning was still open (no tool followed);
+            // settle the window at its last observed update.
+            liveState.thinkingEndedAt = liveState.thinkingLastAt ?? this.now()
+        }
+        // Same rule as the live card: duration is the reasoning window we
+        // actually observed, never the turn wall clock or queue time.
+        const progressCard = buildProgressCard({
+            ...summary,
+            durationMs: thinkingDurationMs(liveState)
+        })
         const liveCardOwnedByThisTurn = Boolean(
             liveState?.cardMessageId
             && liveState.turnKey

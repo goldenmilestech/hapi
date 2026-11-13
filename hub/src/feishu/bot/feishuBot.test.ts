@@ -181,7 +181,7 @@ describe('FeishuBot', () => {
         emit()
         await waitFor(() => sent.some((message) => message.kind === 'card'))
         const liveCard = sent.find((message) => message.kind === 'card')
-        expect(JSON.stringify(cardOf(liveCard))).toContain('思考中…')
+        expect(JSON.stringify(cardOf(liveCard))).toContain('思考过程')
         expect(JSON.stringify(cardOf(liveCard))).toContain('Live thought')
 
         store.messages.addMessage(session.id, {
@@ -230,9 +230,110 @@ describe('FeishuBot', () => {
         const updates = sent.filter((message) => message.kind === 'card-update')
         expect(updates.length).toBeGreaterThanOrEqual(2)
         expect(JSON.stringify(cardOf(updates.at(-1)))).toContain('321 tokens')
-        expect(JSON.stringify(cardOf(updates.at(-1)))).toContain('4.5 秒')
+        // Agent Teams parity: never fall back to the provider turn duration.
+        expect(JSON.stringify(cardOf(updates.at(-1)))).not.toContain('秒')
         expect(sent.filter((message) => message.kind === 'card')).toHaveLength(2)
         expect(answerCardText(cardOf(sent.at(-1)) ?? {})).toBe('Live answer')
+
+        bot.stop()
+    })
+
+    it('shows reasoning time only after the thinking window settles', async () => {
+        const store = new Store(':memory:')
+        const session = store.sessions.getOrCreateSession(
+            'test-session',
+            { name: 'Fix login', path: '/tmp' },
+            {},
+            'default'
+        )
+        store.feishuBotBindings.bind({
+            chatId: 'oc_chat_1',
+            chatType: 'p2p',
+            chatName: null,
+            namespace: 'default',
+            sessionId: session.id,
+            sessionTitle: 'Fix login'
+        })
+        store.messages.addMessage(session.id, {
+            role: 'user',
+            content: { type: 'text', text: 'Work on it' }
+        })
+
+        let listener: ((event: never) => void) | null = null
+        const sent: SentMessage[] = []
+        let clock = 1_000
+        const bot = new FeishuBot({
+            store,
+            syncEngine: {
+                subscribe: (fn: (event: never) => void) => {
+                    listener = fn
+                    return () => {
+                        listener = null
+                    }
+                },
+                getSession: () => ({
+                    id: session.id,
+                    metadata: { name: 'Fix login', path: '/tmp' }
+                })
+            } as never,
+            config: { appId: 'app', appSecret: 'secret', verificationToken: 'token', encryptKey: null },
+            api: fakeApi(sent),
+            liveProgressThrottleMs: 0,
+            now: () => clock
+        })
+        const emit = () => listener?.({ type: 'message-received', sessionId: session.id } as never)
+
+        store.messages.addMessage(session.id, {
+            role: 'agent',
+            content: {
+                type: 'output',
+                data: {
+                    uuid: 'think-1',
+                    type: 'assistant',
+                    message: { content: [{ type: 'thinking', thinking: 'Plan A' }] }
+                }
+            }
+        })
+        emit()
+        await waitFor(() => sent.some((message) => message.kind === 'card'))
+        expect(JSON.stringify(cardOf(sent.find((message) => message.kind === 'card'))))
+            .not.toContain('秒')
+
+        clock = 9_200
+        store.messages.addMessage(session.id, {
+            role: 'agent',
+            content: {
+                type: 'output',
+                data: {
+                    uuid: 'think-1',
+                    type: 'assistant',
+                    message: { content: [{ type: 'thinking', thinking: 'Plan A then B' }] }
+                }
+            }
+        })
+        emit()
+        await waitFor(() => sent.some((message) => message.kind === 'card-update'))
+        expect(JSON.stringify(cardOf(sent.filter((message) => message.kind === 'card-update').at(-1))))
+            .not.toContain('秒')
+
+        clock = 9_400
+        store.messages.addMessage(session.id, {
+            role: 'agent',
+            content: {
+                type: 'output',
+                data: {
+                    uuid: 'tool-1',
+                    type: 'assistant',
+                    message: {
+                        content: [{ type: 'tool_use', id: 'tool-1', name: 'Read', input: { file_path: '/tmp/a.ts' } }]
+                    }
+                }
+            }
+        })
+        emit()
+        await waitFor(() => sent.filter((message) => message.kind === 'card-update').length >= 2)
+        expect(JSON.stringify(cardOf(sent.filter((message) => message.kind === 'card-update').at(-1))))
+            .toContain('8.2 秒')
 
         bot.stop()
     })
