@@ -129,6 +129,22 @@ describe('summarizeFeishuTurn', () => {
         expect(summary.answer).toBe('Tests pass.')
     })
 
+    it('does not count an input request as an execution step', () => {
+        const claudeSummary = summarizeFeishuTurn([
+            userPrompt('ask me something'),
+            claudeAssistant([
+                { type: 'tool_use', id: 'ask-1', name: 'AskUserQuestion', input: { questions: [] } }
+            ])
+        ])
+        expect(claudeSummary.steps).toEqual([])
+
+        const codexSummary = summarizeFeishuTurn([
+            userPrompt('ask me something'),
+            codex({ type: 'tool-call', callId: 'ask-2', name: 'request_user_input', input: {} })
+        ])
+        expect(codexSummary.steps).toEqual([])
+    })
+
     it('skips subagent (sidechain) traffic', () => {
         const summary = summarizeFeishuTurn([
             userPrompt('delegate'),

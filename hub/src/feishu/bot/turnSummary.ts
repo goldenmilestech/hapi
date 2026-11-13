@@ -1,5 +1,6 @@
 import { isObject } from '@hapi/protocol'
 import { extractAssistantPlainText, unwrapRoleWrappedRecordEnvelope } from '@hapi/protocol/messages'
+import { isInputRequestTool } from '../../notifications/inputRequest'
 import type { StoredMessage } from '../../store'
 import { isDeliveredUserPrompt, isUserPrompt } from '../../sync/userPromptRows'
 
@@ -148,6 +149,11 @@ function collectClaudeAssistant(
             return
         }
         if (block.type === 'tool_use' && typeof block.name === 'string') {
+            // The question itself gets its own card; counting it as an
+            // execution step left an empty "执行过程 · 1 步" behind it.
+            if (isInputRequestTool(block.name)) {
+                return
+            }
             const id = typeof block.id === 'string' && block.id
                 ? block.id
                 : `${uuid}:tool:${index}`
@@ -167,6 +173,9 @@ function collectGenericAgent(acc: TurnAccumulator, data: Record<string, unknown>
             ? data.callId
             : `${messageId}:tool`
         const name = typeof data.name === 'string' && data.name ? data.name : 'Tool'
+        if (isInputRequestTool(name)) {
+            return
+        }
         const detail = typeof data.description === 'string' && data.description.trim()
             ? data.description
             : typeof data.nativeTitle === 'string' && data.nativeTitle.trim()
