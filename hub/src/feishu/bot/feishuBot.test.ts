@@ -41,7 +41,12 @@ function cardOf(message: SentMessage | undefined): Record<string, unknown> | nul
         : null
 }
 
-function messageEvent(text: string, eventId: string, messageId: string): string {
+function messageEvent(
+    text: string,
+    eventId: string,
+    messageId: string,
+    options: { chatType?: 'p2p' | 'group'; mentions?: unknown[] } = {}
+): string {
     return JSON.stringify({
         header: {
             event_id: eventId,
@@ -56,9 +61,10 @@ function messageEvent(text: string, eventId: string, messageId: string): string 
             message: {
                 message_id: messageId,
                 chat_id: 'oc_chat_1',
-                chat_type: 'p2p',
+                chat_type: options.chatType ?? 'p2p',
                 message_type: 'text',
-                content: JSON.stringify({ text })
+                content: JSON.stringify({ text }),
+                ...(options.mentions ? { mentions: options.mentions } : {})
             }
         }
     })
@@ -677,6 +683,73 @@ describe('FeishuBot', () => {
         expect(JSON.stringify(response?.card)).toContain('问题已失效')
     })
 
+    it('settles a tracked question card when it is skipped in the Hapi UI', async () => {
+        const store = new Store(':memory:')
+        const session = store.sessions.getOrCreateSession(
+            'test-session',
+            { name: 'Fix login', path: '/tmp' },
+            {},
+            'default'
+        )
+        store.feishuBotBindings.bind({
+            chatId: 'oc_chat_1',
+            chatType: 'p2p',
+            chatName: null,
+            namespace: 'default',
+            sessionId: session.id,
+            sessionTitle: 'Fix login'
+        })
+
+        const pendingSession = {
+            id: session.id,
+            thinking: false,
+            metadata: { name: 'Fix login', path: '/tmp' },
+            agentState: {
+                requests: {
+                    'req-1': {
+                        tool: 'AskUserQuestion',
+                        arguments: {
+                            questions: [{
+                                question: 'Which files?',
+                                options: [{ label: 'Web' }]
+                            }]
+                        }
+                    }
+                }
+            }
+        }
+
+        let listener: ((event: never) => void) | null = null
+        const sent: SentMessage[] = []
+        const bot = new FeishuBot({
+            store,
+            syncEngine: {
+                subscribe: (fn: (event: never) => void) => {
+                    listener = fn
+                    return () => {
+                        listener = null
+                    }
+                },
+                getSession: () => pendingSession
+            } as never,
+            config: { appId: 'app', appSecret: 'secret', verificationToken: 'token', encryptKey: null },
+            api: fakeApi(sent)
+        })
+
+        await bot.sendPermissionRequest(pendingSession as never)
+        expect(sent.filter((message) => message.kind === 'card')).toHaveLength(1)
+
+        // The operator clicks Skip in the Hapi web UI: the request disappears
+        // from agent state without any Feishu card action.
+        pendingSession.agentState.requests = {} as never
+        const currentListener = listener as ((event: never) => void) | null
+        currentListener?.({ type: 'session-updated', sessionId: session.id } as never)
+
+        await waitFor(() => sent.some((message) => message.kind === 'card-update'))
+        expect(JSON.stringify(cardOf(sent.find((message) => message.kind === 'card-update'))))
+            .toContain('问题已失效')
+    })
+
     it('does not send when the session is not bound', async () => {
         const store = new Store(':memory:')
         const session = store.sessions.getOrCreateSession(
@@ -708,7 +781,7 @@ describe('FeishuBot', () => {
         expect(sent).toEqual([])
     })
 
-    it('only consumes /hapi commands and leaves ordinary chat to the Manager', async () => {
+    it('forwards ordinary 1:1 chat but leaves group chatter to the Manager', async () => {
         const store = new Store(':memory:')
         const session = store.sessions.getOrCreateSession(
             'test-session',
@@ -743,20 +816,50 @@ describe('FeishuBot', () => {
             api: fakeApi(sent)
         })
 
+        // A 1:1 chat has no Manager bot listening, so ordinary text still
+        // reaches the bound session.
         await bot.handleWebhook(messageEvent('普通聊天', 'evt-1', 'om_1'), new Headers())
-        expect(forwarded).toEqual([])
-        expect(sent).toEqual([])
-
-        await bot.handleWebhook(messageEvent('/hapi 清理一下', 'evt-2', 'om_2'), new Headers())
         expect(forwarded).toEqual([{
             sessionId: session.id,
-            text: '清理一下',
-            localId: 'feishu:om_2'
+            text: '普通聊天',
+            localId: 'feishu:om_1'
         }])
         expect(sent).toEqual([])
 
-        await bot.handleWebhook(messageEvent('/hapi', 'evt-3', 'om_3'), new Headers())
+        // Group chatter goes to the Manager bot; the Hapi plugin stays silent.
+        await bot.handleWebhook(
+            messageEvent('群聊闲聊', 'evt-g1', 'om_g1', { chatType: 'group' }),
+            new Headers()
+        )
         expect(forwarded).toHaveLength(1)
+        expect(sent).toEqual([])
+
+        // A /hapi command in a group is addressed to the plugin.
+        await bot.handleWebhook(messageEvent(
+            '@_user_1 /hapi 清理一下',
+            'evt-g2',
+            'om_g2',
+            {
+                chatType: 'group',
+                mentions: [{
+                    key: '@_user_1',
+                    name: 'Hapi',
+                    mentioned_type: 'app',
+                    id: { open_id: 'cli_bot' }
+                }]
+            }
+        ), new Headers())
+        expect(forwarded).toHaveLength(2)
+        expect(forwarded[1]).toMatchObject({
+            sessionId: session.id,
+            text: '清理一下',
+            localId: 'feishu:om_g2'
+        })
+        expect(sent).toEqual([])
+
+        await bot.handleWebhook(messageEvent('/hapi', 'evt-3', 'om_3'), new Headers())
+        expect(forwarded).toHaveLength(2)
         expect(sent[0]).toMatchObject({ kind: 'text', chatId: 'oc_chat_1' })
+        expect((sent[0] as { kind: 'text'; text: string }).text).toContain('/hapi <消息>')
     })
 })

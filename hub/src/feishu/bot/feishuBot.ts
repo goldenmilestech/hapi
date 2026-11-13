@@ -50,7 +50,9 @@ const HAPI_USAGE = [
     'Hapi 命令：',
     '/hapi <消息> — 发送给绑定会话',
     '/hapi bind <绑定码> — 绑定当前对话',
-    '/hapi unbind — 解绑'
+    '/hapi unbind — 解绑',
+    '',
+    '私聊里直接发消息也会进入绑定会话；群聊里只处理 /hapi 命令。'
 ].join('\n')
 
 export type FeishuBotOptions = {
@@ -197,6 +199,9 @@ export class FeishuBot implements NotificationChannel {
     private readonly liveProgress = new Map<string, LiveProgressState>()
     private readonly notifiedInputRequests = new Set<string>()
     private readonly inputCardStates = new Map<string, InputCardState>()
+    /** Cards whose Feishu submission is in flight; the request disappearing
+     * mid-submit must not rewrite them as expired. */
+    private readonly submittingInputCards = new Set<string>()
     private readonly unsubscribeSync: (() => void) | null
     private botOpenId: string | null = null
     private botInfoPromise: Promise<void> | null = null
@@ -232,7 +237,14 @@ export class FeishuBot implements NotificationChannel {
         }
         if (event.type === 'session-updated') {
             const session = this.options.syncEngine.getSession(event.sessionId)
-            if (!session?.thinking) {
+            if (!session) {
+                return
+            }
+            // A question answered (or skipped) in the Hapi UI must not stay
+            // actionable in Feishu; this also covers the skipped case where
+            // no card action ever reaches the hub.
+            this.settleResolvedInputCards(session)
+            if (!session.thinking) {
                 return
             }
             if (!this.options.store.feishuBotBindings.getBySessionId(event.sessionId)) {
@@ -249,6 +261,42 @@ export class FeishuBot implements NotificationChannel {
             return
         }
         this.scheduleLiveProgress(sessionId)
+    }
+
+    /**
+     * Question cards are answered either in Feishu or in the Hapi UI. When the
+     * request disappears from `agentState.requests`, rewrite any card we still
+     * track as expired so the chat never keeps showing live options.
+     */
+    private settleResolvedInputCards(session: Session): void {
+        if (this.inputCardStates.size === 0) {
+            return
+        }
+        const requests = session.agentState?.requests
+        if (!requests) {
+            return
+        }
+        for (const [messageId, state] of this.inputCardStates) {
+            if (
+                state.sessionId !== session.id
+                || requests[state.requestId]
+                || this.submittingInputCards.has(messageId)
+            ) {
+                continue
+            }
+            this.forgetInputCard(messageId, state)
+            void this.api.updateCard(messageId, buildInputRequestResolvedCard({
+                sessionTitle: state.sessionTitle,
+                questions: state.questions,
+                selection: state.selection,
+                status: 'expired'
+            })).catch((error) => {
+                console.error(
+                    '[FeishuBot] Failed to settle input card:',
+                    error instanceof Error ? error.message : error
+                )
+            })
+        }
     }
 
     private getLiveState(sessionId: string): LiveProgressState {
@@ -571,9 +619,10 @@ export class FeishuBot implements NotificationChannel {
         const hapiCommand = parseHapiCommand(text)
         const legacyBindCode = hapiCommand ? null : parseBindCommand(text)
         const legacyUnbind = hapiCommand ? false : parseUnbindCommand(text)
-        if (!hapiCommand && !legacyBindCode && !legacyUnbind) {
-            // Ordinary chat belongs to the Manager. The Hapi plugin must not
-            // consume or answer it.
+        if (!hapiCommand && !legacyBindCode && !legacyUnbind && message.chatType === 'group') {
+            // In a group the Manager bot receives ordinary chat too, so the
+            // Hapi plugin stays silent. A 1:1 chat has no other listener:
+            // plain messages still reach the bound session (the Manager).
             return
         }
 
@@ -945,6 +994,9 @@ export class FeishuBot implements NotificationChannel {
         }
 
         const answers = buildInputRequestAnswers(state.tool, state.questions, state.selection)
+        if (messageId) {
+            this.submittingInputCards.add(messageId)
+        }
         try {
             await this.options.syncEngine.approvePermission(
                 state.sessionId,
@@ -963,6 +1015,10 @@ export class FeishuBot implements NotificationChannel {
                 error instanceof Error ? error.message : error
             )
             return { toast: { type: 'error', content: '提交失败，请到 Hapi 中回答' } }
+        } finally {
+            if (messageId) {
+                this.submittingInputCards.delete(messageId)
+            }
         }
 
         this.forgetInputCard(messageId, state)
