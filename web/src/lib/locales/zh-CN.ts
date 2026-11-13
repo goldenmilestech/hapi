@@ -1434,6 +1434,10 @@ export default {
   'misc.contextLimitAuto': '自动',
   'misc.contextAutoCompactHint': '接近上限时自动压缩',
   'misc.compactContext': '压缩上下文',
+  'misc.statsCounts': '{turns} 轮 {steps} 步',
+  'misc.statsTurns': '{turns} 轮',
+  'misc.statsCacheHit': '缓存命中 {percent}%',
+  'misc.statsDetails': '共 {total} tok · 输入 {input} · 缓存读 {cacheRead} · 缓存写 {cacheWrite} · 输出 {output}',
 
   // Web Share Target 分享面板
   'share.title': '分享到 HAPI',

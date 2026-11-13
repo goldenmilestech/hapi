@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from 'bun:test'
 import { Hono } from 'hono'
+import type { SessionStatsResponse } from '@hapi/protocol/apiTypes'
 import type { SyncEngine } from '../../sync/syncEngine'
 import type { WebAppEnv } from '../middleware/auth'
 import { createMessagesRoutes } from './messages'
@@ -28,6 +29,7 @@ function createApp(opts: {
     getMessagesPage?: GetMessagesPage
     getMessageContext?: GetMessageContext
     getSessionOutline?: GetSessionOutline
+    getSessionStats?: () => SessionStatsResponse
     getQueuedState?: (sessionId: string, localIds: string[]) => {
         queuedLocalIds: string[]
         indeterminateLocalIds: string[]
@@ -68,6 +70,18 @@ function createApp(opts: {
     }))
     const getMessageContext = opts.getMessageContext ?? (() => null)
     const getSessionOutline = opts.getSessionOutline ?? (() => ({ items: [] }))
+    const getSessionStats = opts.getSessionStats ?? (() => ({
+        turns: 0,
+        steps: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        totalTokens: 0,
+        generationMs: null,
+        generationOutputTokens: null,
+        updatedAt: 0
+    }))
 
     const engine = {
         resolveSessionAccess: () => ({
@@ -82,6 +96,7 @@ function createApp(opts: {
         getMessagesPage,
         getMessageContext,
         getSessionOutline,
+        getSessionStats,
     } as unknown as SyncEngine
 
     const app = new Hono<WebAppEnv>()
@@ -592,5 +607,36 @@ describe('GET /api/sessions/:id/outline', () => {
                 { messageId: 'message-2', createdAt: 2_000, label: 'Second prompt' }
             ]
         })
+    })
+})
+
+describe('GET /api/sessions/:id/stats', () => {
+    it('returns whole-session totals from the sync engine without HTTP caching', async () => {
+        const calls: string[] = []
+        const stats: SessionStatsResponse = {
+            turns: 3,
+            steps: 31,
+            inputTokens: 4_400_000,
+            outputTokens: 200_000,
+            cacheReadTokens: 4_268_000,
+            cacheCreationTokens: 0,
+            totalTokens: 4_600_000,
+            generationMs: 1_149_425,
+            generationOutputTokens: 200_000,
+            updatedAt: 1_700_000_000_000
+        }
+        const { app } = createApp({
+            getSessionStats: () => {
+                calls.push('stats')
+                return stats
+            }
+        })
+
+        const response = await app.request('/api/sessions/session-1/stats')
+
+        expect(response.status).toBe(200)
+        expect(response.headers.get('Cache-Control')).toBe('no-store')
+        expect(calls).toEqual(['stats'])
+        expect(await response.json()).toEqual(stats)
     })
 })

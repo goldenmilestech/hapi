@@ -4,6 +4,7 @@ export const queryKeys = {
     workGraphEvents: (sessionId: string) => ['work-graph-events', sessionId] as const,
     messages: (sessionId: string) => ['messages', sessionId] as const,
     sessionOutline: (sessionId: string) => ['session-outline', sessionId] as const,
+    sessionStats: (sessionId: string) => ['session-stats', sessionId] as const,
     sessionContentSearch: (sessionId: string, query: string) => ['session-content-search', sessionId, query] as const,
     machines: ['machines'] as const,
     sqliteStorage: ['sqlite-storage'] as const,

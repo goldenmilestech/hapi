@@ -33,7 +33,7 @@ import {
 } from '@/components/AssistantChat/RichComposerInput'
 import { useFue } from '@/lib/use-fue'
 import { FueCallout, FueDot } from '@/components/Fue'
-import type { AgentState, CodexCollaborationMode, PermissionMode, PiModelSummary } from '@/types/api'
+import type { AgentState, CodexCollaborationMode, PermissionMode, PiModelSummary, SessionStatsResponse } from '@/types/api'
 import type { SuggestionHandler, Suggestion } from '@/hooks/useActiveSuggestions'
 import type { ConversationStatus } from '@/realtime/types'
 import { useActiveWord } from '@/hooks/useActiveWord'
@@ -313,6 +313,8 @@ export function HappyComposer(props: {
     contextSize?: number
     contextCacheRead?: number
     contextWindow?: number | null
+    /** Whole-session activity/token totals for the status bar. */
+    sessionStats?: SessionStatsResponse | null
     /** Per-session context ceiling; see StatusBar.contextLimit. */
     contextLimit?: number | null
     onContextLimitChange?: (contextLimit: number | null) => Promise<void> | void
@@ -442,6 +444,7 @@ export function HappyComposer(props: {
         contextSize,
         contextCacheRead,
         contextWindow,
+        sessionStats,
         contextLimit,
         onContextLimitChange,
         onCompact,
@@ -2355,6 +2358,7 @@ export function HappyComposer(props: {
                         contextSize={contextSize}
                         contextCacheRead={contextCacheRead}
                         contextWindow={contextWindow}
+                        sessionStats={sessionStats}
                         contextLimit={contextLimit}
                         onContextLimitChange={onContextLimitChange}
                         onCompact={onCompact}

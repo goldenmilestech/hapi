@@ -227,6 +227,32 @@ export type SessionOutlineResponse = {
     items: SessionOutlineItem[]
 }
 
+/**
+ * Whole-session activity and token totals, computed hub-side from the durable
+ * message log so paged clients see session numbers rather than window numbers.
+ *
+ * Input token fields follow the usage dashboard's normalized semantics:
+ * `inputTokens` is billed prompt input and already includes cache reads and
+ * cache writes. `generationMs` / `generationOutputTokens` only cover the steps
+ * whose generation time is known; clients must treat them as `null` (not 0)
+ * when throughput cannot be reported.
+ */
+export type SessionStatsResponse = {
+    /** Delivered user prompts. */
+    turns: number
+    /** Agent model steps (one provider request each). */
+    steps: number
+    inputTokens: number
+    outputTokens: number
+    cacheReadTokens: number
+    cacheCreationTokens: number
+    /** `inputTokens + outputTokens` (cache reads are already inside input). */
+    totalTokens: number
+    generationMs: number | null
+    generationOutputTokens: number | null
+    updatedAt: number
+}
+
 export type MachinesResponse = { machines: Machine[] }
 
 export type SpawnResponse =

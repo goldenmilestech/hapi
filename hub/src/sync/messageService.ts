@@ -11,18 +11,21 @@ import {
     isRedundantGoalStatusEventContent,
     unwrapRoleWrappedRecordEnvelope
 } from '@hapi/protocol/messages'
-import { isObject, safeStringify } from '@hapi/protocol'
+import { isObject } from '@hapi/protocol'
 import type {
     MessageContextResponse,
     MessageDeliveryMode,
     MessagesResponse,
     QueuedStateResponse,
-    SessionOutlineResponse
+    SessionOutlineResponse,
+    SessionStatsResponse
 } from '@hapi/protocol/apiTypes'
 import type { Server } from 'socket.io'
 import { randomUUID } from 'node:crypto'
 import type { Store, CancelQueuedMessageResult } from '../store'
 import { EventPublisher } from './eventPublisher'
+import { computeSessionStats } from './sessionStats'
+import { extractStoredUserText, isCliOutputUserMessage } from './userPromptRows'
 
 type StoredMessageForDelivery = ReturnType<Store['messages']['getMessages']>[number]
 type MessagePosition = { at: number; seq: number }
@@ -33,6 +36,8 @@ type MessagePosition = { at: number; seq: number }
 // can request older pages when the user needs more context.
 const MESSAGE_CONTEXT_BEFORE_LIMIT = 20
 const MESSAGE_CONTEXT_AFTER_LIMIT = 20
+/** Session stats are cached per open session; this bounds hub memory. */
+const SESSION_STATS_CACHE_LIMIT = 64
 /**
  * localId prefix for peer submissions (`hapi ping-peer` / MCP `ping_peer`).
  * Excludes peer rows from the session-end synthetic sweep so their invocation
@@ -116,7 +121,6 @@ const OUTLINE_LABEL_MAX_LENGTH = 96
 // a pasted log or code dump would otherwise ship its whole head to every
 // outline request.
 const OUTLINE_LABEL_SOURCE_MAX_LENGTH = 4096
-const CLI_OUTPUT_TAG_PATTERN = /<(?:local-command-[a-z-]+|command-(?:name|message|args))>/i
 
 function collapseOutlineWhitespace(value: string): string {
     return value.replace(/\s+/g, ' ').trim()
@@ -128,29 +132,6 @@ function truncateOutlineLabel(value: string): string {
         return normalized
     }
     return `${normalized.slice(0, OUTLINE_LABEL_MAX_LENGTH - 3).trimEnd()}...`
-}
-
-/**
- * Mirror the web renderer's user-message text extraction so a server-built
- * outline item points at a rendered `user-text` block. The renderer falls back
- * to a JSON dump for non-text user payloads; doing the same here keeps the
- * label identical to the block the browser will scroll to.
- */
-function extractOutlineUserText(content: unknown): string {
-    if (typeof content === 'string') {
-        return content
-    }
-    if (isObject(content) && content.type === 'text' && typeof content.text === 'string') {
-        return content.text
-    }
-    return safeStringify(content)
-}
-
-/** CLI command echoes render as `cli-output`, so they never become outline anchors. */
-function isCliOutputUserMessage(text: string, meta: unknown): boolean {
-    return isObject(meta)
-        && meta.sentFrom === 'cli'
-        && CLI_OUTPUT_TAG_PATTERN.test(text)
 }
 
 function isExportVisibleStoredMessage(message: StoredMessageForDelivery): boolean {
@@ -223,6 +204,12 @@ export class MessageService {
     /** One scheduled-matured SSE per localId per hub process (cleared on cancel/consume paths here). */
     private readonly scheduledMatureNotifiedLocalIds = new Set<string>()
     private readonly activeIndeterminateRetries = new Set<string>()
+    /**
+     * Session stats need a full scan of the durable log, so cache the last
+     * result per session and recompute only when the log actually grew. Keyed
+     * by message epoch + newest seq, which also covers truncation/reset.
+     */
+    private readonly sessionStatsCache = new Map<string, { epoch: number; lastSeq: number; stats: SessionStatsResponse }>()
 
     constructor(
         private readonly store: Store,
@@ -312,7 +299,7 @@ export class MessageService {
             if (record?.role !== 'user') {
                 continue
             }
-            const text = extractOutlineUserText(record.content)
+            const text = extractStoredUserText(record.content)
             if (isCliOutputUserMessage(text, record.meta)) {
                 continue
             }
@@ -323,6 +310,30 @@ export class MessageService {
             })
         }
         return { items }
+    }
+
+    /**
+     * Whole-session activity and token totals for the composer status bar.
+     * Cached until the session's message log changes, so polling an idle
+     * session never rescans its history.
+     */
+    getSessionStats(sessionId: string): SessionStatsResponse {
+        const epoch = this.store.messages.getMessageEpoch(sessionId)
+        const lastSeq = this.store.messages.getNewestMessagePosition(sessionId)?.seq ?? 0
+        const cached = this.sessionStatsCache.get(sessionId)
+        if (cached && cached.epoch === epoch && cached.lastSeq === lastSeq) {
+            return cached.stats
+        }
+
+        const stats = computeSessionStats(this.store, sessionId)
+        this.sessionStatsCache.delete(sessionId)
+        this.sessionStatsCache.set(sessionId, { epoch, lastSeq, stats })
+        while (this.sessionStatsCache.size > SESSION_STATS_CACHE_LIMIT) {
+            const oldest = this.sessionStatsCache.keys().next().value
+            if (oldest === undefined) break
+            this.sessionStatsCache.delete(oldest)
+        }
+        return stats
     }
 
     getQueuedState(sessionId: string, localIds: string[]): QueuedStateResponse {

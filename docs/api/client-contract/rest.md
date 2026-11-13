@@ -98,6 +98,7 @@ Source: `hub/src/web/routes/messages.ts`; schemas `MessagesQuerySchema`, `SendMe
 | `POST /api/sessions/:id/messages/:messageId/steer` | — | `{status: 'steered', localId}` \| `{status: 'invoked', message}` \| `{status: 'failed', error, localId}` |
 | `POST /api/sessions/:id/messages/:messageId/retry` | — | `{status: 'retried', localId}` \| `{status: 'already-queued', localId}` \| `{status: 'retry-unavailable', localId}` \| `{status: 'invoked', message}` \| `{status: 'not-found'}` — explicit retry only; never automatic replay |
 | `POST /api/sessions/:id/messages/queued-state` | `{localIds: string[]}` (≤ 1000, deduped) | `{queuedLocalIds: string[], indeterminateLocalIds: string[], invokedLocalMessages: [{localId, invokedAt}]}` — resync after reconnect; preserve indeterminate rows without auto-replaying them |
+| `GET /api/sessions/:id/stats` | — | `SessionStatsResponse` `{turns, steps, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, totalTokens, generationMs, generationOutputTokens, updatedAt}` — whole-session totals over the durable log, not the paged window; `inputTokens` already includes cache reads/writes, and `generationMs`/`generationOutputTokens` are `null` when throughput cannot be computed |
 
 The hub stamps `sentFrom: 'webapp'` on REST-sent messages server-side; the request body has no such field.
 

@@ -1745,6 +1745,25 @@ function SessionChatInner(props: SessionChatProps) {
         [loadedOutlineItems, outlineIndexQuery.data]
     )
 
+    // Session stats cover the durable log, not the paged window, so they come
+    // from the hub. Poll while a turn is running; when thinking stops, refresh
+    // once more so the final step's usage and timing land in the numbers.
+    const sessionStatsQuery = useQuery({
+        queryKey: queryKeys.sessionStats(props.session.id),
+        queryFn: ({ signal }) => props.api.getSessionStats(props.session.id, signal),
+        staleTime: 5_000,
+        refetchInterval: props.session.thinking ? 5_000 : false,
+        retry: false,
+    })
+
+    const statsThinkingRef = useRef(props.session.thinking)
+    useEffect(() => {
+        const wasThinking = statsThinkingRef.current
+        statsThinkingRef.current = props.session.thinking
+        if (!wasThinking || props.session.thinking) return
+        void queryClient.invalidateQueries({ queryKey: queryKeys.sessionStats(props.session.id) })
+    }, [props.session.thinking, props.session.id, queryClient])
+
     // Permission mode change handler
     const handlePermissionModeChange = useCallback(async (mode: PermissionMode) => {
         try {
@@ -2402,6 +2421,7 @@ function SessionChatInner(props: SessionChatProps) {
                         contextSize={reduced.latestUsage?.contextSize}
                         contextCacheRead={reduced.latestUsage?.cacheRead}
                         contextWindow={reduced.latestUsage?.contextWindow ?? piContextWindow}
+                        sessionStats={sessionStatsQuery.data ?? null}
                         contextLimit={props.session.contextLimit}
                         onContextLimitChange={handleContextLimitChange}
                         onCompact={compactCommand ? () => { void handleCompact() } : undefined}

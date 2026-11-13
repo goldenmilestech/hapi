@@ -71,6 +71,23 @@ export function createMessagesRoutes(getSyncEngine: () => SyncEngine | null): Ho
         return c.json(engine.getSessionOutline(sessionResult.sessionId))
     })
 
+    app.get('/sessions/:id/stats', (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) {
+            return engine
+        }
+
+        const sessionResult = requireSessionFromParam(c, engine)
+        if (sessionResult instanceof Response) {
+            return sessionResult
+        }
+
+        // Totals cover the durable log, which can change on every turn, so a
+        // cached HTTP response would pin stale numbers in the status bar.
+        c.header('Cache-Control', 'no-store')
+        return c.json(engine.getSessionStats(sessionResult.sessionId))
+    })
+
     app.delete('/sessions/:id/messages/:messageId', async (c) => {
         const engine = requireSyncEngine(c, getSyncEngine)
         if (engine instanceof Response) {

@@ -12,7 +12,7 @@ import {
     cliBinaryUpdatedOnDisk,
     isMachineCapabilitySkewed,
 } from '@hapi/protocol/runnerCapabilities'
-import type { CursorChatStoreStatus, CursorMigrateOutcome, CursorMigrateToAcpRequest, MessageContextResponse, MessageDeliveryMode, MessagesResponse, OpenWorkspaceResponse, QueuedStateResponse, RewindConversationErrorCode, SessionOutlineResponse, SlashCommandsResponse } from '@hapi/protocol/apiTypes'
+import type { CursorChatStoreStatus, CursorMigrateOutcome, CursorMigrateToAcpRequest, MessageContextResponse, MessageDeliveryMode, MessagesResponse, OpenWorkspaceResponse, QueuedStateResponse, RewindConversationErrorCode, SessionOutlineResponse, SessionStatsResponse, SlashCommandsResponse } from '@hapi/protocol/apiTypes'
 import type { SteerQueuedMessageResponse } from '@hapi/protocol/schemas'
 import type { ImplementCodexPlanResult } from '@hapi/protocol/apiTypes'
 import type { AgentFlavor, BackgroundTask, CodexCollaborationMode, CopilotAgentMode, DecryptedMessage, PermissionMode, Session, SyncEvent } from '@hapi/protocol/types'
@@ -629,6 +629,10 @@ export class SyncEngine {
 
     getSessionOutline(sessionId: string): SessionOutlineResponse {
         return this.messageService.getSessionOutline(sessionId)
+    }
+
+    getSessionStats(sessionId: string): SessionStatsResponse {
+        return this.messageService.getSessionStats(sessionId)
     }
 
     getQueuedState(sessionId: string, localIds: string[]): QueuedStateResponse {

@@ -12,7 +12,7 @@ import {
 import type { PermissionModeTone } from '@hapi/protocol'
 import * as Popover from '@radix-ui/react-popover'
 import { useEffect, useMemo, useState } from 'react'
-import type { AgentState, CodexCollaborationMode, PermissionMode } from '@/types/api'
+import type { AgentState, CodexCollaborationMode, PermissionMode, SessionStatsResponse } from '@/types/api'
 import type { ConversationStatus } from '@/realtime/types'
 import { getContextBudgetTokens } from '@/chat/modelConfig'
 import {
@@ -201,6 +201,66 @@ export function shouldShowCodexFastBadge(
     return agentFlavor === 'codex' && isFastServiceTier(serviceTier)
 }
 
+function formatOneDecimal(value: number): string {
+    return String(Math.round(value * 10) / 10)
+}
+
+/** Whole-session step counts: `3 rounds 31 steps`. */
+export function formatSessionStatsCounts(turns: number, steps: number, t: (key: string, params?: Record<string, string | number>) => string): string {
+    return steps > 0
+        ? t('misc.statsCounts', { turns, steps })
+        : t('misc.statsTurns', { turns })
+}
+
+/**
+ * Average generation speed for the steps that carry timing. Ten tokens per
+ * second and up are shown whole; slower averages keep one decimal.
+ */
+export function formatSessionStatsSpeed(
+    generationMs: number | null | undefined,
+    generationOutputTokens: number | null | undefined
+): string | null {
+    if (typeof generationMs !== 'number' || !Number.isSafeInteger(generationMs) || generationMs <= 0) return null
+    if (typeof generationOutputTokens !== 'number' || !Number.isSafeInteger(generationOutputTokens) || generationOutputTokens <= 0) return null
+    const tokensPerSecond = generationOutputTokens / (generationMs / 1_000)
+    if (!Number.isFinite(tokensPerSecond) || tokensPerSecond <= 0) return null
+    const rounded = tokensPerSecond >= 10 ? String(Math.round(tokensPerSecond)) : formatOneDecimal(tokensPerSecond)
+    return `${rounded} tok/s`
+}
+
+export function formatSessionStatsTokens(totalTokens: number): string | null {
+    if (!Number.isSafeInteger(totalTokens) || totalTokens <= 0) return null
+    return `${formatTokenCount(totalTokens)} tok`
+}
+
+/**
+ * Cache reads as a share of billed prompt input. A partial hit never rounds up
+ * to a misleading 100%: it keeps hundredths instead.
+ */
+export function formatSessionStatsCacheHit(
+    cacheReadTokens: number | null | undefined,
+    inputTokens: number | null | undefined
+): string | null {
+    if (typeof cacheReadTokens !== 'number' || !Number.isSafeInteger(cacheReadTokens) || cacheReadTokens <= 0) return null
+    if (typeof inputTokens !== 'number' || !Number.isSafeInteger(inputTokens) || inputTokens <= 0) return null
+    if (cacheReadTokens >= inputTokens) return '100'
+    const percent = (cacheReadTokens / inputTokens) * 100
+    if (!Number.isFinite(percent) || percent <= 0) return null
+    const rounded = Math.round(percent)
+    if (rounded < 100) return String(rounded)
+    return (Math.floor(percent * 100) / 100).toFixed(2).replace(/\.?0+$/, '')
+}
+
+export function buildSessionStatsDetails(stats: SessionStatsResponse, t: (key: string, params?: Record<string, string | number>) => string): string {
+    return t('misc.statsDetails', {
+        total: formatTokenCount(stats.totalTokens),
+        input: stats.inputTokens.toLocaleString(),
+        cacheRead: stats.cacheReadTokens.toLocaleString(),
+        cacheWrite: stats.cacheCreationTokens.toLocaleString(),
+        output: stats.outputTokens.toLocaleString()
+    })
+}
+
 export function StatusBar(props: {
     active: boolean
     thinking: boolean
@@ -232,6 +292,8 @@ export function StatusBar(props: {
     copilotAgentMode?: import('@hapi/protocol').CopilotAgentMode
     agentFlavor?: string | null
     voiceStatus?: ConversationStatus
+    /** Whole-session activity/token totals; see SessionStatsResponse. */
+    sessionStats?: SessionStatsResponse | null
 }) {
     const { t } = useTranslation()
     const { preferences: headerMetadata } = useSessionHeaderMetadata()
@@ -270,6 +332,37 @@ export function StatusBar(props: {
         return getContextUsageDetails(props.contextSize, maxContextSize, props.contextCacheRead)
     }, [props.contextSize, props.contextCacheRead, maxContextSize])
     const contextUsedPercentage = contextUsageDetails?.usedPercentage ?? null
+
+    const sessionStatsSpeed = useMemo(
+        () => formatSessionStatsSpeed(props.sessionStats?.generationMs, props.sessionStats?.generationOutputTokens),
+        [props.sessionStats]
+    )
+    const sessionStatsCacheHit = useMemo(
+        () => {
+            const stats = props.sessionStats
+            if (!stats) return null
+            const cacheHit = formatSessionStatsCacheHit(stats.cacheReadTokens, stats.inputTokens)
+            return cacheHit ? t('misc.statsCacheHit', { percent: cacheHit }) : null
+        },
+        [props.sessionStats, t]
+    )
+    const sessionStatsActivity = useMemo(() => {
+        const stats = props.sessionStats
+        if (!stats || (stats.steps <= 0 && stats.turns <= 0)) return null
+        const counts = formatSessionStatsCounts(stats.turns, stats.steps, t)
+        return sessionStatsSpeed ? `${counts} · ${sessionStatsSpeed}` : counts
+    }, [props.sessionStats, sessionStatsSpeed, t])
+    const sessionStatsUsage = useMemo(() => {
+        const stats = props.sessionStats
+        if (!stats) return null
+        const total = formatSessionStatsTokens(stats.totalTokens)
+        if (!total) return null
+        return sessionStatsCacheHit ? `${total} · ${sessionStatsCacheHit}` : total
+    }, [props.sessionStats, sessionStatsCacheHit])
+    const sessionStatsDetails = useMemo(
+        () => props.sessionStats ? buildSessionStatsDetails(props.sessionStats, t) : undefined,
+        [props.sessionStats, t]
+    )
 
     const compactCommand = getCompactCommandForFlavor(props.agentFlavor)
     const canConfigureContextLimit = Boolean(props.onContextLimitChange) && compactCommand !== null
@@ -477,6 +570,36 @@ export function StatusBar(props: {
                             </Popover.Content>
                         </Popover.Portal>
                     </Popover.Root>
+                ) : null}
+                {sessionStatsActivity || sessionStatsUsage ? (
+                    <div
+                        data-testid="session-stats"
+                        title={sessionStatsDetails}
+                        className="hidden min-w-0 items-baseline gap-2 sm:flex"
+                    >
+                        {/* Compact below md keeps the row from overflowing on phones:
+                            DSH's compact mode shows only speed and cache hit. */}
+                        {sessionStatsActivity ? (
+                            <span className="hidden whitespace-nowrap text-xs text-[var(--app-hint)] md:inline">
+                                {sessionStatsActivity}
+                            </span>
+                        ) : null}
+                        {sessionStatsSpeed ? (
+                            <span className="whitespace-nowrap text-xs text-[var(--app-hint)] md:hidden">
+                                {sessionStatsSpeed}
+                            </span>
+                        ) : null}
+                        {sessionStatsUsage ? (
+                            <span className="hidden whitespace-nowrap text-xs text-[var(--app-hint)] md:inline">
+                                {sessionStatsUsage}
+                            </span>
+                        ) : null}
+                        {sessionStatsCacheHit ? (
+                            <span className="whitespace-nowrap text-xs text-[var(--app-hint)] md:hidden">
+                                {sessionStatsCacheHit}
+                            </span>
+                        ) : null}
+                    </div>
                 ) : null}
             </div>
 
