@@ -16,6 +16,46 @@ export type FeishuBotConfig = {
     encryptKey: string | null
 }
 
+/**
+ * Bot sending needs only the app credentials; the OAuth redirect URI is not
+ * part of this flow. Keeping it separate lets an operator enable agent sends
+ * even when web login is not configured.
+ */
+export type FeishuSendConfig = {
+    appId: string
+    appSecret: string
+    ownerOpenId: string | null
+    approvalTtlSeconds: number
+    maxSendsPerMinute: number
+}
+
+function readPositiveInt(value: string | undefined, fallback: number, min: number, max: number): number {
+    const parsed = Number(value)
+    if (!Number.isFinite(parsed)) {
+        return fallback
+    }
+    return Math.min(max, Math.max(min, Math.floor(parsed)))
+}
+
+export function resolveFeishuSendConfig(): FeishuSendConfig | null {
+    const configuration = getConfiguration()
+    if (!configuration.feishuAppId || !configuration.feishuAppSecret) {
+        return null
+    }
+    return {
+        appId: configuration.feishuAppId,
+        appSecret: configuration.feishuAppSecret,
+        ownerOpenId: configuration.feishuOwnerOpenId,
+        approvalTtlSeconds: readPositiveInt(
+            process.env.FEISHU_SEND_APPROVAL_TTL_SECONDS,
+            10 * 60,
+            30,
+            24 * 60 * 60
+        ),
+        maxSendsPerMinute: readPositiveInt(process.env.FEISHU_SEND_MAX_PER_MINUTE, 30, 1, 1_000)
+    }
+}
+
 /** Safe to expose to the SPA; never includes the app secret. */
 export type PublicFeishuConfig = {
     enabled: boolean

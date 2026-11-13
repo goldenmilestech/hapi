@@ -37,6 +37,8 @@ import { createHubSettingsRoutes } from './routes/hubSettings'
 import { createAccessTokensRoutes } from './routes/accessTokens'
 import { createFeishuRoutes } from './routes/feishu'
 import { createFeishuBotRoutes, createFeishuWebhookRoute } from './routes/feishuBot'
+import { createFeishuSendRoutes } from './routes/feishuSend'
+import type { FeishuSendService } from '../feishu/outbound/service'
 import { createMeAccessTokenRoutes } from './routes/meAccessToken'
 import { createWorkGraphRoutes } from './routes/workGraph'
 import type { FeishuBot } from '../feishu/bot/feishuBot'
@@ -229,6 +231,7 @@ function createWebApp(options: {
     getSyncEngine: () => SyncEngine | null
     getSseManager: () => SSEManager | null
     getVisibilityTracker: () => VisibilityTracker | null
+    getFeishuSendService?: () => FeishuSendService | null
     jwtSecret: Uint8Array
     shareTokenSecret: Uint8Array
     store: Store
@@ -316,7 +319,13 @@ function createWebApp(options: {
         shareTokenSecret: options.shareTokenSecret
     }))
     app.route('/api', createMessagesRoutes(options.getSyncEngine))
-    app.route('/api', createPermissionsRoutes(options.getSyncEngine))
+    app.route('/api', createPermissionsRoutes(options.getSyncEngine, {
+        getFeishuSendService: options.getFeishuSendService
+    }))
+    app.route('/api', createFeishuSendRoutes({
+        getSyncEngine: options.getSyncEngine,
+        getFeishuSendService: options.getFeishuSendService ?? (() => null)
+    }))
     app.route('/api', createMachinesRoutes(options.getSyncEngine, { dataDir: configuration.dataDir }))
     app.route('/api', createStorageRoutes(configuration.dbPath))
     app.route('/api', createHubSettingsRoutes(configuration.dataDir))
@@ -451,6 +460,7 @@ export async function startWebServer(options: {
     getSyncEngine: () => SyncEngine | null
     getSseManager: () => SSEManager | null
     getVisibilityTracker: () => VisibilityTracker | null
+    getFeishuSendService?: () => FeishuSendService | null
     jwtSecret: Uint8Array
     shareTokenSecret: Uint8Array
     store: Store
@@ -467,6 +477,7 @@ export async function startWebServer(options: {
         getSyncEngine: options.getSyncEngine,
         getSseManager: options.getSseManager,
         getVisibilityTracker: options.getVisibilityTracker,
+        getFeishuSendService: options.getFeishuSendService,
         jwtSecret: options.jwtSecret,
         shareTokenSecret: options.shareTokenSecret,
         store: options.store,

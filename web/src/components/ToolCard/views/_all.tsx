@@ -13,7 +13,9 @@ import { TodoWriteView } from '@/components/ToolCard/views/TodoWriteView'
 import { UpdatePlanView } from '@/components/ToolCard/views/UpdatePlanView'
 import { WriteView } from '@/components/ToolCard/views/WriteView'
 import { GoalView } from '@/components/ToolCard/views/GoalView'
+import { FeishuSendView } from '@/components/ToolCard/views/FeishuSendView'
 import { canShowGoalPreview, isGoalToolName } from '@/components/ToolCard/goalTools'
+import { resolveToolNameAlias } from '@/components/ToolCard/toolNameAliases'
 import { getInputStringAny } from '@/lib/toolInputUtils'
 import {
     getCodexAgentFieldRows,
@@ -99,7 +101,8 @@ export const toolViewRegistry: Record<string, ToolViewComponent> = {
     CursorCreatePlan: CursorCreatePlanView,
     ask_user_question: AskUserQuestionView,
     exit_plan_mode: ExitPlanModeView,
-    request_user_input: RequestUserInputView
+    request_user_input: RequestUserInputView,
+    FeishuSendMessage: FeishuSendView
 }
 
 export const toolFullViewRegistry: Record<string, ToolViewComponent> = {
@@ -125,14 +128,17 @@ export const toolFullViewRegistry: Record<string, ToolViewComponent> = {
     CursorCreatePlan: CursorCreatePlanView,
     ask_user_question: AskUserQuestionView,
     exit_plan_mode: ExitPlanModeView,
-    request_user_input: RequestUserInputView
+    request_user_input: RequestUserInputView,
+    FeishuSendMessage: FeishuSendView
 }
 
 export function getToolViewComponent(toolName: string, tool?: Pick<ChatToolCall, 'input' | 'result' | 'state'>): ToolViewComponent | null {
-    if (isGoalToolName(toolName)) return tool && canShowGoalPreview(tool) ? GoalView : null
-    return toolViewRegistry[toolName] ?? null
+    const canonicalName = resolveToolNameAlias(toolName)
+    if (isGoalToolName(canonicalName)) return tool && canShowGoalPreview(tool) ? GoalView : null
+    return toolViewRegistry[canonicalName] ?? toolViewRegistry[toolName] ?? null
 }
 
 export function getToolFullViewComponent(toolName: string): ToolViewComponent | null {
-    return toolFullViewRegistry[toolName] ?? null
+    const canonicalName = resolveToolNameAlias(toolName)
+    return toolFullViewRegistry[canonicalName] ?? toolFullViewRegistry[toolName] ?? null
 }

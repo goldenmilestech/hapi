@@ -159,6 +159,37 @@ export const knownTools: Record<string, {
         },
         minimal: true
     },
+    FeishuSendMessage: {
+        icon: () => <MessageSquareIcon className={DEFAULT_ICON_CLASS} />,
+        title: (opts) => {
+            const isApprovalCard = isObject(opts.input)
+                && typeof opts.input.requestId === 'string'
+                && typeof opts.input.expiresAt === 'number'
+            const key = isApprovalCard ? 'tool.feishu.approvalTitle' : 'tool.feishu.sendTitle'
+            return opts.t?.(key) ?? (isApprovalCard ? 'Feishu send approval' : 'Feishu message')
+        },
+        subtitle: (opts) => {
+            if (!isObject(opts.input)) return null
+            const target = typeof opts.input.targetLabel === 'string'
+                ? opts.input.targetLabel
+                : typeof opts.input.to === 'string'
+                    ? opts.input.to
+                    : typeof opts.input.chat === 'string'
+                        ? opts.input.chat
+                        : null
+            return target ? truncate(target, 80) : null
+        },
+        minimal: false
+    },
+    FeishuSendStatus: {
+        icon: () => <MessageSquareIcon className={DEFAULT_ICON_CLASS} />,
+        title: (opts) => opts.t?.('tool.feishu.statusTitle') ?? 'Feishu send status',
+        subtitle: (opts) => {
+            if (!isObject(opts.input) || typeof opts.input.request_id !== 'string') return null
+            return truncate(opts.input.request_id, 80)
+        },
+        minimal: true
+    },
     // agy async/background task result (SYSTEM_MESSAGE). description carries the
     // "task-NNN · failed (exit 1)" summary derived in normalizeAgent.
     AgyAsyncTask: {
@@ -685,7 +716,11 @@ export function getToolPresentation(
     opts: Omit<ToolOpts, 'metadata'> & { metadata: SessionMetadataSummary | null },
     t?: Translator
 ): ToolPresentation {
-    if (opts.toolName.startsWith('mcp__')) {
+    // Exact names resolve to themselves, so other flavors' cards are untouched.
+    // Aliased MCP tools (e.g. the Feishu send card) get their registry entry
+    // instead of the generic "MCP: …" title.
+    const canonicalName = resolveToolNameAlias(opts.toolName)
+    if (opts.toolName.startsWith('mcp__') && canonicalName === opts.toolName) {
         return {
             icon: <PuzzleIcon className={DEFAULT_ICON_CLASS} />,
             title: formatMCPTitle(opts.toolName),
@@ -694,8 +729,6 @@ export function getToolPresentation(
         }
     }
 
-    // Exact names resolve to themselves, so other flavors' cards are untouched.
-    const canonicalName = resolveToolNameAlias(opts.toolName)
     const goalName = getGoalToolName(canonicalName)
     const known = knownTools[goalName ?? canonicalName]
     if (known) {

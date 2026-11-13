@@ -116,6 +116,8 @@ describe('startHappyServer skill_lookup', () => {
             'display_image',
             'display_video',
             'display_media',
+            'feishu_send_message',
+            'feishu_send_status',
             'ping_peer',
             'spawn_peer',
             'inspect_peer',
@@ -451,11 +453,13 @@ describe('startHappyServer skill_lookup', () => {
         await mcp.connect(new StreamableHTTPClientTransport(new URL(server.url)))
         const tools = await mcp.listTools()
 
-        expect(server.toolNames).toEqual(['display_image', 'display_video', 'display_media', 'list_peers', 'ping_peer', 'inspect_peer', 'spawn_peer'])
+        expect(server.toolNames).toEqual(['display_image', 'display_video', 'display_media', 'feishu_send_message', 'feishu_send_status', 'list_peers', 'ping_peer', 'inspect_peer', 'spawn_peer'])
         expect(tools.tools.map((tool) => tool.name)).toEqual([
             'display_image',
             'display_video',
             'display_media',
+            'feishu_send_message',
+            'feishu_send_status',
             'ping_peer',
             'spawn_peer',
             'inspect_peer',
@@ -787,7 +791,7 @@ describe('startHappyServer peer tools kill switch', () => {
     it('omits peer tools from registration and toolNames when HAPI_DISABLE_PEER_TOOLS is set', async () => {
         process.env.HAPI_DISABLE_PEER_TOOLS = '1'
         const { toolNames } = await startServer()
-        expect(toolNames).toEqual(['change_title', 'display_image', 'display_video', 'display_media'])
+        expect(toolNames).toEqual(['change_title', 'display_image', 'display_video', 'display_media', 'feishu_send_message', 'feishu_send_status'])
         const tools = await client!.listTools()
         const names = tools.tools.map((tool) => tool.name)
         expect(names).not.toContain('list_peers')

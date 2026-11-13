@@ -11,6 +11,7 @@ import { isGoalToolName, parseGoalToolResult } from '@/components/ToolCard/goalT
 import { resolveToolNameAlias } from '@/components/ToolCard/toolNameAliases'
 import { isTerminalToolBlock } from '@/chat/toolGroups'
 import { GoalView } from '@/components/ToolCard/views/GoalView'
+import { FeishuSendResultView } from '@/components/ToolCard/views/FeishuSendView'
 import {
     getCodexAgentActivity,
     getCodexAgentTargets,
@@ -1092,7 +1093,9 @@ export const toolResultViewRegistry: Record<string, ToolViewComponent> = {
     AskUserQuestion: AskUserQuestionResultView,
     ExitPlanMode: MarkdownResultView,
     ask_user_question: AskUserQuestionResultView,
-    exit_plan_mode: MarkdownResultView
+    exit_plan_mode: MarkdownResultView,
+    FeishuSendMessage: FeishuSendResultView,
+    FeishuSendStatus: FeishuSendResultView
 }
 
 const GoalResultView: ToolViewComponent = (props) => {
@@ -1104,13 +1107,13 @@ const GoalResultView: ToolViewComponent = (props) => {
 // Skill, todowrite, patch and question deliberately stay unaliased: their
 // dedicated views read Claude-shaped input or result fields.
 export function getToolResultViewComponent(toolName: string, block?: ToolCallBlock): ToolViewComponent {
-    if (isGoalToolName(toolName)) return GoalResultView
+    const canonicalName = resolveToolNameAlias(toolName)
+    if (isGoalToolName(canonicalName)) return GoalResultView
+    const resolved = toolResultViewRegistry[canonicalName] ?? toolResultViewRegistry[toolName]
+    if (resolved) return resolved
     if (toolName.startsWith('mcp__')) {
         return GenericResultView
     }
-    const resolved = toolResultViewRegistry[toolName]
-        ?? toolResultViewRegistry[resolveToolNameAlias(toolName)]
-    if (resolved) return resolved
     // Generic markdown would collapse the output lines and autolink file
     // names; shell output reads as a terminal code block instead.
     if (block && isTerminalToolBlock(block)) {
