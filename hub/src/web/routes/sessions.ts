@@ -387,7 +387,14 @@ export function createSessionsRoutes(
             return sessionResult
         }
 
-        return c.json({ session: sessionResult.session })
+        const session = sessionResult.session
+        const feishuBoundSessionIds = store.feishuBotBindings.getSessionIdsByNamespace(c.get('namespace'))
+        return c.json({
+            session: {
+                ...session,
+                ...(feishuBoundSessionIds.has(session.id) ? { feishuBound: true } : {})
+            }
+        })
     })
 
     app.get('/sessions/:id/cursor-chat-store', async (c) => {

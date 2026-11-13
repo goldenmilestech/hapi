@@ -1,6 +1,7 @@
 import { useMemo, useSyncExternalStore } from 'react'
 import type { SessionSummary } from '@/types/api'
 import { AgentFlavorIcon } from '@/components/AgentFlavorIcon'
+import { FeishuBoundTag } from '@/components/FeishuBoundTag'
 import { InfoIcon, ScheduleIcon } from '@/components/icons'
 import { HoverTooltip, SESSION_ROW_TOOLTIP_FOCUS_CLASS, useSessionRowTooltipIds } from '@/components/HoverTooltip'
 import { getAttentionLabel, SessionAttentionIndicator, SessionRequestIcon, SessionSpinner } from '@/components/SessionAttentionIndicator'
@@ -204,21 +205,13 @@ export function SessionRowSummary(props: {
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <div className="grid grid-cols-[minmax(9rem,1fr)_minmax(0,max-content)] items-center gap-2">
                     <div className="flex min-w-0 items-center gap-2">
+                        {s.feishuBound ? <FeishuBoundTag /> : null}
                         <div
                             className={`min-w-0 flex-1 truncate text-sm text-[var(--app-fg)] ${isUnread ? 'font-semibold' : 'font-normal'}`}
                             title={sessionName}
                         >
                             {sessionName}
                         </div>
-                        {s.feishuBound ? (
-                            <span
-                                data-testid="session-feishu-bound"
-                                title={t('session.item.feishuBound')}
-                                className="shrink-0 rounded bg-[var(--app-subtle-bg)] px-1 py-0.5 text-[10px] leading-none text-[var(--app-hint)]"
-                            >
-                                {t('session.item.feishuBoundShort')}
-                            </span>
-                        ) : null}
                         {/* The presence pulse alone is easy to miss at a glance, so
                             keep the explicit spinner alongside it. */}
                         {isRunning || isBackgroundOnly ? (

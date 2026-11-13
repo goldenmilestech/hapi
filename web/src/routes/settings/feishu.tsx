@@ -106,6 +106,7 @@ export default function SettingsFeishuPage() {
         setBindCode(null)
         setSelectedSessionId('')
         void queryClient.invalidateQueries({ queryKey: queryKeys.sessions })
+        void queryClient.invalidateQueries({ queryKey: queryKeys.session(bindCode.sessionId) })
     }, [bindCode, bindingsQuery.data, queryClient])
 
     const createCodeMutation = useMutation({
@@ -192,6 +193,7 @@ export default function SettingsFeishuPage() {
                             onRemoved={() => {
                                 refreshBindings()
                                 void queryClient.invalidateQueries({ queryKey: queryKeys.sessions })
+                                void queryClient.invalidateQueries({ queryKey: queryKeys.session(binding.sessionId) })
                             }}
                         />
                     ))

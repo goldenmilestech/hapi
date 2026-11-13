@@ -302,6 +302,26 @@ function expectUnread() {
     expect(screen.getByText(/demo|Background/, { selector: '[title]' })).toHaveClass('font-semibold')
 }
 
+describe('SessionRowSummary Feishu binding', () => {
+    beforeEach(() => {
+        localStorage.clear()
+    })
+
+    it('shows a chain icon inside the binding badge', () => {
+        const { container } = render(
+            <I18nProvider>
+                <SessionRowSummary session={makeSummary({ feishuBound: true, backgroundTaskCount: 0 })} />
+            </I18nProvider>
+        )
+        const badge = container.querySelector('[data-testid="session-feishu-bound"]')
+        expect(badge).not.toBeNull()
+        expect(badge?.querySelector('svg')).not.toBeNull()
+        const title = container.querySelector('[title="Background demo"]')
+        expect(title).not.toBeNull()
+        expect(badge!.compareDocumentPosition(title!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+})
+
 describe('SessionRowSummary time label', () => {
     beforeEach(() => {
         localStorage.clear()
