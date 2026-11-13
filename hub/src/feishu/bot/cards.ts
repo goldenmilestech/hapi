@@ -82,11 +82,15 @@ function formatTokens(count: number): string {
 
 function buildStats(summary: FeishuTurnSummary): string[] {
     const parts: string[] = []
-    if (summary.startedAt !== null && summary.endedAt !== null && summary.endedAt > summary.startedAt) {
-        parts.push(formatDuration(summary.endedAt - summary.startedAt))
+    const durationMs = summary.durationMs
+        ?? (summary.startedAt !== null && summary.endedAt !== null && summary.endedAt > summary.startedAt
+            ? summary.endedAt - summary.startedAt
+            : null)
+    if (durationMs !== null && durationMs > 0) {
+        parts.push(`用时 ${formatDuration(durationMs)}`)
     }
     if (summary.outputTokens !== null && summary.outputTokens > 0) {
-        parts.push(formatTokens(summary.outputTokens))
+        parts.push(`生成 ${formatTokens(summary.outputTokens)}`)
     }
     return parts
 }
@@ -95,8 +99,14 @@ function buildStats(summary: FeishuTurnSummary): string[] {
  * Collapsed-by-default process card, matching the Agent Teams layout: the
  * header stays readable when collapsed and the full reasoning plus the
  * numbered tool calls live inside.
+ *
+ * `live` renders the card while the turn is still running, before the answer
+ * exists; the same card is updated in place and finalized at turn end.
  */
-export function buildProgressCard(summary: FeishuTurnSummary): FeishuCard | null {
+export function buildProgressCard(
+    summary: FeishuTurnSummary,
+    options?: { live?: boolean }
+): FeishuCard | null {
     const thinking = sanitizeCardMarkdown(summary.thinking).trim()
     const steps = summary.steps
         .map((step) => sanitizeCardMarkdown(step).trim())
@@ -107,7 +117,9 @@ export function buildProgressCard(summary: FeishuTurnSummary): FeishuCard | null
 
     const head = steps.length > 0
         ? `**执行过程** · ${steps.length} 步`
-        : '**思考过程**'
+        : options?.live
+            ? '**思考中…**'
+            : '**思考过程**'
     const stats = buildStats(summary)
     const title = stats.length > 0 ? `${head} · ${stats.join(' · ')}` : head
 

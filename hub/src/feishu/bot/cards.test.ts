@@ -8,7 +8,9 @@ function summary(overrides: Partial<FeishuTurnSummary> = {}): FeishuTurnSummary 
         steps: [],
         answer: null,
         answerMessageId: null,
+        turnKey: null,
         outputTokens: null,
+        durationMs: null,
         startedAt: null,
         endedAt: null,
         ...overrides
@@ -69,6 +71,19 @@ describe('Feishu cards', () => {
             'I should inspect the login redirect.',
             '1. `Read` — src/login.ts\n2. `Edit` — src/login.ts'
         ])
+    })
+
+    it('shows a thinking title while live and provider-reported stats', () => {
+        const card = buildProgressCard(summary({
+            thinking: 'Working through it.',
+            outputTokens: 1234,
+            durationMs: 8200
+        }), { live: true })
+        const title = ((card?.body as { elements?: Array<Record<string, unknown>> } | undefined)
+            ?.elements?.[0]?.header as { title?: { content?: string } } | undefined)?.title?.content
+        expect(title).toContain('**思考中…**')
+        expect(title).toContain('8.2 秒')
+        expect(title).toContain('1.2K tokens')
     })
 
     it('returns null when there is no reasoning or tool call', () => {

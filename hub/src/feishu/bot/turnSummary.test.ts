@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import type { StoredMessage } from '../../store'
-import { summarizeFeishuTurn } from './turnSummary'
+import { summarizeActiveTurn, summarizeFeishuTurn } from './turnSummary'
 
 let nextSeq = 1
 
@@ -39,6 +39,22 @@ function claudeAssistant(
                         content: blocks,
                         ...(options.usage ? { usage: options.usage } : {})
                     }
+                }
+            }
+        }
+    })
+}
+
+function claudeTurnDuration(resultSummary: Record<string, unknown>): StoredMessage {
+    return message({
+        content: {
+            role: 'agent',
+            content: {
+                type: 'output',
+                data: {
+                    type: 'system',
+                    subtype: 'turn_duration',
+                    resultSummary
                 }
             }
         }
@@ -138,5 +154,38 @@ describe('summarizeFeishuTurn', () => {
         expect(summary.thinking).toBe('')
         expect(summary.steps).toEqual([])
         expect(summary.answer).toBe('latest answer')
+    })
+
+    it('prefers the turn_duration result summary for tokens and duration', () => {
+        const summary = summarizeFeishuTurn([
+            userPrompt('finish it'),
+            claudeAssistant([{ type: 'thinking', thinking: 'work' }, { type: 'text', text: 'Done' }], {
+                uuid: 'answer',
+                usage: { output_tokens: 10 }
+            }),
+            claudeTurnDuration({
+                usage: { output_tokens: 1234 },
+                duration_ms: 8200
+            })
+        ])
+
+        expect(summary.outputTokens).toBe(1234)
+        expect(summary.durationMs).toBe(8200)
+    })
+
+    it('summarizes the in-progress turn without requiring an answer', () => {
+        const prompt = userPrompt('still working')
+        const summary = summarizeActiveTurn([
+            prompt,
+            claudeAssistant([
+                { type: 'thinking', thinking: 'partial thought' },
+                { type: 'tool_use', id: 'tool-live', name: 'Read', input: { file_path: '/tmp/live.ts' } }
+            ], { uuid: 'live' })
+        ])
+
+        expect(summary.turnKey).toBe(prompt.id)
+        expect(summary.thinking).toBe('partial thought')
+        expect(summary.steps).toEqual(['`Read` — /tmp/live.ts'])
+        expect(summary.answer).toBeNull()
     })
 })

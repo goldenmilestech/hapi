@@ -1,7 +1,7 @@
 import type { NotificationChannel, TaskNotification } from '../../notifications/notificationTypes'
 import type { NotificationSendContext } from '../../notifications/notificationSendContext'
 import { getSessionName } from '../../notifications/sessionInfo'
-import type { Session, SyncEngine } from '../../sync/syncEngine'
+import type { Session, SyncEngine, SyncEvent } from '../../sync/syncEngine'
 import type { Store } from '../../store'
 import type { FeishuBotConfig } from '../config'
 import { buildAnswerCard, buildProgressCard } from './cards'
@@ -17,7 +17,7 @@ import {
     type FeishuMessage
 } from './eventParser'
 import { FeishuBotApi, type FeishuFetch } from './feishuApi'
-import { summarizeFeishuTurn } from './turnSummary'
+import { summarizeActiveTurn, summarizeFeishuTurn } from './turnSummary'
 
 const MAX_INBOUND_TEXT_CHARS = 32_000
 const MAX_OUTBOUND_TEXT_CHARS = 8_000
@@ -36,10 +36,24 @@ export type FeishuBotOptions = {
     config: FeishuBotConfig
     /** Hub owner open_id, used when the owner has not completed a web login. */
     ownerOpenId?: string | null
+    /** Minimum gap between live progress-card rewrites. */
+    liveProgressThrottleMs?: number
     /** Test seams. */
     api?: FeishuBotApi
     fetchImpl?: FeishuFetch
     now?: () => number
+}
+
+type LiveProgressState = {
+    cardMessageId: string | null
+    turnKey: string | null
+    lastCardJson: string | null
+    timer: ReturnType<typeof setTimeout> | null
+    lastRunAt: number
+    running: boolean
+    pending: boolean
+    failures: number
+    finalized: boolean
 }
 
 /** A malformed, unsigned, or wrongly-signed webhook must not be retried. */
@@ -70,8 +84,8 @@ export function formatFeishuReply(sessionTitle: string, assistantText: string): 
  * Bidirectional bridge between Feishu chats and HAPI sessions.
  *
  * Inbound: `im.message.receive_v1` → `SyncEngine.sendMessage`.
- * Outbound: the `ready` notification (one final answer per turn) → an
- * interactive Markdown card, preceded by a collapsed reasoning/tool-call card.
+ * Outbound: a process card is published/updated while the turn runs, finalized
+ * at `ready`, then followed by the Markdown answer card.
  *
  * The class owns both directions so the webhook route and the notification
  * channel share one API client and one bot identity.
@@ -79,13 +93,196 @@ export function formatFeishuReply(sessionTitle: string, assistantText: string): 
 export class FeishuBot implements NotificationChannel {
     private readonly api: FeishuBotApi
     private readonly now: () => number
+    private readonly liveProgressThrottleMs: number
     private readonly lastSentAnswer = new Map<string, string>()
+    private readonly lastFinalizedTurn = new Map<string, string>()
+    private readonly liveProgress = new Map<string, LiveProgressState>()
+    private readonly unsubscribeSync: (() => void) | null
     private botOpenId: string | null = null
     private botInfoPromise: Promise<void> | null = null
 
     constructor(private readonly options: FeishuBotOptions) {
         this.api = options.api ?? new FeishuBotApi(options.config, options.fetchImpl)
         this.now = options.now ?? Date.now
+        this.liveProgressThrottleMs = options.liveProgressThrottleMs ?? 2_000
+
+        const subscribe = (options.syncEngine as {
+            subscribe?: (listener: (event: SyncEvent) => void) => () => void
+        }).subscribe
+        this.unsubscribeSync = typeof subscribe === 'function'
+            ? subscribe.call(options.syncEngine, (event) => this.handleSyncEvent(event))
+            : null
+    }
+
+    stop(): void {
+        this.unsubscribeSync?.()
+        for (const state of this.liveProgress.values()) {
+            if (state.timer) {
+                clearTimeout(state.timer)
+            }
+        }
+        this.liveProgress.clear()
+    }
+
+    private handleSyncEvent(event: SyncEvent): void {
+        if (event.type === 'session-removed') {
+            this.clearLiveProgress(event.sessionId)
+            return
+        }
+        if (event.type !== 'message-received') {
+            return
+        }
+        const sessionId = event.sessionId
+        if (!this.options.store.feishuBotBindings.getBySessionId(sessionId)) {
+            return
+        }
+        this.scheduleLiveProgress(sessionId)
+    }
+
+    private getLiveState(sessionId: string): LiveProgressState {
+        let state = this.liveProgress.get(sessionId)
+        if (!state) {
+            state = {
+                cardMessageId: null,
+                turnKey: null,
+                lastCardJson: null,
+                timer: null,
+                lastRunAt: 0,
+                running: false,
+                pending: false,
+                failures: 0,
+                finalized: false
+            }
+            this.liveProgress.set(sessionId, state)
+        }
+        return state
+    }
+
+    private clearLiveProgress(sessionId: string): void {
+        const state = this.liveProgress.get(sessionId)
+        if (!state) {
+            return
+        }
+        state.finalized = true
+        if (state.timer) {
+            clearTimeout(state.timer)
+        }
+        this.liveProgress.delete(sessionId)
+    }
+
+    /** Let an in-flight card create/update finish before the final rewrite. */
+    private async waitForLiveIdle(sessionId: string, timeoutMs = 2_000): Promise<void> {
+        const state = this.liveProgress.get(sessionId)
+        if (!state) {
+            return
+        }
+        const deadline = Date.now() + timeoutMs
+        while (state.running && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 10))
+        }
+    }
+
+    private scheduleLiveProgress(sessionId: string): void {
+        const state = this.getLiveState(sessionId)
+        if (state.failures >= 3) {
+            // Let a transient Feishu/Card API outage recover on a later turn.
+            if (this.now() - state.lastRunAt < 60_000) {
+                return
+            }
+            state.failures = 0
+        }
+        if (state.running) {
+            state.pending = true
+            return
+        }
+        const wait = Math.max(0, this.liveProgressThrottleMs - (this.now() - state.lastRunAt))
+        if (wait > 0) {
+            if (!state.timer) {
+                state.timer = setTimeout(() => {
+                    state.timer = null
+                    void this.refreshLiveProgress(sessionId)
+                }, wait)
+                const timer = state.timer as { unref?: () => void }
+                timer.unref?.()
+            }
+            return
+        }
+        void this.refreshLiveProgress(sessionId)
+    }
+
+    /**
+     * Rewrite the process card while the agent is still working. The card is
+     * created on the first reasoning/tool row so it lands above the final
+     * answer, then updated in place under a small throttle.
+     */
+    private async refreshLiveProgress(sessionId: string): Promise<void> {
+        const state = this.getLiveState(sessionId)
+        if (state.running) {
+            state.pending = true
+            return
+        }
+        state.running = true
+        state.lastRunAt = this.now()
+        try {
+            const binding = this.options.store.feishuBotBindings.getBySessionId(sessionId)
+            const session = this.options.syncEngine.getSession(sessionId)
+            if (!binding || !session) {
+                this.clearLiveProgress(sessionId)
+                return
+            }
+
+            const summary = summarizeActiveTurn(
+                this.options.store.messages.getMessages(sessionId, TURN_SCAN_LIMIT)
+            )
+            if (
+                state.finalized
+                || this.liveProgress.get(sessionId) !== state
+                || !summary.turnKey
+                || this.lastFinalizedTurn.get(sessionId) === summary.turnKey
+            ) {
+                return
+            }
+            if (state.turnKey !== summary.turnKey) {
+                // A new prompt started a new turn; leave the previous card as
+                // the record of that turn and publish a fresh one.
+                state.cardMessageId = null
+                state.lastCardJson = null
+                state.turnKey = summary.turnKey
+                state.failures = 0
+            }
+
+            const card = buildProgressCard(summary, { live: true })
+            if (!card) {
+                return
+            }
+            const cardJson = JSON.stringify(card)
+            if (cardJson === state.lastCardJson) {
+                return
+            }
+            if (state.cardMessageId) {
+                await this.api.updateCard(state.cardMessageId, card)
+            } else {
+                const cardMessageId = await this.api.sendCard(binding.chatId, card)
+                if (state.finalized || this.liveProgress.get(sessionId) !== state) {
+                    return
+                }
+                state.cardMessageId = cardMessageId
+            }
+            state.lastCardJson = cardJson
+            state.failures = 0
+        } catch (error) {
+            state.failures += 1
+            console.error(
+                '[FeishuBot] Failed to refresh live progress card:',
+                error instanceof Error ? error.message : error
+            )
+        } finally {
+            state.running = false
+            if (state.pending && !state.finalized && this.liveProgress.get(sessionId) === state) {
+                state.pending = false
+                this.scheduleLiveProgress(sessionId)
+            }
+        }
     }
 
     /**
@@ -359,33 +556,71 @@ export class FeishuBot implements NotificationChannel {
         if (!binding) {
             return
         }
+        await this.waitForLiveIdle(session.id)
 
         const title = getSessionName(session)
         const summary = summarizeFeishuTurn(
             this.options.store.messages.getMessages(session.id, TURN_SCAN_LIMIT)
         )
-
+        const progressCard = buildProgressCard(summary)
+        const liveState = this.liveProgress.get(session.id)
+        const liveCardOwnedByThisTurn = Boolean(
+            liveState?.cardMessageId
+            && liveState.turnKey
+            && summary.turnKey
+            && liveState.turnKey === summary.turnKey
+        )
         // A reconnect or a duplicate `ready` can replay the same completed
         // turn; the stored answer id makes the second delivery a no-op.
-        if (
+        const alreadySent = Boolean(
             summary.answerMessageId
             && this.lastSentAnswer.get(session.id) === summary.answerMessageId
-        ) {
-            return
+        )
+
+        if (liveCardOwnedByThisTurn && liveState?.cardMessageId) {
+            // The card was published while the agent was working; rewrite it
+            // in place instead of adding a second process card.
+            liveState.finalized = true
+            if (progressCard) {
+                try {
+                    await this.api.updateCard(liveState.cardMessageId, progressCard)
+                } catch (error) {
+                    console.error(
+                        '[FeishuBot] Failed to finalize progress card:',
+                        error instanceof Error ? error.message : error
+                    )
+                }
+            }
+            this.clearLiveProgress(session.id)
+        } else if (liveState?.cardMessageId) {
+            // A newer turn already owns the live card. Leave it alone.
+        } else {
+            if (liveState) {
+                this.clearLiveProgress(session.id)
+            }
+            if (summary.turnKey) {
+                this.lastFinalizedTurn.set(session.id, summary.turnKey)
+            }
+            if (alreadySent) {
+                return
+            }
+            if (progressCard) {
+                try {
+                    await this.api.sendCard(binding.chatId, progressCard)
+                } catch (error) {
+                    console.error(
+                        '[FeishuBot] Failed to send progress card:',
+                        error instanceof Error ? error.message : error
+                    )
+                }
+            }
+        }
+        if (summary.turnKey) {
+            this.lastFinalizedTurn.set(session.id, summary.turnKey)
         }
 
-        // Publish the process card first so it sits above the answer in the
-        // chat timeline, matching the Agent Teams output shape.
-        const progressCard = buildProgressCard(summary)
-        if (progressCard) {
-            try {
-                await this.api.sendCard(binding.chatId, progressCard)
-            } catch (error) {
-                console.error(
-                    '[FeishuBot] Failed to send progress card:',
-                    error instanceof Error ? error.message : error
-                )
-            }
+        if (alreadySent) {
+            return
         }
 
         if (!summary.answer) {

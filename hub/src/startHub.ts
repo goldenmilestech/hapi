@@ -461,6 +461,7 @@ export async function startHub(options: StartHubOptions = {}): Promise<HubInstan
         stop: async () => {
             await tunnelManager?.stop()
             await happyBot?.stop()
+            feishuBot?.stop()
             notificationHub?.stop()
             syncEngine?.stop()
             sseManager?.stop()
