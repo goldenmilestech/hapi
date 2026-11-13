@@ -648,6 +648,78 @@ describe('FeishuBot', () => {
         expect(sent.filter((message) => message.kind === 'text').at(-1)?.text).toContain('已跳过')
     })
 
+    it('auto-skips a pending question when the user sends unrelated text', async () => {
+        const store = new Store(':memory:')
+        const session = store.sessions.getOrCreateSession(
+            'test-session',
+            { name: 'Fix login', path: '/tmp' },
+            {},
+            'default'
+        )
+        store.feishuBotBindings.bind({
+            chatId: 'oc_chat_1',
+            chatType: 'p2p',
+            chatName: null,
+            namespace: 'default',
+            sessionId: session.id,
+            sessionTitle: 'Fix login'
+        })
+        const pendingSession = {
+            id: session.id,
+            active: true,
+            metadata: { name: 'Fix login', path: '/tmp' },
+            agentState: {
+                requests: {
+                    'req-1': {
+                        tool: 'AskUserQuestion',
+                        arguments: {
+                            questions: [{ question: 'Which files?', options: [{ label: 'Web' }] }]
+                        }
+                    }
+                }
+            }
+        }
+        const denied: unknown[][] = []
+        const forwarded: unknown[][] = []
+        const sent: SentMessage[] = []
+        const bot = new FeishuBot({
+            store,
+            syncEngine: {
+                getSession: () => pendingSession,
+                denyPermission: async (...args: unknown[]) => {
+                    denied.push(args)
+                },
+                sendMessage: async (...args: unknown[]) => {
+                    forwarded.push(args)
+                }
+            } as never,
+            config: { appId: 'app', appSecret: 'secret', verificationToken: 'token', encryptKey: null },
+            api: fakeApi(sent)
+        })
+
+        await bot.sendPermissionRequest(pendingSession as never)
+        await bot.handleWebhook(JSON.stringify({
+            header: { event_id: 'evt-unrelated', event_type: 'im.message.receive_v1', token: 'token' },
+            event: {
+                sender: { sender_id: { open_id: 'ou_1' }, sender_type: 'user' },
+                message: {
+                    message_id: 'om_msg_3',
+                    chat_id: 'oc_chat_1',
+                    chat_type: 'p2p',
+                    message_type: 'text',
+                    content: JSON.stringify({ text: '换个话题，先看看磁盘' })
+                }
+            }
+        }), new Headers())
+
+        // The pending question is dismissed so the new prompt is not queued.
+        expect(denied).toHaveLength(1)
+        expect(denied[0]).toEqual([session.id, 'req-1'])
+        expect(forwarded).toHaveLength(1)
+        expect(forwarded[0]?.[1]).toMatchObject({ text: '换个话题，先看看磁盘' })
+        expect(sent.filter((message) => message.kind === 'text').at(-1)?.text).toContain('自动跳过')
+    })
+
     it('answers an input request from card actions and submits once', async () => {
         const store = new Store(':memory:')
         const session = store.sessions.getOrCreateSession(

@@ -1314,6 +1314,23 @@ export class FeishuBot implements NotificationChannel {
                 await this.reply(message, this.inputAnswerHelp(questions))
                 return true
             }
+            // Any other text means the user moved on. Dismiss the pending
+            // question first: otherwise the new message queues behind it and
+            // the session stays blocked until someone answers in Hapi.
+            try {
+                await this.options.syncEngine.denyPermission(session.id, requestId)
+            } catch (error) {
+                if (!(error instanceof PermissionRequestNotFoundError)) {
+                    console.error(
+                        '[FeishuBot] Failed to auto-skip input request:',
+                        error instanceof Error ? error.message : error
+                    )
+                    await this.reply(message, '待回答问题自动跳过失败，请到 Hapi 中处理后重发。')
+                    return true
+                }
+            }
+            await this.reply(message, '待回答问题已自动跳过，正在发送你的消息。')
+            await this.resolveTrackedInputCard(session.id, requestId, 'skipped', [])
             return false
         }
 
