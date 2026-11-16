@@ -309,6 +309,7 @@ export function HappyComposer(props: {
     allowSendWhenInactive?: boolean
     thinking?: boolean
     agentState?: AgentState | null
+    onPendingRequestClick?: (requestId: string) => void
     backgroundTaskCount?: number
     contextSize?: number
     contextCacheRead?: number
@@ -440,6 +441,7 @@ export function HappyComposer(props: {
         allowSendWhenInactive = false,
         thinking = false,
         agentState,
+        onPendingRequestClick,
         backgroundTaskCount,
         contextSize,
         contextCacheRead,
@@ -1104,7 +1106,7 @@ export function HappyComposer(props: {
 
     const visibleModelEffortOptions = cursorDrillDownVariantOptions ?? modelEffortOptions
     const codexReasoningEffortOptions = useMemo(
-        () => agentFlavor === 'codex' || agentFlavor === 'opencode'
+        () => agentFlavor === 'codex' || agentFlavor === 'opencode' || agentFlavor === 'dsh'
             ? getCodexComposerReasoningEffortOptions(
                 modelReasoningEffort,
                 agentFlavor,
@@ -1145,7 +1147,7 @@ export function HappyComposer(props: {
     const claudeEffortOptions = useMemo(
         () => agentFlavor === 'pi'
             ? getPiThinkingLevelOptions(effort, selectedPiModel?.thinkingLevelMap)
-            : (agentFlavor === 'grok' || agentFlavor === 'agy') && availableEffortOptions && availableEffortOptions.length > 0
+            : (agentFlavor === 'grok' || agentFlavor === 'agy' || agentFlavor === 'kimi' || agentFlavor === 'copilot') && availableEffortOptions && availableEffortOptions.length > 0
                 ? [
                     { value: null, label: 'Default' },
                     ...availableEffortOptions.map((option) => ({
@@ -1380,6 +1382,23 @@ export function HappyComposer(props: {
 
         // Avoid intercepting IME composition keystrokes (Enter, arrows, etc.)
         if (e.nativeEvent.isComposing) {
+            return
+        }
+
+        // Alt+S is an explicit send shortcut, independent of the Enter setting.
+        // Match the logical key so keyboard layouts can map Alt+S to another physical key.
+        const isAltSShortcut =
+            (e.key === 's' || e.key === 'S')
+            && e.altKey
+            && !e.ctrlKey
+            && !e.metaKey
+            && !e.shiftKey
+        if (isAltSShortcut) {
+            e.preventDefault()
+            if (canSend) {
+                flushAndSend()
+                setShowContinueHint(false)
+            }
             return
         }
 
@@ -2354,6 +2373,7 @@ export function HappyComposer(props: {
                         active={active}
                         thinking={thinking}
                         agentState={agentState}
+                        onPendingRequestClick={onPendingRequestClick}
                         backgroundTaskCount={backgroundTaskCount}
                         contextSize={contextSize}
                         contextCacheRead={contextCacheRead}

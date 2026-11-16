@@ -70,6 +70,7 @@ export function HappyAssistantMessage() {
 
     const history = ctx.metadata?.capabilities?.conversationHistory
     const forkEnabled = !ctx.disabled || ctx.allowInactiveFork === true
+    const historicalForkLocalId = ctx.assistantForkPoints?.get(messageId)
     const showForkCurrent = Boolean(
         (history?.forkCurrent || ctx.allowInactiveFork)
         && ctx.isLatestCompletedBoundary?.(messageId)
@@ -85,7 +86,18 @@ export function HappyAssistantMessage() {
         && forkEnabled
         && ctx.onForkConversation
     )
-    const showFork = showForkCurrent || showForkAtMessage
+    // Upstream anchors a historical fork on the next recorded user prompt when
+    // the conversation exposes history points; keep it as the fallback for
+    // flavors that do not hand each assistant row its own local id.
+    const showHistoricalFork = Boolean(
+        !showForkCurrent
+        && !showForkAtMessage
+        && history?.forkAtMessage
+        && historicalForkLocalId
+        && forkEnabled
+        && ctx.onForkConversation
+    )
+    const showFork = showForkCurrent || showForkAtMessage || showHistoricalFork
 
     const rootClass = toolOnly
         ? 'py-1 min-w-0 max-w-full overflow-x-hidden'
@@ -110,11 +122,13 @@ export function HappyAssistantMessage() {
                 messageElementId={elementId}
                 showFork={showFork}
                 historyActionPending={ctx.historyActionPending}
-                onFork={showFork
-                    ? () => showForkAtMessage && messageLocalId
-                        ? ctx.onForkConversation!(messageLocalId)
-                        : ctx.onForkConversation!()
-                    : undefined}
+                onFork={showForkCurrent
+                    ? () => ctx.onForkConversation!()
+                    : showForkAtMessage && messageLocalId
+                        ? () => ctx.onForkConversation!(messageLocalId)
+                        : showHistoricalFork
+                            ? () => ctx.onForkConversation!(historicalForkLocalId!)
+                            : undefined}
             />
         </MessagePrimitive.Root>
     )

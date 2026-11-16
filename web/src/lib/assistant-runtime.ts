@@ -33,7 +33,7 @@ export type AggregatedAssistantMeta = {
 }
 
 export type HappyChatMessageMetadata = {
-    kind: 'user' | 'assistant' | 'tool' | 'event' | 'cli-output' | 'codex-review' | 'compact-summary' | 'side-question'
+    kind: 'user' | 'assistant' | 'tool' | 'event' | 'cli-output' | 'codex-review' | 'compact-summary' | 'side-question' | 'system-note'
     status?: HappyMessageStatus
     localId?: string | null
     originalText?: string
@@ -607,6 +607,12 @@ function containsActiveAssistantOutput(
         ))
 }
 
+/** HAPI-injected notices (job wakes) must not render as operator input. */
+function isSystemNoteMeta(meta: unknown): boolean {
+    if (!meta || typeof meta !== 'object') return false
+    return (meta as { sentFrom?: unknown }).sentFrom === 'hapi-system'
+}
+
 function toThreadMessageLike(
     block: VisibleChatBlock,
     threadMessageId: string,
@@ -626,7 +632,8 @@ function toThreadMessageLike(
                     originalText: block.originalText,
                     attachments: block.attachments,
                     invokedAt: block.invokedAt,
-                    steered: block.steered
+                    steered: block.steered,
+                    ...(isSystemNoteMeta(block.meta) ? { kind: 'system-note' as const } : {})
                 } satisfies HappyChatMessageMetadata
             }
         }

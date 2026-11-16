@@ -1,5 +1,5 @@
 import { isObject } from '@hapi/protocol'
-import type { NotificationChannel, TaskNotification } from '../../notifications/notificationTypes'
+import type { NotificationChannel } from '../../notifications/notificationTypes'
 import type { NotificationSendContext } from '../../notifications/notificationSendContext'
 import { isInputRequestTool } from '../../notifications/inputRequest'
 import { getSessionName } from '../../notifications/sessionInfo'
@@ -1473,13 +1473,5 @@ export class FeishuBot implements NotificationChannel {
                 )
             }
         }
-    }
-
-    async sendTaskNotification(
-        _session: Session,
-        _notification: TaskNotification,
-        _ctx?: NotificationSendContext
-    ): Promise<void> {
-        // Task notices are covered by the turn-end reply.
     }
 }

@@ -27,7 +27,7 @@ export class TitleSuggestionError extends Error {
     constructor(
         readonly code: TitleSuggestionErrorCode,
         message: string,
-        readonly status: 422 | 429 | 502 | 503
+        readonly status: 422 | 429 | 500 | 503
     ) {
         super(message)
         this.name = 'TitleSuggestionError'
@@ -443,7 +443,7 @@ export class TitleSuggestionService {
             throw new TitleSuggestionError(
                 'provider',
                 'The title suggestion provider failed',
-                502
+                500
             )
         } finally {
             this.inFlightSessionIds.delete(sessionId)

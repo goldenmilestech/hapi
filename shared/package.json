@@ -8,6 +8,7 @@
     "exports": {
         ".": "./src/index.ts",
         "./apiTypes": "./src/apiTypes.ts",
+        "./localTranscript": "./src/localTranscript.ts",
         "./messages": "./src/messages.ts",
         "./slashCommands": "./src/slashCommands.ts",
         "./buildInfo": "./src/buildInfo.ts",
@@ -26,6 +27,7 @@
         "./voicePickerCatalog": "./src/voicePickerCatalog.ts",
         "./voice-personality": "./src/voicePersonality.ts",
         "./usage": "./src/usage.ts",
+        "./usageQuery": "./src/usageQuery.ts",
         "./settingsFileLock": "./src/settingsFileLock.ts",
         "./agentCliSpawnLease": "./src/agentCliSpawnLease.ts"
     },

@@ -31,10 +31,12 @@ export type RunnerCapabilities = typeof RUNNER_CAPABILITIES
 export const MACHINE_CAPABILITIES = {
     ForkArchivedCodex: 'fork-archived-codex',
     AgentAvailability: RPC_METHODS.AgentAvailability,
+    AgentQuotas: RPC_METHODS.AgentQuotas,
     CursorChatStoreStatus: RPC_METHODS.CursorChatStoreStatus,
     StopRunner: RPC_METHODS.StopRunner,
     /** Launch the host machine's editor (VS Code) on a workspace directory. */
     OpenWorkspace: RPC_METHODS.OpenWorkspace,
+    UsageQuery: RPC_METHODS.UsageQuery,
     /** Read-only file/Git/search RPCs available on the long-lived runner. */
     WorkspaceFileAccess: 'workspace-file-access',
     /**
@@ -44,6 +46,8 @@ export const MACHINE_CAPABILITIES = {
      * them leaves an unadoptable stub and fails an otherwise successful spawn.
      */
     SpawnReservedSessionId: 'spawn-reserved-session-id',
+    /** Normalized local-session import transcripts via ListLocalSessions. */
+    LocalSessionImport: 'local-session-import',
 } as const
 
 export type MachineCapability =
@@ -53,11 +57,14 @@ export type MachineCapability =
 export const CURRENT_MACHINE_CAPABILITIES: readonly MachineCapability[] = [
     MACHINE_CAPABILITIES.ForkArchivedCodex,
     MACHINE_CAPABILITIES.AgentAvailability,
+    MACHINE_CAPABILITIES.AgentQuotas,
     MACHINE_CAPABILITIES.CursorChatStoreStatus,
     MACHINE_CAPABILITIES.StopRunner,
     MACHINE_CAPABILITIES.OpenWorkspace,
+    MACHINE_CAPABILITIES.UsageQuery,
     MACHINE_CAPABILITIES.WorkspaceFileAccess,
     MACHINE_CAPABILITIES.SpawnReservedSessionId,
+    MACHINE_CAPABILITIES.LocalSessionImport,
 ]
 
 /**

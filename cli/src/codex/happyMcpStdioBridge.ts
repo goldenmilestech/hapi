@@ -17,7 +17,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { z } from 'zod';
 import { PeerDeliveryModeSchema } from '@/modules/pingPeer/deliveryMode';
-import { DISPLAY_IMAGE_PROMPT_CURSOR, DISPLAY_MEDIA_PROMPT_CURSOR, DISPLAY_VIDEO_PROMPT_CURSOR } from '@/modules/common/displayImagePrompt';
+import { DISPLAY_IMAGE_TOOL_DESCRIPTION, DISPLAY_MEDIA_TOOL_DESCRIPTION, DISPLAY_VIDEO_TOOL_DESCRIPTION } from '@/modules/common/displayToolDescriptions';
 import {
   INSPECT_PEER_TOOL_DESCRIPTION,
   LIST_PEERS_INCLUDE_INACTIVE_PARAM_DESCRIPTION,
@@ -33,8 +33,25 @@ import { SESSION_NAME_MAX_LENGTH } from '@hapi/protocol';
 import { CREATABLE_AGENT_FLAVORS } from '@hapi/protocol/modes';
 import { PermissionModeSchema } from '@hapi/protocol/schemas';
 import { isPeerToolsDisabled, PEER_TOOL_NAMES } from '@/modules/common/peerTools';
+import {
+  SESSION_JOB_TOOL_DESCRIPTION,
+  SESSION_JOB_TOOL_NAME,
+  sessionJobInputSchema,
+} from '@/modules/sessionJob/sessionJobMcp';
 
-const DEFAULT_TOOL_NAMES = ['change_title', 'display_image', 'display_video', 'display_media', 'feishu_send_message', 'feishu_send_status', 'list_peers', 'ping_peer', 'inspect_peer', 'spawn_peer'];
+const DEFAULT_TOOL_NAMES = [
+  'change_title',
+  'display_image',
+  'display_video',
+  'display_media',
+  'feishu_send_message',
+  'feishu_send_status',
+  'list_peers',
+  'ping_peer',
+  'inspect_peer',
+  'spawn_peer',
+  SESSION_JOB_TOOL_NAME,
+];
 
 function parseArgs(argv: string[]): { url: string | null; toolNames: Set<string> } {
   let url: string | null = null;
@@ -141,7 +158,7 @@ export async function runHappyMcpStdioBridge(argv: string[]): Promise<void> {
       server.registerTool<any, any>(
         'display_image',
         {
-          description: `Display a local image file to the human user inline in the current HAPI chat session. ${DISPLAY_IMAGE_PROMPT_CURSOR}`,
+          description: DISPLAY_IMAGE_TOOL_DESCRIPTION,
           title: 'Display Image',
           inputSchema: displayImageInputSchema,
         },
@@ -171,7 +188,7 @@ export async function runHappyMcpStdioBridge(argv: string[]): Promise<void> {
       server.registerTool<any, any>(
         'display_video',
         {
-          description: `Display a local mp4 or webm file inline in the current HAPI chat session. ${DISPLAY_VIDEO_PROMPT_CURSOR}`,
+          description: DISPLAY_VIDEO_TOOL_DESCRIPTION,
           title: 'Display Video',
           inputSchema: displayVideoInputSchema,
         },
@@ -201,7 +218,7 @@ export async function runHappyMcpStdioBridge(argv: string[]): Promise<void> {
       server.registerTool<any, any>(
         'display_media',
         {
-          description: `Send a local image, video, audio, or other file to the current HAPI chat session. ${DISPLAY_MEDIA_PROMPT_CURSOR}`,
+          description: DISPLAY_MEDIA_TOOL_DESCRIPTION,
           title: 'Display Media',
           inputSchema: displayMediaInputSchema,
         },
@@ -212,6 +229,34 @@ export async function runHappyMcpStdioBridge(argv: string[]): Promise<void> {
           } catch (error) {
             return {
               content: [{ type: 'text' as const, text: `Failed to display media: ${error instanceof Error ? error.message : String(error)}` }],
+              isError: true,
+            };
+          }
+        }
+      );
+    }
+
+    if (toolNames.has(SESSION_JOB_TOOL_NAME)) {
+      server.registerTool<any, any>(
+        SESSION_JOB_TOOL_NAME,
+        {
+          description: SESSION_JOB_TOOL_DESCRIPTION,
+          title: 'Session-Attached Job',
+          inputSchema: sessionJobInputSchema,
+        },
+        async (args: Record<string, unknown>) => {
+          try {
+            const client = await ensureHttpClient();
+            const response = await client.callTool({ name: SESSION_JOB_TOOL_NAME, arguments: args });
+            return response as any;
+          } catch (error) {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: `Failed to run session_job: ${error instanceof Error ? error.message : String(error)}`,
+                },
+              ],
               isError: true,
             };
           }

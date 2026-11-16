@@ -6,6 +6,7 @@ import { getConfiguration } from '../../configuration'
 import { resolveHubAccessToken } from '../../utils/accessTokenResolver'
 import { validateTelegramInitData } from '../telegramInitData'
 import { getOrCreateOwnerId } from '../../config/ownerId'
+import { constantTimeEquals } from '../../utils/crypto'
 import { hashShareToken, isShareActive } from '../../store/sessionShares'
 import { ensurePersonalAccessToken } from '../../accessTokens/personalToken'
 import { resolveFeishuConfig, type ResolvedFeishuConfig } from '../../feishu/config'
@@ -13,6 +14,7 @@ import { loginWithFeishuCode, FeishuOAuthError, type FeishuUserInfo } from '../.
 import { FeishuNamespaceConflictError, resolveFeishuNamespace } from '../../feishu/identity'
 import type { WebAppEnv } from '../middleware/auth'
 import type { Store } from '../../store'
+import { cliTokenFingerprint, verifyPasskeySession } from '../authTokens'
 
 export type AuthRoutesOptions = {
     /** Test seam: replaces the Feishu code exchange. */
@@ -125,6 +127,23 @@ export function createAuthRoutes(
             )
             tokenId = personal.record.id
             personalAccessToken = personal.token
+        } else if ('passkeySession' in parsed.data) {
+            // Refresh a passkey login. The backing credential must still exist
+            // and must have been registered under the current CLI token.
+            const session = await verifyPasskeySession(jwtSecret, parsed.data.passkeySession)
+            const credential = session ? store.passkeys.get(session.credentialId) : null
+            const fingerprint = cliTokenFingerprint(jwtSecret, getConfiguration().cliApiToken)
+            if (
+                !session
+                || !credential
+                || credential.namespace !== session.namespace
+                || !constantTimeEquals(credential.tokenFingerprint, fingerprint)
+            ) {
+                return c.json({ error: 'passkey_session_invalid' }, 401)
+            }
+            userId = await getOrCreateOwnerId()
+            firstName = 'Web User'
+            namespace = credential.namespace
         } else {
             const configuration = getConfiguration()
             if (!configuration.telegramEnabled || !configuration.telegramBotToken) {

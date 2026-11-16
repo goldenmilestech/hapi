@@ -6,6 +6,8 @@ The web app and PWA are free and full-featured. This page
 covers browser installation. For the paid iOS and Android apps, see
 [Native apps (iOS / Android)](./native-apps.md).
 
+For Markdown image requirements, native-client differences, and display-tool guidance, see [Displaying images](./agents.md#displaying-images).
+
 ## What is PWA?
 
 A Progressive Web App (PWA) is a web application that can be installed on your device and works like a native app:
@@ -97,6 +99,14 @@ Companions that cannot use Web Share Target (for example a native app on a heads
 
 See [Web Share Target](https://developer.chrome.com/docs/capabilities/web-apis/web-share-target) for the POST vs GET distinction.
 
+### Passkey sign-in
+
+After you sign in with the access token once, open **Settings → Passkeys → Add passkey** to register Face ID, Touch ID, Windows Hello, or a security key. Next time, choose **Sign in with a passkey** on the login screen. The browser then no longer keeps your access token.
+
+- Passkeys need HTTPS, or `http://localhost`. Plain-HTTP LAN addresses such as `http://192.168.x.x` cannot use them.
+- A passkey only works on the address where it was added. For example, a passkey added on your relay URL does not work on `localhost`.
+- Rotating `CLI_API_TOKEN` disables all passkeys. Sign in with the new token and add them again.
+
 ## Caching Strategy
 
 HAPI uses intelligent caching:
@@ -127,7 +137,6 @@ HAPI supports push notifications to alert you when agents need attention.
 |------|-----------|
 | Permission Request | Agent needs your approval |
 | Ready | Agent finished and awaits input |
-| Task completed / Task failed | A background task finishes (success or failure) |
 
 ### Native app notifications
 

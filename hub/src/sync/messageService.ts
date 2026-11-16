@@ -11,7 +11,7 @@ import {
     isRedundantGoalStatusEventContent,
     unwrapRoleWrappedRecordEnvelope
 } from '@hapi/protocol/messages'
-import { isObject } from '@hapi/protocol'
+import { AGENT_MESSAGE_PAYLOAD_TYPE, isObject } from '@hapi/protocol'
 import type {
     MessageContextResponse,
     MessageDeliveryMode,
@@ -26,6 +26,7 @@ import type { Store, CancelQueuedMessageResult } from '../store'
 import { EventPublisher } from './eventPublisher'
 import { computeSessionStats } from './sessionStats'
 import { extractStoredUserText, isCliOutputUserMessage } from './userPromptRows'
+import { JOB_WAKE_MESSAGE_LOCAL_ID_PREFIX } from './sessionJobWake'
 
 type StoredMessageForDelivery = ReturnType<Store['messages']['getMessages']>[number]
 type MessagePosition = { at: number; seq: number }
@@ -38,6 +39,7 @@ const MESSAGE_CONTEXT_BEFORE_LIMIT = 20
 const MESSAGE_CONTEXT_AFTER_LIMIT = 20
 /** Session stats are cached per open session; this bounds hub memory. */
 const SESSION_STATS_CACHE_LIMIT = 64
+const TOOL_CALL_TARGET_PREFIX = 'tool-call:'
 /**
  * localId prefix for peer submissions (`hapi ping-peer` / MCP `ping_peer`).
  * Excludes peer rows from the session-end synthetic sweep so their invocation
@@ -55,6 +57,37 @@ function messagePosition(message: StoredMessageForDelivery): MessagePosition {
 
 function comparePosition(a: MessagePosition, b: MessagePosition): number {
     return a.at !== b.at ? a.at - b.at : a.seq - b.seq
+}
+
+function contentContainsToolCallId(value: unknown, targetId: string, depth = 0): boolean {
+    if (depth > 12) return false
+    if (Array.isArray(value)) {
+        return value.some((entry) => contentContainsToolCallId(entry, targetId, depth + 1))
+    }
+    if (!isObject(value)) return false
+
+    if (value.type === 'tool-call' || value.type === 'tool_use') {
+        const ids = [value.id, value.callId, value.toolCallId, value.toolUseId, value.tool_use_id]
+        if (ids.some((id) => id === targetId)) return true
+    }
+    if (value.type === AGENT_MESSAGE_PAYLOAD_TYPE && isObject(value.data) && value.data.type === 'tool-call') {
+        const ids = [value.data.id, value.data.callId, value.data.toolCallId]
+        if (ids.some((id) => id === targetId)) return true
+    }
+
+    return Object.values(value).some((entry) => contentContainsToolCallId(entry, targetId, depth + 1))
+}
+
+function findMessageByToolCallTarget(
+    messages: ReturnType<Store['messages']['getAllMessages']>,
+    targetId: string
+): (typeof messages)[number] | null {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index]!
+        const record = unwrapRoleWrappedRecordEnvelope(message.content)
+        if (record && contentContainsToolCallId(record.content, targetId)) return message
+    }
+    return null
 }
 
 function isWebVisibleStoredMessage(message: StoredMessageForDelivery): boolean {
@@ -190,6 +223,10 @@ function contentForDeferredDelivery(content: unknown): unknown {
     if (!isObject(content) || content.role !== 'user' || !isObject(content.meta)) {
         return content
     }
+    // Replay paths (replayImmediateQueuedMessages, releaseDeliverableQueuedMessages)
+    // also surface stragglers that never had delivery metadata, e.g. legacy rows
+    // written before meta became mandatory (aliveEvents "queued-before-attach").
+    if (!Object.keys(content.meta).length) return content
     if (content.meta.deliveryMode !== 'steer') return content
     return {
         ...content,
@@ -244,10 +281,17 @@ export class MessageService {
     }
 
     getMessageContext(sessionId: string, messageId: string): MessageContextResponse | null {
-        const target = this.store.messages.getMessageById(sessionId, messageId)
+        const toolCallTarget = messageId.startsWith(TOOL_CALL_TARGET_PREFIX)
+            ? messageId.slice(TOOL_CALL_TARGET_PREFIX.length).trim()
+            : null
+        const directTarget = this.store.messages.getMessageById(sessionId, messageId)
+        const target = directTarget ?? (toolCallTarget
+            ? findMessageByToolCallTarget(this.store.messages.getAllMessages(sessionId), toolCallTarget)
+            : null)
         if (!target) {
             return null
         }
+        const targetMessageId = target.id
 
         const targetPosition = messagePosition(target)
         const before = this.store.messages.getMessagesByPosition(
@@ -274,7 +318,7 @@ export class MessageService {
 
         return {
             messages: toVisibleDecryptedMessages(contextRows),
-            targetMessageId: messageId,
+            targetMessageId,
             page: {
                 epoch: this.store.messages.getMessageEpoch(sessionId),
                 nextBeforeSeq: oldestPosition.seq,
@@ -996,7 +1040,7 @@ export class MessageService {
             text: string
             localId?: string | null
             attachments?: AttachmentMetadata[]
-            sentFrom?: 'telegram-bot' | 'feishu-bot' | 'webapp'
+            sentFrom?: 'telegram-bot' | 'feishu-bot' | 'webapp' | 'hapi-system'
             scheduledAt?: number | null
             deliveryMode?: MessageDeliveryMode
         }
@@ -1113,11 +1157,13 @@ export class MessageService {
      * see the row in the next mature-scan tick and the user's prompt would be
      * silently dropped.  See HAPI Bot R4 finding.
      *
-     * Peer rows (`ping-peer-` localIds) are also skipped: the sweep's synthetic
-     * invokedAt is not a runtime-consumption ACK, so stamping one would falsely
-     * confirm a delivery the recipient runtime never made. Skipped peer rows
-     * stay pending and replayable on re-attach; only a real runtime ACK
-     * (messages-consumed) confirms them.
+     * Peer rows (`ping-peer-` localIds) and job-complete wakes (`hapi-job-wake:`)
+     * are also skipped: the sweep's synthetic invokedAt is not a runtime-consumption
+     * ACK, so stamping one would falsely confirm a delivery the recipient runtime
+     * never made. Skipped rows stay pending and replayable on re-attach; only a
+     * real runtime ACK (messages-consumed) confirms them. Job wakes additionally
+     * mark the SQLite claim delivered before the agent may have consumed the
+     * prompt — sweeping them would strand the batch continuation (#1489 / #1424).
      *
      * Returns the list of localIds that were stamped and the invokedAt timestamp,
      * or null if no messages needed sweeping.
@@ -1129,7 +1175,11 @@ export class MessageService {
         const queued = this.store.messages.getImmediateQueuedLocalMessages(sessionId)
         const localIds = queued
             .map((m) => m.localId)
-            .filter((id): id is string => typeof id === 'string' && !id.startsWith(PEER_MESSAGE_LOCAL_ID_PREFIX))
+            .filter((id): id is string =>
+                typeof id === 'string'
+                && !id.startsWith(PEER_MESSAGE_LOCAL_ID_PREFIX)
+                && !id.startsWith(JOB_WAKE_MESSAGE_LOCAL_ID_PREFIX)
+            )
         if (localIds.length === 0) return null
         this.store.messages.markMessagesInvoked(sessionId, localIds, invokedAt)
         this.forgetScheduledMatureNotified(localIds)

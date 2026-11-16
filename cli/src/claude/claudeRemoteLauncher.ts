@@ -221,6 +221,7 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                     await restoreQueuedReservation();
                     return { steered: false, error: 'Active turn changed' };
                 }
+                permissionHandler.denyPendingForSteer();
                 void delivery.delivered.then(async (delivered) => {
                     if (delivered) {
                         // Agent output preceding the pickup is already in the
@@ -630,6 +631,7 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                         onSideQuestionHandlerChange: (handler) => {
                             session.setSideQuestionHandler(handler);
                         },
+                        onAccountIdentity: (identity) => sdkToLogConverter.updateAccountIdentity?.(identity),
                         onFirstResult: (initialMessage) => {
                             // SDK streams omit Claude Code's native ai-title; it is only in the transcript.
                             const sessionId = session.sessionId;

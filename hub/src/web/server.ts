@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 import { serveStatic } from 'hono/bun'
 import { getConfiguration } from '../configuration'
-import { PROTOCOL_VERSION } from '@hapi/protocol'
+import { FOLLOW_SESSION_REDIRECTS_HEADER, PROTOCOL_VERSION } from '@hapi/protocol'
 import { buildGeminiLiveSetupMessage, QWEN_REALTIME_MODEL } from '@hapi/protocol/voice'
 import { getProviderEnvironment } from '../config/providerCredentials'
 import { readTitleProviderConfig } from '../sync/titleSuggestion'
@@ -17,6 +17,12 @@ import { createAuthMiddleware, type WebAppEnv } from './middleware/auth'
 import { resolveHubAccessToken } from '../utils/accessTokenResolver'
 import { createAuthRoutes } from './routes/auth'
 import { createBindRoutes } from './routes/bind'
+import {
+    createPasskeyLoginRoutes,
+    createPasskeyManagementRoutes,
+    nativePasskeyConfigFromEnv,
+    PasskeyChallengeStore
+} from './routes/passkey'
 import { createEventsRoutes } from './routes/events'
 import { createSessionsRoutes } from './routes/sessions'
 import { createMessagesRoutes } from './routes/messages'
@@ -28,8 +34,8 @@ import { createActivityRoutes } from './routes/activity'
 import { createGitRoutes } from './routes/git'
 import { createCliRoutes } from './routes/cli'
 import { createCodexDesktopRoutes } from './routes/codexDesktop'
-import { createPiSessionRoutes } from './routes/piSessions'
-import { createOpencodeSessionRoutes } from './routes/opencodeSessions'
+import { createLocalSessionRoutes } from './routes/localSessions/createLocalSessionRoutes'
+import { PI_LOCAL_SESSION_SOURCE, OPENCODE_LOCAL_SESSION_SOURCE, CLAUDE_LOCAL_SESSION_SOURCE } from './routes/localSessions/sources'
 import { createPushRoutes } from './routes/push'
 import { createDevicesRoutes } from './routes/devices'
 import { createVoiceRoutes } from './routes/voice'
@@ -254,7 +260,7 @@ function createWebApp(options: {
         allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
         // last-event-id: browsers attach it to EventSource reconnects for
         // SSE replay; allow it in case a browser preflights the request.
-        allowHeaders: ['authorization', 'content-type', 'last-event-id']
+        allowHeaders: ['authorization', 'content-type', 'last-event-id', FOLLOW_SESSION_REDIRECTS_HEADER]
     })
     app.use('/health', corsMiddleware)
     app.use('/api/*', corsMiddleware)
@@ -303,10 +309,20 @@ function createWebApp(options: {
         getFeishuBot: options.getFeishuBot ?? (() => null)
     }))
 
+    const passkeyDeps = {
+        jwtSecret: options.jwtSecret,
+        store: options.store,
+        corsOrigins: () => corsOrigins,
+        challenges: new PasskeyChallengeStore(),
+        native: nativePasskeyConfigFromEnv()
+    }
+    app.route('/api', createPasskeyLoginRoutes(passkeyDeps))
+
     app.use('/api/*', createAuthMiddleware(options.jwtSecret, {
         isTokenRevoked: (tokenId) => options.store.accessTokens.isTokenIdRevoked(tokenId),
         isNamespaceClaimed: (namespace) => options.store.accessTokens.getActiveByNamespace(namespace) !== null
     }))
+    app.route('/api', createPasskeyManagementRoutes(passkeyDeps))
     app.route('/api', createAccessTokensRoutes(options.store, { dataDir: configuration.dataDir }))
     app.route('/api', createMeAccessTokenRoutes(options.store, { dataDir: configuration.dataDir }))
     app.route('/api', createFeishuRoutes(options.store))
@@ -328,8 +344,8 @@ function createWebApp(options: {
     }))
     app.route('/api', createMachinesRoutes(options.getSyncEngine, { dataDir: configuration.dataDir }))
     app.route('/api', createStorageRoutes(configuration.dbPath))
-    app.route('/api', createHubSettingsRoutes(configuration.dataDir))
-    app.route('/api', createUsageRoutes(options.store))
+    app.route('/api', createHubSettingsRoutes(configuration.dataDir, options.getSyncEngine))
+    app.route('/api', createUsageRoutes(options.store, options.getSyncEngine))
     app.route('/api', createActivityRoutes(options.store))
     app.route('/api', createGitRoutes(options.getSyncEngine))
     // 中文注释：这里提供两类 Codex 辅助能力：扫描本地 transcript 以导入到 Hapi，以及按需重启 Codex Desktop 客户端。
@@ -337,13 +353,14 @@ function createWebApp(options: {
         store: options.store,
         getSyncEngine: options.getSyncEngine
     }))
-    app.route('/api', createPiSessionRoutes({
+    // Local-session import registry: one generic route pair per mounted source
+    // (Pi, OpenCode, Claude); the generic importer owns target matching,
+    // atomic persistence and launch config. Codex stays on its desktop route
+    // to keep the sidecar capabilities and the Codex wire schema separate.
+    app.route('/api', createLocalSessionRoutes({
         store: options.store,
-        getSyncEngine: options.getSyncEngine
-    }))
-    app.route('/api', createOpencodeSessionRoutes({
-        store: options.store,
-        getSyncEngine: options.getSyncEngine
+        getSyncEngine: options.getSyncEngine,
+        sources: [PI_LOCAL_SESSION_SOURCE, OPENCODE_LOCAL_SESSION_SOURCE, CLAUDE_LOCAL_SESSION_SOURCE]
     }))
     app.route('/api', createPushRoutes(options.store, options.vapidPublicKey))
     app.route('/api', createDevicesRoutes(options.store))

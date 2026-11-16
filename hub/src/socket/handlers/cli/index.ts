@@ -6,7 +6,7 @@ import type { AgentContextUsage } from '../../../sync/contextUsage'
 import type { TerminalRegistry } from '../../terminalRegistry'
 import type { CliSocketWithData, SocketServer } from '../../socketTypes'
 import type { AccessErrorReason, AccessResult } from './types'
-import { registerMachineHandlers } from './machineHandlers'
+import { registerMachineHandlers, type SessionChildExitedPayload } from './machineHandlers'
 import { registerRpcHandlers } from './rpcHandlers'
 import { registerSessionHandlers } from './sessionHandlers'
 import { cleanupTerminalHandlers, registerTerminalHandlers } from './terminalHandlers'
@@ -48,6 +48,7 @@ export type CliHandlersDeps = {
     onSessionReady?: (payload: SessionReadyPayload) => void
     onSessionEnd?: (payload: SessionEndPayload) => void
     onMachineAlive?: (payload: MachineAlivePayload) => void
+    onSessionChildExited?: (payload: SessionChildExitedPayload & { namespace: string }) => void
     onWebappEvent?: (event: SyncEvent) => void
     onBackgroundTasks?: (sessionId: string, tasks: BackgroundTask[]) => void
     onSessionActivity?: (sessionId: string, updatedAt: number) => void
@@ -87,7 +88,7 @@ const SESSION_ACCESS_CACHE_TTL_MS = 1_000
 const SESSION_ACCESS_CACHE_MAX_SESSIONS = 64
 
 export function registerCliHandlers(socket: CliSocketWithData, deps: CliHandlersDeps): void {
-    const { io, store, rpcRegistry, terminalRegistry, onSessionAlive, onSessionReady, onSessionEnd, onMachineAlive, onWebappEvent, onBackgroundTasks, onSessionActivity, onAgentProgress, onSweepImmediateQueued, onMessagesConsumed, onUserMessage, onAgentContextUsage } = deps
+    const { io, store, rpcRegistry, terminalRegistry, onSessionAlive, onSessionReady, onSessionEnd, onMachineAlive, onSessionChildExited, onWebappEvent, onBackgroundTasks, onSessionActivity, onAgentProgress, onSweepImmediateQueued, onMessagesConsumed, onUserMessage, onAgentContextUsage } = deps
     const terminalNamespace = io.of('/terminal')
     const namespace = typeof socket.data.namespace === 'string' ? socket.data.namespace : null
 
@@ -194,6 +195,7 @@ export function registerCliHandlers(socket: CliSocketWithData, deps: CliHandlers
         resolveMachineAccess,
         emitAccessError,
         onMachineAlive,
+        onSessionChildExited,
         onWebappEvent
     })
     registerTerminalHandlers(socket, {

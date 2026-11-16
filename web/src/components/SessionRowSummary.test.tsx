@@ -26,6 +26,8 @@ function makeSummary(overrides: Partial<SessionSummary> = {}): SessionSummary {
         backgroundTaskCount: 2,
         futureScheduledMessageCount: 0,
         nextScheduledAt: null,
+        attachedJob: null,
+        attachedJobUpdatedAt: 0,
         model: null,
         effort: null,
         contentRevision: overrides.updatedAt ?? 0,
@@ -53,7 +55,7 @@ describe('SessionRowSummary background status', () => {
         const background = renderSummary(false).container
         const backgroundBadge = background.querySelector('[data-testid="session-presence"]')
         expect(backgroundBadge).toHaveClass('bg-blue-400', 'animate-pulse')
-        const backgroundSpinner = background.querySelector('svg.animate-spin-slow')
+        const backgroundSpinner = background.querySelector('[data-testid="session-running-spinner"] svg')
         expect(backgroundSpinner).not.toBeNull()
         expect(backgroundSpinner).toHaveClass('text-blue-400')
         cleanup()
@@ -65,7 +67,7 @@ describe('SessionRowSummary background status', () => {
         ).container
         expect(thinking.querySelector('[data-testid="session-presence"]'))
             .toHaveClass('bg-[var(--app-badge-success-text)]', 'animate-pulse')
-        const thinkingSpinner = thinking.querySelector('svg.animate-spin-slow')
+        const thinkingSpinner = thinking.querySelector('[data-testid="session-running-spinner"] svg')
         expect(thinkingSpinner).not.toBeNull()
         expect(thinkingSpinner).not.toHaveClass('text-blue-400')
         expect(screen.queryByText('Running', { exact: true })).not.toBeInTheDocument()
@@ -77,7 +79,7 @@ describe('SessionRowSummary background status', () => {
             </I18nProvider>
         ).container
         expect(idle.querySelector('[data-testid="session-presence"]')).not.toHaveClass('animate-pulse')
-        expect(idle.querySelector('svg.animate-spin-slow')).toBeNull()
+        expect(idle.querySelector('[data-testid="session-running-spinner"]')).toBeNull()
     })
 
     it('does not dim disconnected rows or show them a presence badge', () => {
