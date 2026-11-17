@@ -262,14 +262,28 @@ export function formatSessionStatsCacheHit(
     return (Math.floor(percent * 100) / 100).toFixed(2).replace(/\.?0+$/, '')
 }
 
-export function buildSessionStatsDetails(stats: SessionStatsResponse, t: (key: string, params?: Record<string, string | number>) => string): string {
-    return t('misc.statsDetails', {
-        total: formatTokenCount(stats.totalTokens),
-        input: stats.inputTokens.toLocaleString(),
-        cacheRead: stats.cacheReadTokens.toLocaleString(),
-        cacheWrite: stats.cacheCreationTokens.toLocaleString(),
-        output: stats.outputTokens.toLocaleString()
-    })
+export function formatSessionStatsDuration(
+    durationMs: number | null | undefined,
+    t: (key: string, params?: Record<string, string | number>) => string
+): string | null {
+    if (typeof durationMs !== 'number' || !Number.isSafeInteger(durationMs) || durationMs <= 0) return null
+    const totalSeconds = durationMs / 1_000
+    // Sub-minute readings keep one decimal so short tool calls stay legible.
+    const roundedTenths = Math.round(totalSeconds * 10) / 10
+    if (roundedTenths <= 0) return null
+    if (roundedTenths < 60) {
+        return t('misc.statsSeconds', { value: roundedTenths })
+    }
+    const roundedSeconds = Math.round(totalSeconds)
+    const minutes = Math.floor(roundedSeconds / 60)
+    const seconds = roundedSeconds % 60
+    if (minutes >= 60) {
+        return t('misc.statsHoursMinutes', {
+            hours: Math.floor(minutes / 60),
+            minutes: minutes % 60
+        })
+    }
+    return t('misc.statsMinutesSeconds', { minutes, seconds })
 }
 
 export function StatusBar(props: {
@@ -354,14 +368,16 @@ export function StatusBar(props: {
         () => formatSessionStatsSpeed(props.sessionStats?.generationMs, props.sessionStats?.generationOutputTokens),
         [props.sessionStats]
     )
-    const sessionStatsCacheHit = useMemo(
+    const sessionStatsCacheHitPercent = useMemo(
         () => {
             const stats = props.sessionStats
-            if (!stats) return null
-            const cacheHit = formatSessionStatsCacheHit(stats.cacheReadTokens, stats.inputTokens)
-            return cacheHit ? t('misc.statsCacheHit', { percent: cacheHit }) : null
+            return stats ? formatSessionStatsCacheHit(stats.cacheReadTokens, stats.inputTokens) : null
         },
-        [props.sessionStats, t]
+        [props.sessionStats]
+    )
+    const sessionStatsCacheHit = useMemo(
+        () => sessionStatsCacheHitPercent ? t('misc.statsCacheHit', { percent: sessionStatsCacheHitPercent }) : null,
+        [sessionStatsCacheHitPercent, t]
     )
     const sessionStatsActivity = useMemo(() => {
         const stats = props.sessionStats
@@ -376,10 +392,37 @@ export function StatusBar(props: {
         if (!total) return null
         return sessionStatsCacheHit ? `${total} · ${sessionStatsCacheHit}` : total
     }, [props.sessionStats, sessionStatsCacheHit])
-    const sessionStatsDetails = useMemo(
-        () => props.sessionStats ? buildSessionStatsDetails(props.sessionStats, t) : undefined,
-        [props.sessionStats, t]
-    )
+    const sessionStatsTimingRows = useMemo(() => {
+        const stats = props.sessionStats
+        if (!stats) return []
+        const rows: Array<{ label: string; value: string }> = []
+        const modelTime = formatSessionStatsDuration(stats.generationMs, t)
+        if (modelTime) rows.push({ label: t('misc.statsModelTime'), value: modelTime })
+        const toolTime = formatSessionStatsDuration(stats.toolMs, t)
+        if (toolTime) rows.push({ label: t('misc.statsToolTime'), value: toolTime })
+        if (sessionStatsSpeed) rows.push({ label: t('misc.statsTps'), value: sessionStatsSpeed })
+        return rows
+    }, [props.sessionStats, sessionStatsSpeed, t])
+    const sessionStatsTokenRows = useMemo(() => {
+        const stats = props.sessionStats
+        if (!stats) return []
+        const rows: Array<{ label: string; value: string }> = []
+        if (sessionStatsCacheHitPercent) {
+            rows.push({ label: t('misc.statsCacheHitRow'), value: `${sessionStatsCacheHitPercent}%` })
+        }
+        const uncachedInput = Math.max(0, stats.inputTokens - stats.cacheReadTokens - stats.cacheCreationTokens)
+        rows.push({ label: t('misc.statsUncachedInput'), value: `${uncachedInput.toLocaleString()} tok` })
+        if (stats.cacheReadTokens > 0) {
+            rows.push({ label: t('misc.statsCacheRead'), value: `${stats.cacheReadTokens.toLocaleString()} tok` })
+        }
+        if (stats.cacheCreationTokens > 0) {
+            rows.push({ label: t('misc.statsCacheWrite'), value: `${stats.cacheCreationTokens.toLocaleString()} tok` })
+        }
+        if (stats.outputTokens > 0) {
+            rows.push({ label: t('misc.statsOutput'), value: `${stats.outputTokens.toLocaleString()} tok` })
+        }
+        return rows
+    }, [props.sessionStats, sessionStatsCacheHitPercent, t])
 
     const compactCommand = getCompactCommandForFlavor(props.agentFlavor)
     const canConfigureContextLimit = Boolean(props.onContextLimitChange) && compactCommand !== null
@@ -563,14 +606,18 @@ export function StatusBar(props: {
                             <button
                                 type="button"
                                 aria-label={t('misc.contextDetails')}
-                                className={`min-w-0 cursor-pointer whitespace-nowrap rounded-sm bg-transparent p-0 text-[10px] leading-4 outline-none focus-visible:ring-1 focus-visible:ring-[var(--app-link)] ${contextWarning?.color ?? 'text-[var(--app-hint)]'}`}
+                                className={`min-w-0 cursor-pointer whitespace-nowrap rounded-sm bg-transparent px-0 py-px text-[10px] leading-4 outline-none focus-visible:ring-1 focus-visible:ring-[var(--app-link)] ${contextWarning?.color ?? 'text-[var(--app-hint)]'}`}
                             >
                                 <span className="sm:hidden">{compactContextUsageLabel}</span>
-                                <span className="hidden items-center gap-2 sm:inline-flex">
+                                {/* The bar is absolutely positioned so the button's
+                                    baseline comes from the label instead of the 4px
+                                    bar; that keeps this chip shareable with the
+                                    stats text on the same baseline. */}
+                                <span className={contextUsedPercentage !== null ? 'relative hidden pl-14 sm:block' : 'hidden sm:block'}>
                                     {contextUsedPercentage !== null ? (
                                         <span
                                             aria-hidden="true"
-                                            className="h-1 w-12 shrink-0 overflow-hidden rounded-full bg-[var(--app-link-muted)]"
+                                            className="absolute left-0 top-1/2 h-1 w-12 -translate-y-1/2 overflow-hidden rounded-full bg-[var(--app-link-muted)]"
                                         >
                                             <span
                                                 className="block h-full rounded-full bg-current"
@@ -683,34 +730,86 @@ export function StatusBar(props: {
                 {sessionStatsActivity || sessionStatsUsage ? (
                     <div
                         data-testid="session-stats"
-                        title={sessionStatsDetails}
-                        // The context chip is an inline-flex whose first item is
-                        // the progress bar, so its text baseline sits 2px lower
-                        // than a plain 10px line box. Nudge the stats down to
-                        // share that baseline (same trick as the status dot).
-                        className="relative top-0.5 hidden min-w-0 items-baseline gap-2 sm:flex"
+                        className="hidden min-w-0 items-baseline gap-2 sm:flex"
                     >
                         {/* Compact below md keeps the row from overflowing on phones:
                             DSH's compact mode shows only speed and cache hit. */}
                         {sessionStatsActivity ? (
-                            <span className="hidden whitespace-nowrap text-[10px] leading-4 text-[var(--app-hint)] md:inline">
-                                {sessionStatsActivity}
-                            </span>
+                            sessionStatsTimingRows.length > 0 ? (
+                                <Popover.Root>
+                                    <Popover.Trigger asChild>
+                                        <button
+                                            type="button"
+                                            aria-label={t('misc.statsTitle')}
+                                            className={`cursor-pointer whitespace-nowrap rounded-sm bg-transparent p-0 text-[10px] leading-4 text-[var(--app-hint)] outline-none focus-visible:ring-1 focus-visible:ring-[var(--app-link)] ${sessionStatsSpeed ? '' : 'hidden md:inline'}`}
+                                        >
+                                            <span className="hidden md:inline">{sessionStatsActivity}</span>
+                                            {sessionStatsSpeed ? <span className="md:hidden">{sessionStatsSpeed}</span> : null}
+                                        </button>
+                                    </Popover.Trigger>
+                                    <Popover.Portal>
+                                        <Popover.Content
+                                            side="top"
+                                            align="start"
+                                            sideOffset={6}
+                                            collisionPadding={8}
+                                            className="z-50 rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 shadow-lg"
+                                        >
+                                            <div className="flex max-w-[min(22rem,calc(100vw-1rem))] flex-col gap-1 text-xs leading-tight text-[var(--app-fg)]">
+                                                <span className="font-medium">{t('misc.statsTitle')}</span>
+                                                <div className="my-0.5 border-t border-[var(--app-border)]" />
+                                                {sessionStatsTimingRows.map((row) => (
+                                                    <div key={row.label} className="flex items-baseline justify-between gap-6">
+                                                        <span className="whitespace-nowrap text-[var(--app-hint)]">{row.label}</span>
+                                                        <span className="whitespace-nowrap tabular-nums">{row.value}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </Popover.Content>
+                                    </Popover.Portal>
+                                </Popover.Root>
+                            ) : (
+                                <span className="hidden whitespace-nowrap text-[10px] leading-4 text-[var(--app-hint)] md:inline">
+                                    {sessionStatsActivity}
+                                </span>
+                            )
                         ) : null}
-                        {sessionStatsSpeed ? (
-                            <span className="whitespace-nowrap text-[10px] leading-4 text-[var(--app-hint)] md:hidden">
-                                {sessionStatsSpeed}
-                            </span>
-                        ) : null}
-                        {sessionStatsUsage ? (
-                            <span className="hidden whitespace-nowrap text-[10px] leading-4 text-[var(--app-hint)] md:inline">
-                                {sessionStatsUsage}
-                            </span>
-                        ) : null}
-                        {sessionStatsCacheHit ? (
-                            <span className="whitespace-nowrap text-[10px] leading-4 text-[var(--app-hint)] md:hidden">
-                                {sessionStatsCacheHit}
-                            </span>
+                        {sessionStatsUsage && props.sessionStats ? (
+                            <Popover.Root>
+                                <Popover.Trigger asChild>
+                                    <button
+                                        type="button"
+                                        aria-label={t('misc.statsTokensTitle')}
+                                        className={`cursor-pointer whitespace-nowrap rounded-sm bg-transparent p-0 text-[10px] leading-4 text-[var(--app-hint)] outline-none focus-visible:ring-1 focus-visible:ring-[var(--app-link)] ${sessionStatsCacheHit ? '' : 'hidden md:inline'}`}
+                                    >
+                                        <span className="hidden md:inline">{sessionStatsUsage}</span>
+                                        {sessionStatsCacheHit ? <span className="md:hidden">{sessionStatsCacheHit}</span> : null}
+                                    </button>
+                                </Popover.Trigger>
+                                <Popover.Portal>
+                                    <Popover.Content
+                                        side="top"
+                                        align="start"
+                                        sideOffset={6}
+                                        collisionPadding={8}
+                                        className="z-50 rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 shadow-lg"
+                                    >
+                                        <div className="flex max-w-[min(22rem,calc(100vw-1rem))] flex-col gap-1 text-xs leading-tight text-[var(--app-fg)]">
+                                            <div className="flex items-baseline justify-between gap-6">
+                                                <span className="font-medium">{t('misc.statsTokensTitle')}</span>
+                                                <span className="font-medium tabular-nums">{props.sessionStats.totalTokens.toLocaleString()} tok</span>
+                                            </div>
+                                            <div className="my-0.5 border-t border-[var(--app-border)]" />
+                                            {sessionStatsTokenRows.map((row) => (
+                                                <div key={row.label} className="flex items-baseline justify-between gap-6">
+                                                    <span className="whitespace-nowrap text-[var(--app-hint)]">{row.label}</span>
+                                                    <span className="whitespace-nowrap tabular-nums">{row.value}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </Popover.Content>
+                                </Popover.Portal>
+                            </Popover.Root>
                         ) : null}
                     </div>
                 ) : null}

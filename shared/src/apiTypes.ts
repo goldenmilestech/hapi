@@ -242,8 +242,9 @@ export type SessionOutlineResponse = {
  * Input token fields follow the usage dashboard's normalized semantics:
  * `inputTokens` is billed prompt input and already includes cache reads and
  * cache writes. `generationMs` / `generationOutputTokens` only cover the steps
- * whose generation time is known; clients must treat them as `null` (not 0)
- * when throughput cannot be reported.
+ * whose generation time is known and exclude tool execution; clients must treat
+ * them as `null` (not 0) when throughput cannot be reported. `toolMs` is the
+ * wall-clock time tools spent running, when the log carries paired tool rows.
  */
 export type SessionStatsResponse = {
     /** Delivered user prompts. */
@@ -258,6 +259,8 @@ export type SessionStatsResponse = {
     totalTokens: number
     generationMs: number | null
     generationOutputTokens: number | null
+    /** Wall-clock time spent inside tool calls; null when the log has no tool rows. */
+    toolMs: number | null
     updatedAt: number
 }
 

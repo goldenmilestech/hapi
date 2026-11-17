@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { I18nProvider } from '@/lib/i18n-context'
 import { StatusBar } from './StatusBar'
@@ -14,6 +14,7 @@ const stats: SessionStatsResponse = {
     totalTokens: 4_600_000,
     generationMs: 1_149_425,
     generationOutputTokens: 200_000,
+    toolMs: 32_800,
     updatedAt: 1_700_000_000_000
 }
 
@@ -57,11 +58,48 @@ describe('StatusBar session stats', () => {
                     active
                     thinking={false}
                     agentState={null}
-                    sessionStats={{ ...stats, generationMs: null, generationOutputTokens: null }}
+                    sessionStats={{ ...stats, generationMs: null, generationOutputTokens: null, toolMs: null }}
                 />
             </I18nProvider>
         )
 
         expect(screen.getByText('3 轮 31 步')).toBeTruthy()
+    })
+
+    it('opens a stats popover with model, tool, and output timing', async () => {
+        render(
+            <I18nProvider>
+                <StatusBar active thinking={false} agentState={null} sessionStats={stats} />
+            </I18nProvider>
+        )
+
+        fireEvent.click(screen.getByRole('button', { name: '会话统计' }))
+
+        expect(await screen.findByText('模型用时')).toBeTruthy()
+        expect(screen.getByText('19 分 9 秒')).toBeTruthy()
+        expect(screen.getByText('工具调用用时')).toBeTruthy()
+        expect(screen.getByText('32.8 秒')).toBeTruthy()
+        expect(screen.getByText('输出速度')).toBeTruthy()
+        expect(screen.getAllByText('174 tok/s').length).toBeGreaterThan(0)
+    })
+
+    it('opens a token popover with the cache breakdown', async () => {
+        render(
+            <I18nProvider>
+                <StatusBar active thinking={false} agentState={null} sessionStats={stats} />
+            </I18nProvider>
+        )
+
+        fireEvent.click(screen.getByRole('button', { name: 'Token 用量' }))
+
+        expect(await screen.findByText('缓存命中')).toBeTruthy()
+        expect(screen.getByText('97%')).toBeTruthy()
+        expect(screen.getByText('未缓存输入')).toBeTruthy()
+        expect(screen.getByText(`${(132_000).toLocaleString()} tok`)).toBeTruthy()
+        expect(screen.getByText('缓存读取')).toBeTruthy()
+        expect(screen.getByText(`${(4_268_000).toLocaleString()} tok`)).toBeTruthy()
+        expect(screen.getByText('输出')).toBeTruthy()
+        expect(screen.getByText(`${(200_000).toLocaleString()} tok`)).toBeTruthy()
+        expect(screen.getByText(`${(4_600_000).toLocaleString()} tok`)).toBeTruthy()
     })
 })

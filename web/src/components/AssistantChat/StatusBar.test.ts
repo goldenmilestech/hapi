@@ -4,6 +4,7 @@ import {
     formatContextUsageLabel,
     formatSessionStatsCacheHit,
     formatSessionStatsCounts,
+    formatSessionStatsDuration,
     formatSessionStatsSpeed,
     formatSessionStatsTokens,
     getContextWarning,
@@ -70,6 +71,9 @@ describe('session stats labels', () => {
     const t = (key: string, params?: Record<string, string | number>) => {
         if (key === 'misc.statsCounts') return `${params?.turns} rounds ${params?.steps} steps`
         if (key === 'misc.statsTurns') return `${params?.turns} rounds`
+        if (key === 'misc.statsSeconds') return `${params?.value}s`
+        if (key === 'misc.statsMinutesSeconds') return `${params?.minutes}m ${params?.seconds}s`
+        if (key === 'misc.statsHoursMinutes') return `${params?.hours}h ${params?.minutes}m`
         return key
     }
 
@@ -93,11 +97,31 @@ describe('session stats labels', () => {
         expect(formatSessionStatsSpeed(1_000, null)).toBeNull()
     })
 
-    it('formats the session token total compactly', () => {
+    it('formats session token totals compactly', () => {
         expect(formatSessionStatsTokens(4_600_000)).toBe('4.6M tok')
         expect(formatSessionStatsTokens(12_200)).toBe('12k tok')
         expect(formatSessionStatsTokens(980)).toBe('980 tok')
         expect(formatSessionStatsTokens(0)).toBeNull()
+    })
+
+    it('formats session timing as seconds, minutes, and hours', () => {
+        expect(formatSessionStatsDuration(4_300, t)).toBe('4.3s')
+        expect(formatSessionStatsDuration(43_000, t)).toBe('43s')
+        expect(formatSessionStatsDuration(283_000, t)).toBe('4m 43s')
+        expect(formatSessionStatsDuration(1_149_425, t)).toBe('19m 9s')
+        expect(formatSessionStatsDuration(3_720_000, t)).toBe('1h 2m')
+    })
+
+    it('carries rounded seconds into the next minute', () => {
+        expect(formatSessionStatsDuration(59_960, t)).toBe('1m 0s')
+        expect(formatSessionStatsDuration(119_960, t)).toBe('2m 0s')
+    })
+
+    it('omits duration when timing is unusable', () => {
+        expect(formatSessionStatsDuration(null, t)).toBeNull()
+        expect(formatSessionStatsDuration(0, t)).toBeNull()
+        expect(formatSessionStatsDuration(-1, t)).toBeNull()
+        expect(formatSessionStatsDuration(1.5, t)).toBeNull()
     })
 
     it('reports cache reads as a share of billed input', () => {

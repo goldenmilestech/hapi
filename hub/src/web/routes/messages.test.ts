@@ -623,6 +623,7 @@ describe('GET /api/sessions/:id/stats', () => {
             totalTokens: 4_600_000,
             generationMs: 1_149_425,
             generationOutputTokens: 200_000,
+            toolMs: 32_800,
             updatedAt: 1_700_000_000_000
         }
         const { app } = createApp({
