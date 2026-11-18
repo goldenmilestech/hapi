@@ -855,4 +855,55 @@ test('keeps the reader anchor when content above the viewport resizes later', as
 
     expect(rekeyed.after.scrollTop).toBeLessThan(rekeyed.before.scrollTop - 1000)
     expect(Math.abs(rekeyed.after.offset - rekeyed.before.offset)).toBeLessThanOrEqual(2)
+
+    // A re-render can replace the anchored row with a new element that carries
+    // none of the old source ids. The mutation observer must re-seat the
+    // anchor on the replacement so a later resize is still compensated.
+    const rerendered = await page.evaluate(() => {
+        const element = document.querySelector('.app-scroll-y') as HTMLElement
+        element.scrollTop -= 20
+        element.dispatchEvent(new Event('scroll'))
+        const viewportRect = element.getBoundingClientRect()
+        const rows = Array.from(document.querySelectorAll<HTMLElement>('.happy-thread-messages > [id]'))
+        const anchorIndex = rows.findIndex((candidate) => {
+            const rect = candidate.getBoundingClientRect()
+            return rect.bottom > viewportRect.top && rect.top < viewportRect.bottom
+        })
+        const anchor = rows[anchorIndex]
+        if (!anchor) throw new Error('Expected a visible message anchor')
+        const replacement = anchor.cloneNode(true) as HTMLElement
+        replacement.id = `hapi-message-tool-call:rerendered-${Date.now()}`
+        replacement.removeAttribute('data-hapi-source-message-ids')
+        anchor.replaceWith(replacement)
+        return new Promise<{ id: string; offset: number; index: number }>((resolve) => {
+            requestAnimationFrame(() => {
+                const nextRect = element.getBoundingClientRect()
+                resolve({
+                    id: replacement.id,
+                    offset: replacement.getBoundingClientRect().top - nextRect.top,
+                    index: anchorIndex
+                })
+            })
+        })
+    })
+
+    const rerenderedAfter = await page.evaluate(({ id, index }) => {
+        const element = document.querySelector('.app-scroll-y') as HTMLElement
+        const rows = Array.from(document.querySelectorAll<HTMLElement>('.happy-thread-messages > [id]'))
+        return new Promise<number>((resolve) => {
+            // Let the mutation observer re-seat the anchor before the resize.
+            setTimeout(() => {
+                for (const row of rows.slice(Math.max(0, index - 150), Math.max(0, index - 100))) {
+                    row.style.display = 'none'
+                }
+                requestAnimationFrame(() => requestAnimationFrame(() => {
+                    const replacement = document.getElementById(id)
+                    if (!replacement) throw new Error('Expected the replacement row to remain rendered')
+                    resolve(replacement.getBoundingClientRect().top - element.getBoundingClientRect().top)
+                }))
+            }, 50)
+        })
+    }, rerendered)
+
+    expect(Math.abs(rerenderedAfter - rerendered.offset)).toBeLessThanOrEqual(2)
 })
