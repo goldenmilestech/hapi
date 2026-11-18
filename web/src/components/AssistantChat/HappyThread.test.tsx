@@ -18,6 +18,7 @@ import {
     restoreScrollAnchor,
     shouldLoadOlderForViewport,
     shouldCancelInitialScrollSettling,
+    shouldPreserveHistoryScrollAnchor,
     shouldRenderScrollToBottomButton,
     shouldShowScrollToBottomButton,
     ThreadMessagesById,
@@ -444,6 +445,35 @@ describe('scroll anchor helpers', () => {
             isScrollingUp: false
         })
         expect(shouldCancelInitialScrollSettling(intent, false)).toBe(false)
+    })
+
+    it('re-applies the history anchor while the reader owns the viewport', () => {
+        expect(shouldPreserveHistoryScrollAnchor({
+            hasAnchor: true,
+            autoScrollEnabled: false,
+            searchTargetLocked: false,
+            pendingScrollRestore: false,
+            tailScrollInProgress: false,
+            initialScrollSettling: false
+        })).toBe(true)
+    })
+
+    it('leaves viewport ownership to tail-following, jumps, loads, and settling', () => {
+        const base = {
+            hasAnchor: true,
+            autoScrollEnabled: false,
+            searchTargetLocked: false,
+            pendingScrollRestore: false,
+            tailScrollInProgress: false,
+            initialScrollSettling: false
+        }
+
+        expect(shouldPreserveHistoryScrollAnchor({ ...base, hasAnchor: false })).toBe(false)
+        expect(shouldPreserveHistoryScrollAnchor({ ...base, autoScrollEnabled: true })).toBe(false)
+        expect(shouldPreserveHistoryScrollAnchor({ ...base, searchTargetLocked: true })).toBe(false)
+        expect(shouldPreserveHistoryScrollAnchor({ ...base, pendingScrollRestore: true })).toBe(false)
+        expect(shouldPreserveHistoryScrollAnchor({ ...base, tailScrollInProgress: true })).toBe(false)
+        expect(shouldPreserveHistoryScrollAnchor({ ...base, initialScrollSettling: true })).toBe(false)
     })
 
     it('resolves a streamed card anchor to its raw message id, not the stream id', () => {

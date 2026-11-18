@@ -693,3 +693,73 @@ test('scroll events cannot bypass backoff before an epoch-reset stop', async ({ 
     )
     expect(afterStop).toBe(2)
 })
+
+// Regression: media cards inside a prepended page finish loading long after
+// the page applied. Browser scroll anchoring is disabled on message rows, so
+// a card that changes height above the viewport used to drag the reader's
+// content by the delta (in the field: several 250px image skeletons resolving
+// at once, ~1200px per event). The content ResizeObserver must re-apply the
+// stored history anchor before paint.
+test('keeps the reader anchor when content above the viewport resizes later', async ({ page }) => {
+    await page.goto('/e2e-fixtures/history-load-fixture.html')
+    const viewport = page.locator('.app-scroll-y')
+    await expect(viewport).toBeVisible()
+    await page.waitForTimeout(3500)
+
+    await viewport.dispatchEvent('pointerdown', { button: 0, pointerType: 'mouse' })
+    await page.evaluate(() => {
+        const element = document.querySelector('.app-scroll-y') as HTMLElement
+        element.scrollTop = 0
+        element.dispatchEvent(new Event('scroll'))
+    })
+    await viewport.dispatchEvent('pointerup', { button: 0, pointerType: 'mouse' })
+    await expect.poll(async () => await page.evaluate(() =>
+        window.__probe.requests.filter((request) => request.direction === 'before').length
+    )).toBe(1)
+    await page.waitForTimeout(1000)
+
+    const before = await page.evaluate(() => {
+        const element = document.querySelector('.app-scroll-y') as HTMLElement
+        const viewportRect = element.getBoundingClientRect()
+        const rows = Array.from(document.querySelectorAll<HTMLElement>('.happy-thread-messages > [id]'))
+        const anchor = rows.find((candidate) => {
+            const rect = candidate.getBoundingClientRect()
+            return rect.bottom > viewportRect.top && rect.top < viewportRect.bottom
+        })
+        if (!anchor) throw new Error('Expected a visible message anchor')
+        return {
+            id: anchor.id,
+            offset: anchor.getBoundingClientRect().top - viewportRect.top,
+            scrollTop: Math.round(element.scrollTop),
+            scrollHeight: Math.round(element.scrollHeight),
+            rows: rows.length
+        }
+    })
+
+    const after = await page.evaluate((anchorId) => {
+        const element = document.querySelector('.app-scroll-y') as HTMLElement
+        const rows = Array.from(document.querySelectorAll<HTMLElement>('.happy-thread-messages > [id]'))
+        // Mimic asynchronous cards above the viewport settling to a shorter
+        // height after the page was already rendered.
+        for (const row of rows.slice(0, 50)) {
+            row.style.display = 'none'
+        }
+        const anchor = document.getElementById(anchorId)
+        if (!anchor) throw new Error('Expected the anchor to remain rendered')
+        return new Promise<{ offset: number; scrollTop: number; scrollHeight: number }>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                const viewportRect = element.getBoundingClientRect()
+                resolve({
+                    offset: anchor.getBoundingClientRect().top - viewportRect.top,
+                    scrollTop: Math.round(element.scrollTop),
+                    scrollHeight: Math.round(element.scrollHeight)
+                })
+            }))
+        })
+    }, before.id)
+
+    expect(before.rows).toBeGreaterThan(100)
+    expect(after.scrollHeight).toBeLessThan(before.scrollHeight - 1000)
+    expect(after.scrollTop).toBeLessThan(before.scrollTop - 1000)
+    expect(Math.abs(after.offset - before.offset)).toBeLessThanOrEqual(2)
+})
