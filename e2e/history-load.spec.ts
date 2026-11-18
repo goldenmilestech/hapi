@@ -906,4 +906,63 @@ test('keeps the reader anchor when content above the viewport resizes later', as
     }, rerendered)
 
     expect(Math.abs(rerenderedAfter - rerendered.offset)).toBeLessThanOrEqual(2)
+
+    // A single assistant turn renders as one row that can span many
+    // screenfuls. A card inside that row can finish loading above the viewport
+    // while the row's own top never moves; a row-level anchor reports a zero
+    // correction for it. The anchor must descend to the topmost visible block
+    // inside the row instead.
+    const intraRow = await page.evaluate(() => {
+        const element = document.querySelector('.app-scroll-y') as HTMLElement
+        const viewportRect = element.getBoundingClientRect()
+        const rows = Array.from(document.querySelectorAll<HTMLElement>('.happy-thread-messages > [id]'))
+        const row = rows.find((candidate) => {
+            const rect = candidate.getBoundingClientRect()
+            return rect.bottom > viewportRect.top && rect.top < viewportRect.bottom
+        })
+        if (!row) throw new Error('Expected a visible anchor row')
+        const rowDocumentTop = row.getBoundingClientRect().top - viewportRect.top + element.scrollTop
+
+        // Build a row taller than the viewport: a card above the viewport top
+        // and a block that crosses it.
+        const cardAbove = document.createElement('div')
+        cardAbove.id = 'intra-row-card-above'
+        cardAbove.style.height = '600px'
+        const visibleBlock = document.createElement('div')
+        visibleBlock.id = 'intra-row-visible-block'
+        visibleBlock.style.height = '400px'
+        row.insertBefore(visibleBlock, row.firstChild)
+        row.insertBefore(cardAbove, visibleBlock)
+
+        // Put the viewport top 700px into the row, inside the visible block.
+        element.scrollTop = rowDocumentTop + 700
+        element.dispatchEvent(new Event('scroll'))
+
+        return new Promise<{ before: { scrollTop: number; offset: number }; after: { scrollTop: number; offset: number } }>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                const beforeRect = element.getBoundingClientRect()
+                const before = {
+                    scrollTop: Math.round(element.scrollTop),
+                    offset: Math.round(visibleBlock.getBoundingClientRect().top - beforeRect.top)
+                }
+                // The card above the viewport finishes loading and grows; it
+                // sits inside the anchored row, so the row top stays put.
+                cardAbove.style.height = '1100px'
+                requestAnimationFrame(() => requestAnimationFrame(() => {
+                    const afterRect = element.getBoundingClientRect()
+                    resolve({
+                        before,
+                        after: {
+                            scrollTop: Math.round(element.scrollTop),
+                            offset: Math.round(visibleBlock.getBoundingClientRect().top - afterRect.top)
+                        }
+                    })
+                }))
+            }))
+        })
+    })
+
+    expect(intraRow.before.scrollTop).toBeGreaterThan(1000)
+    expect(intraRow.after.scrollTop).toBeGreaterThan(intraRow.before.scrollTop + 400)
+    expect(Math.abs(intraRow.after.offset - intraRow.before.offset)).toBeLessThanOrEqual(2)
 })

@@ -6,6 +6,7 @@ import {
     ConversationOutlinePanel,
     anchorMessageIdFromAnchor,
     captureScrollAnchor,
+    captureTopVisibleDescendant,
     computeHistoryAnchorCorrection,
     getHistoryCoverageRetryDelay,
     getPullToLoadState,
@@ -515,6 +516,48 @@ describe('scroll anchor helpers', () => {
             id: 'row-2',
             topOffset: -10
         })
+
+        viewport.remove()
+    })
+
+    it('anchors on the topmost visible block inside a row taller than the viewport', () => {
+        const viewport = document.createElement('div')
+        const messages = document.createElement('div')
+        messages.className = 'happy-thread-messages'
+        viewport.append(messages)
+        document.body.append(viewport)
+
+        const row = document.createElement('div')
+        row.id = 'hapi-message-agent-reasoning:turn-1'
+        messages.append(row)
+
+        // The row spans several screenfuls. One block sits entirely above the
+        // viewport top; the next one crosses it and holds the visible text.
+        const above = document.createElement('div')
+        const crossing = document.createElement('div')
+        const text = document.createElement('p')
+        crossing.append(text)
+        row.append(above, crossing)
+
+        vi.spyOn(viewport, 'getBoundingClientRect').mockReturnValue(rect({ top: 100, bottom: 500 }))
+        vi.spyOn(row, 'getBoundingClientRect').mockReturnValue(rect({ top: -500, bottom: 1400 }))
+        vi.spyOn(above, 'getBoundingClientRect').mockReturnValue(rect({ top: -500, bottom: 60 }))
+        vi.spyOn(crossing, 'getBoundingClientRect').mockReturnValue(rect({ top: 60, bottom: 600 }))
+        vi.spyOn(text, 'getBoundingClientRect').mockReturnValue(rect({ top: 70, bottom: 120 }))
+
+        // A row-level anchor would report the row top and miss every resize
+        // that happens inside it above the viewport.
+        expect(captureTopVisibleDescendant(viewport, row, 100)).toBe(text)
+
+        // Sticky boxes do not move with their parent, so they cannot anchor.
+        text.style.position = 'sticky'
+        expect(captureTopVisibleDescendant(viewport, row, 100)).toBe(crossing)
+
+        // A row whose top is already the topmost visible block stays the
+        // anchor when no child crosses the viewport top.
+        vi.spyOn(above, 'getBoundingClientRect').mockReturnValue(rect({ top: 120, bottom: 180 }))
+        vi.spyOn(crossing, 'getBoundingClientRect').mockReturnValue(rect({ top: 180, bottom: 600 }))
+        expect(captureTopVisibleDescendant(viewport, row, 100)).toBe(row)
 
         viewport.remove()
     })
