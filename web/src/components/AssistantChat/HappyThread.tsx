@@ -330,6 +330,65 @@ export function captureScrollAnchor(viewport: HTMLElement): ScrollAnchor | null 
 }
 
 /**
+ * The deepest descendant of `row` that still crosses the viewport top.
+ *
+ * An assistant turn renders as one row that can span many screenfuls, and a
+ * card nested inside it can finish loading above the viewport while the row's
+ * own top never moves. Anchoring on the row top reports a zero correction for
+ * that resize; anchoring on the topmost visible block measures it. Descend
+ * binary-search style because row children are laid out top to bottom, and
+ * stop at sticky/fixed boxes that do not scroll with their parent.
+ */
+export function captureTopVisibleDescendant(
+    viewport: HTMLElement,
+    row: HTMLElement,
+    viewportTop: number
+): HTMLElement {
+    const maxDepth = 8
+    const minimumHeightPx = 4
+    let current = row
+    for (let depth = 0; depth < maxDepth; depth += 1) {
+        const children = current.children
+        if (children.length === 0) {
+            break
+        }
+        let low = 0
+        let high = children.length - 1
+        let candidate: HTMLElement | null = null
+        while (low <= high) {
+            const middle = (low + high) >> 1
+            const child = children[middle]
+            if (!(child instanceof HTMLElement)) {
+                break
+            }
+            const rect = child.getBoundingClientRect()
+            if (rect.top <= viewportTop) {
+                candidate = child
+                low = middle + 1
+            } else {
+                high = middle - 1
+            }
+        }
+        if (!candidate) {
+            break
+        }
+        const rect = candidate.getBoundingClientRect()
+        if (rect.bottom <= viewportTop || rect.height < minimumHeightPx) {
+            break
+        }
+        if (!viewport.contains(candidate)) {
+            break
+        }
+        const position = window.getComputedStyle(candidate).position
+        if (position === 'sticky' || position === 'fixed') {
+            break
+        }
+        current = candidate
+    }
+    return current
+}
+
+/**
  * Where the anchored row should appear after the reader scrolled
  * `baselineScrollTop -> currentScrollTop` without any layout change, and how
  * much the viewport must move to get back there. The ResizeObserver applies
@@ -349,6 +408,15 @@ export function computeHistoryAnchorCorrection(params: {
 type HistoryScrollAnchor = {
     anchor: ScrollAnchor
     element: HTMLElement
+    /**
+     * Deepest block crossing the viewport top at capture time. A row can be
+     * taller than the screen, and a resize above the viewport inside it leaves
+     * the row top untouched; this element is what the correction measures.
+     * Null when the row itself is already the topmost visible block.
+     */
+    fineElement: HTMLElement | null
+    /** `fineElement` viewport offset while `scrollTop` was at the baseline. */
+    fineTopOffset: number | null
     /** Stable raw message id behind the row, used when a page apply re-keys a
      *  tool group and the old row id disappears. */
     sourceMessageId: string | null
@@ -368,9 +436,16 @@ function captureHistoryScrollAnchor(viewport: HTMLElement): HistoryScrollAnchor 
     if (!(element instanceof HTMLElement) || !viewport.contains(element)) {
         return null
     }
+    const viewportRect = viewport.getBoundingClientRect()
+    const fineElement = captureTopVisibleDescendant(viewport, element, viewportRect.top)
+    const hasFineElement = fineElement !== element
     return {
         anchor,
         element,
+        fineElement: hasFineElement ? fineElement : null,
+        fineTopOffset: hasFineElement
+            ? fineElement.getBoundingClientRect().top - viewportRect.top
+            : null,
         sourceMessageId: anchorMessageIdFromAnchor(anchor),
         scrollTop: viewport.scrollTop,
         scrollHeight: viewport.scrollHeight
@@ -1924,15 +1999,29 @@ export function HappyThread(props: {
         if (!saved) {
             return false
         }
-        const target = resolveHistoryAnchorElement(saved, viewport)
-        if (!target) {
-            historyAnchorRef.current = null
-            return false
-        }
         const viewportRect = viewport.getBoundingClientRect()
-        const currentAnchorOffset = target.getBoundingClientRect().top - viewportRect.top
+        const fine = saved.fineElement
+        let anchorTopOffset: number
+        let currentAnchorOffset: number
+        if (
+            fine !== null
+            && saved.fineTopOffset !== null
+            && fine.isConnected
+            && viewport.contains(fine)
+        ) {
+            anchorTopOffset = saved.fineTopOffset
+            currentAnchorOffset = fine.getBoundingClientRect().top - viewportRect.top
+        } else {
+            const target = resolveHistoryAnchorElement(saved, viewport)
+            if (!target) {
+                historyAnchorRef.current = null
+                return false
+            }
+            anchorTopOffset = saved.anchor.topOffset
+            currentAnchorOffset = target.getBoundingClientRect().top - viewportRect.top
+        }
         const correction = computeHistoryAnchorCorrection({
-            anchorTopOffset: saved.anchor.topOffset,
+            anchorTopOffset,
             baselineScrollTop: saved.scrollTop,
             currentScrollTop: viewport.scrollTop,
             currentAnchorOffset
@@ -2788,7 +2877,15 @@ export function HappyThread(props: {
                 return
             }
             if (saved && resolveHistoryAnchorElement(saved, viewport)) {
-                return
+                // The row survived, but a re-render may have replaced the
+                // inner block the correction measures. Re-seat only when no
+                // resize is pending: a fresh baseline captured mid-resize
+                // would absorb the shift the ResizeObserver must correct.
+                const fineMissing = saved.fineElement !== null && !saved.fineElement.isConnected
+                const resizePending = Math.abs(viewport.scrollHeight - saved.scrollHeight) > 0.5
+                if (!fineMissing || resizePending) {
+                    return
+                }
             }
             const next = captureHistoryScrollAnchor(viewport)
             if (next) {
