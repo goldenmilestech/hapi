@@ -58,24 +58,50 @@ function readAgentPayload(message: StoredMessage): RecordValue | null {
     return asRecord(asRecord(envelope?.content)?.data)
 }
 
+type RoundTiming = {
+    source: 'turn_duration' | 'round-summary'
+    generationMs: number | null
+    outputTokens: number | null
+    /** Whether generationMs is already this turn's delta. */
+    perTurnGeneration: boolean
+    /** Claude's cumulative API-active clock, when the row carries it. */
+    cumulativeApiMs: number | null
+}
+
 /** Provider-reported generation time. */
-function readRoundTiming(content: unknown): { generationMs: number | null; outputTokens: number | null } | null {
+function readRoundTiming(content: unknown): RoundTiming | null {
     const payload = asRecord(asRecord(content)?.content)
     const data = asRecord(payload?.data)
     if (!data) return null
-    // OpenCode/agy emit a HAPI-owned round summary; Claude reports the same
-    // numbers on its turn_duration result carrier, with `duration_api_ms` as
-    // generation time (tool waits are already outside that clock).
-    const summary = data.type === 'round-summary'
-        ? asRecord(data.summary)
-        : data.type === 'system' && data.subtype === 'turn_duration'
-            ? asRecord(data.resultSummary)
-            : null
-    if (!summary) return null
-    const generationMs = nonNegativeNumber(summary.generation_ms)
-    const outputTokens = nonNegativeNumber(summary.generation_output_tokens)
-    if (generationMs === null && outputTokens === null) return null
-    return { generationMs, outputTokens }
+    // OpenCode/agy emit a HAPI-owned per-turn round summary.
+    if (data.type === 'round-summary') {
+        const summary = asRecord(data.summary)
+        if (!summary) return null
+        return {
+            source: 'round-summary',
+            generationMs: nonNegativeNumber(summary.generation_ms),
+            outputTokens: nonNegativeNumber(summary.generation_output_tokens),
+            perTurnGeneration: true,
+            cumulativeApiMs: null
+        }
+    }
+    // Claude reports the same numbers on its turn_duration result carrier.
+    // `duration_api_ms` is API-active time (tool waits are outside it) but
+    // cumulative across the streaming-input session. Rows written before the
+    // CLI started storing the per-turn delta keep the cumulative value in
+    // generation_ms and must be diffed here; new rows mark the scope.
+    if (data.type === 'system' && data.subtype === 'turn_duration') {
+        const summary = asRecord(data.resultSummary)
+        if (!summary) return null
+        return {
+            source: 'turn_duration',
+            generationMs: nonNegativeNumber(summary.generation_ms),
+            outputTokens: nonNegativeNumber(summary.generation_output_tokens),
+            perTurnGeneration: summary.generation_ms_scope === 'turn',
+            cumulativeApiMs: nonNegativeNumber(summary.api_duration_ms)
+        }
+    }
+    return null
 }
 
 /** A row that cannot be emitted while a model request is still generating. */
@@ -214,8 +240,9 @@ function dedupeUsageEvents(events: UsageEvent[]): UsageEvent[] {
  * window.
  *
  * Throughput uses the best available timing:
- * 1. provider-reported `generation_ms` (round summaries and Claude's
- *    turn_duration carrier) — both exclude tool execution;
+ * 1. provider-reported generation time — round summaries, or Claude's
+ *    turn_duration carrier. Claude reports API-active time cumulatively, so
+ *    rows are folded into per-turn deltas; both exclude tool execution;
  * 2. otherwise the window from the last tool result or prompt to the last
  *    usage row of a provider request. Tool results are stored when the tool
  *    finishes, so this window covers generation only and excludes tool time.
@@ -230,6 +257,7 @@ export function computeSessionStats(store: Store, sessionId: string): SessionSta
     let turns = 0
     let roundGenerationMs = 0
     let roundOutputTokens = 0
+    let previousClaudeApiMs: number | null = null
     let lastBarrierAt: number | null = null
     let currentWindow: GenerationWindow | null = null
     const scannedEvents: UsageEvent[] = []
@@ -261,10 +289,29 @@ export function computeSessionStats(store: Store, sessionId: string): SessionSta
             lastBarrierAt = message.createdAt
         }
         const round = readRoundTiming(message.content)
-        if (round && round.generationMs !== null && round.generationMs > 0
-            && round.outputTokens !== null && round.outputTokens > 0) {
-            roundGenerationMs += round.generationMs
-            roundOutputTokens += round.outputTokens
+        if (round) {
+            let generationMs = round.generationMs
+            if (round.source === 'turn_duration') {
+                // `generation_ms` used to hold Claude's cumulative API clock;
+                // turn it into this round's delta. New rows already carry the
+                // delta and an explicit cumulative `api_duration_ms`, which is
+                // still needed to step over error/compaction rounds that emit
+                // no rate of their own.
+                if (!round.perTurnGeneration && generationMs !== null) {
+                    const previous = previousClaudeApiMs
+                    generationMs = previous !== null && generationMs >= previous
+                        ? generationMs - previous
+                        : generationMs
+                }
+                const cumulative = round.cumulativeApiMs
+                    ?? (round.perTurnGeneration ? null : round.generationMs)
+                if (cumulative !== null) previousClaudeApiMs = cumulative
+            }
+            if (generationMs !== null && generationMs > 0
+                && round.outputTokens !== null && round.outputTokens > 0) {
+                roundGenerationMs += generationMs
+                roundOutputTokens += round.outputTokens
+            }
         }
     }
 

@@ -366,7 +366,71 @@ describe('SDKToLogConverter', () => {
             // execution and permission waits are already outside it.
             expect(summaryOf(logMessage)).toMatchObject({
                 generation_ms: 2500,
-                generation_output_tokens: 200
+                generation_output_tokens: 200,
+                generation_ms_scope: 'turn',
+                api_duration_ms: 2500
+            })
+        })
+
+        it('stores the delta of Claude\'s cumulative API clock', () => {
+            const first: SDKResultMessage = {
+                type: 'result',
+                subtype: 'success',
+                num_turns: 1,
+                usage: { input_tokens: 100, output_tokens: 200 },
+                total_cost_usd: 0.05,
+                duration_ms: 3000,
+                duration_api_ms: 2500,
+                is_error: false,
+                session_id: 'result-session'
+            }
+            const second: SDKResultMessage = {
+                ...first,
+                usage: { input_tokens: 100, output_tokens: 150 },
+                duration_ms: 2000,
+                duration_api_ms: 4000
+            }
+
+            expect(summaryOf(converter.convert(first))).toMatchObject({
+                generation_ms: 2500,
+                api_duration_ms: 2500
+            })
+            // Claude reports duration_api_ms cumulatively in streaming-input
+            // sessions; the second round's own API time is 1500ms.
+            expect(summaryOf(converter.convert(second))).toMatchObject({
+                generation_ms: 1500,
+                generation_output_tokens: 150,
+                generation_ms_scope: 'turn',
+                api_duration_ms: 4000
+            })
+        })
+
+        it('does not carry an errored round\'s API time into the next rate', () => {
+            const failed: SDKResultMessage = {
+                type: 'result',
+                subtype: 'error_during_execution',
+                num_turns: 1,
+                usage: { input_tokens: 100, output_tokens: 50 },
+                total_cost_usd: 0.01,
+                duration_ms: 4000,
+                duration_api_ms: 4500,
+                is_error: true,
+                session_id: 'result-session'
+            }
+            const recovered: SDKResultMessage = {
+                ...failed,
+                subtype: 'success',
+                usage: { input_tokens: 100, output_tokens: 100 },
+                duration_ms: 2000,
+                duration_api_ms: 6000,
+                is_error: false
+            }
+
+            expect(summaryOf(converter.convert(failed))).not.toHaveProperty('generation_ms')
+            // 6000ms cumulative minus the failed round's 4500ms.
+            expect(summaryOf(converter.convert(recovered))).toMatchObject({
+                generation_ms: 1500,
+                generation_output_tokens: 100
             })
         })
 

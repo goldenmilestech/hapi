@@ -110,6 +110,10 @@ export class SDKToLogConverter {
     // window (capped by DISABLE_1M / autoCompactWindow), so a result's raw contextWindow
     // must not overwrite it.
     private contextUsageKeys = new Set<string>()
+    // Claude reports duration_api_ms cumulatively across the streaming-input
+    // session, so each result's tok/s must use the delta from the previous
+    // result. Kept per converter (one converter per Claude process).
+    private lastResultApiMs: number | null = null
     private accountIdentity: string | null
 
     constructor(
@@ -503,7 +507,12 @@ export class SDKToLogConverter {
                         total_cost_usd: resultMsg.total_cost_usd,
                         num_turns: resultMsg.num_turns,
                         duration_ms: resultMsg.duration_ms,
-                        ...claudeGenerationFields(resultMsg)
+                        // Kept even on skipped rounds so readers can advance the
+                        // cumulative API clock without inventing a delta.
+                        ...(typeof resultMsg.duration_api_ms === 'number'
+                            ? { api_duration_ms: resultMsg.duration_api_ms }
+                            : {}),
+                        ...this.claudeGenerationFields(resultMsg)
                     }
                 }
                 break
@@ -641,8 +650,39 @@ export class SDKToLogConverter {
         
         // Update last UUID for tracking
         this.lastUuid = uuid
-        
+
         return logMessage
+    }
+
+    /**
+     * tok/s fields from one result. Claude Code's `duration_api_ms` is
+     * cumulative across the streaming-input session and excludes tool waits,
+     * so the stored `generation_ms` is the delta since the previous result.
+     * Errored and manual-compaction rounds still advance the clock but emit no
+     * rate: their API time must not leak into the next round's window.
+     */
+    private claudeGenerationFields(resultMsg: SDKResultMessage): Record<string, unknown> {
+        const cumulativeApiMs = resultMsg.duration_api_ms
+        if (typeof cumulativeApiMs !== 'number' || !Number.isSafeInteger(cumulativeApiMs) || cumulativeApiMs < 0) {
+            return {}
+        }
+        const previous = this.lastResultApiMs
+        this.lastResultApiMs = cumulativeApiMs
+        if (resultMsg.is_error || resultMsg.hapi_compact_turn === true) return {}
+        const generationMs = previous !== null && cumulativeApiMs >= previous
+            ? cumulativeApiMs - previous
+            : cumulativeApiMs
+        const outputTokens = resultMsg.usage?.output_tokens
+        const measurable = (value: unknown): value is number =>
+            typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+        if (!measurable(generationMs) || !measurable(outputTokens)) return {}
+        return {
+            generation_ms: generationMs,
+            generation_output_tokens: outputTokens,
+            // Marks the value as a per-turn delta. Older rows stored Claude's
+            // cumulative clock under generation_ms; readers must diff those.
+            generation_ms_scope: 'turn'
+        }
     }
 }
 
@@ -656,21 +696,4 @@ export function convertSDKToLog(
 ): RawJSONLines | null {
     const converter = new SDKToLogConverter(context, responses)
     return converter.convert(sdkMessage)
-}
-
-/**
- * tok/s fields straight from the result: `duration_api_ms` is Claude Code's
- * own API-active time (tool execution and permission waits are already
- * outside it), and the round's output tokens. Errored rounds and manual
- * compaction turns have no meaningful generation rate, so they emit nothing
- * rather than a wrong one.
- */
-function claudeGenerationFields(resultMsg: SDKResultMessage): { generation_ms: number; generation_output_tokens: number } | Record<string, never> {
-    if (resultMsg.is_error || resultMsg.hapi_compact_turn === true) return {}
-    const generationMs = resultMsg.duration_api_ms
-    const outputTokens = resultMsg.usage?.output_tokens
-    const measurable = (value: unknown): value is number =>
-        typeof value === 'number' && Number.isSafeInteger(value) && value > 0
-    if (!measurable(generationMs) || !measurable(outputTokens)) return {}
-    return { generation_ms: generationMs, generation_output_tokens: outputTokens }
 }
