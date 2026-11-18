@@ -82,7 +82,12 @@ function roundSummaryMessage(generationMs: number, generationOutputTokens: numbe
     }
 }
 
-function turnDurationMessage(durationMs: number, generationMs: number, outputTokens: number) {
+function turnDurationMessage(
+    durationMs: number,
+    generationMs: number,
+    outputTokens: number,
+    options: { perTurn?: boolean; apiDurationMs?: number } = {}
+) {
     return {
         role: 'agent',
         content: {
@@ -95,7 +100,30 @@ function turnDurationMessage(durationMs: number, generationMs: number, outputTok
                     usage: { input_tokens: 0, output_tokens: outputTokens },
                     duration_ms: durationMs,
                     generation_ms: generationMs,
-                    generation_output_tokens: outputTokens
+                    generation_output_tokens: outputTokens,
+                    ...(options.perTurn ? { generation_ms_scope: 'turn' } : {}),
+                    ...(options.apiDurationMs !== undefined ? { api_duration_ms: options.apiDurationMs } : {})
+                }
+            }
+        },
+        meta: { sentFrom: 'cli' }
+    }
+}
+
+/** Error/compaction rounds emit no rate but still advance Claude's API clock. */
+function skippedTurnDurationMessage(durationMs: number, apiDurationMs: number) {
+    return {
+        role: 'agent',
+        content: {
+            type: 'output',
+            data: {
+                type: 'system',
+                subtype: 'turn_duration',
+                durationMs,
+                resultSummary: {
+                    usage: { input_tokens: 0, output_tokens: 0 },
+                    duration_ms: durationMs,
+                    api_duration_ms: apiDurationMs
                 }
             }
         },
@@ -251,7 +279,8 @@ describe('computeSessionStats', () => {
         store.messages.addMessage(session.id, turnDurationMessage(4_000, 800, 30), undefined, null, 5_100)
         store.messages.addMessage(session.id, userMessage('more'), undefined, null, 6_000)
         store.messages.addMessage(session.id, assistantMessage({ id: 'msg-2', input: 100, output: 20 }), undefined, null, 9_000)
-        store.messages.addMessage(session.id, turnDurationMessage(3_000, 600, 20), undefined, null, 9_100)
+        // Claude's carrier stores the cumulative API clock, not this turn's 600ms.
+        store.messages.addMessage(session.id, turnDurationMessage(3_000, 1_400, 20), undefined, null, 9_100)
 
         const stats = computeSessionStats(store, session.id)
 
@@ -259,6 +288,72 @@ describe('computeSessionStats', () => {
         expect(stats.generationOutputTokens).toBe(50)
         // 1000ms + 1000ms per request; the provider clock wins over these windows.
         expect(stats.toolMs).toBeNull()
+    })
+
+    it('folds the cumulative Claude API clock into per-turn deltas', () => {
+        const store = makeStore()
+        const session = makeSession(store)
+        store.messages.addMessage(session.id, userMessage('go'), undefined, null, 1_000)
+        store.messages.addMessage(session.id, assistantMessage({ id: 'msg-1', input: 100, output: 40 }), undefined, null, 5_000)
+        store.messages.addMessage(session.id, turnDurationMessage(6_000, 3_000, 30), undefined, null, 5_100)
+        store.messages.addMessage(session.id, userMessage('more'), undefined, null, 6_000)
+        store.messages.addMessage(session.id, assistantMessage({ id: 'msg-2', input: 100, output: 20 }), undefined, null, 9_000)
+        store.messages.addMessage(session.id, turnDurationMessage(4_000, 5_000, 20), undefined, null, 9_100)
+
+        const stats = computeSessionStats(store, session.id)
+
+        // Deltas are 3000ms and 2000ms, not the cumulative 3000ms + 5000ms.
+        expect(stats.generationMs).toBe(5_000)
+        expect(stats.generationOutputTokens).toBe(50)
+    })
+
+    it('steps over skipped Claude rounds between per-turn deltas', () => {
+        const store = makeStore()
+        const session = makeSession(store)
+        store.messages.addMessage(session.id, userMessage('go'), undefined, null, 1_000)
+        store.messages.addMessage(session.id, assistantMessage({ id: 'msg-1', input: 100, output: 40 }), undefined, null, 5_000)
+        store.messages.addMessage(session.id, turnDurationMessage(6_000, 3_000, 30, {
+            perTurn: true,
+            apiDurationMs: 3_000
+        }), undefined, null, 5_100)
+        // An error/compaction round has no generation rate but consumed 2s of API time.
+        store.messages.addMessage(session.id, skippedTurnDurationMessage(2_000, 5_000), undefined, null, 6_000)
+        store.messages.addMessage(session.id, userMessage('more'), undefined, null, 7_000)
+        store.messages.addMessage(session.id, assistantMessage({ id: 'msg-2', input: 100, output: 20 }), undefined, null, 9_000)
+        store.messages.addMessage(session.id, turnDurationMessage(3_000, 1_000, 20, {
+            perTurn: true,
+            apiDurationMs: 6_000
+        }), undefined, null, 9_100)
+
+        const stats = computeSessionStats(store, session.id)
+
+        // 3000ms + 1000ms; the skipped round's 2000ms is neither counted nor carried.
+        expect(stats.generationMs).toBe(4_000)
+        expect(stats.generationOutputTokens).toBe(50)
+    })
+
+    it('does not diff rows that are already marked per-turn', () => {
+        const store = makeStore()
+        const session = makeSession(store)
+        store.messages.addMessage(session.id, userMessage('go'), undefined, null, 1_000)
+        store.messages.addMessage(session.id, assistantMessage({ id: 'msg-1', input: 100, output: 40 }), undefined, null, 5_000)
+        store.messages.addMessage(session.id, turnDurationMessage(6_000, 3_000, 30, {
+            perTurn: true,
+            apiDurationMs: 3_000
+        }), undefined, null, 5_100)
+        store.messages.addMessage(session.id, userMessage('more'), undefined, null, 6_000)
+        store.messages.addMessage(session.id, assistantMessage({ id: 'msg-2', input: 100, output: 20 }), undefined, null, 9_000)
+        store.messages.addMessage(session.id, turnDurationMessage(4_000, 4_000, 20, {
+            perTurn: true,
+            apiDurationMs: 7_000
+        }), undefined, null, 9_100)
+
+        const stats = computeSessionStats(store, session.id)
+
+        // The second row's 4000ms is already its delta; diffing against the
+        // 3000ms cumulative clock would wrongly yield 7000/1000ms.
+        expect(stats.generationMs).toBe(7_000)
+        expect(stats.generationOutputTokens).toBe(50)
     })
 
     it('times Codex requests from the last tool result and reports tool time', () => {
