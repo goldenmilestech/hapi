@@ -809,4 +809,50 @@ test('keeps the reader anchor when content above the viewport resizes later', as
     // Scrolling up by 200 moves the row down by 200; the resize above it must
     // not move it any further.
     expect(Math.abs(scrolled.after.offset - (scrolled.before.offset + 200))).toBeLessThanOrEqual(2)
+
+    // Page applies re-key tool groups: the anchored row can be replaced by a
+    // new element with a new id while the same content stays rendered. The
+    // stable source message id must recover it instead of dropping the anchor.
+    const rekeyed = await page.evaluate(() => {
+        const element = document.querySelector('.app-scroll-y') as HTMLElement
+        // Force a fresh baseline capture on the current row.
+        element.scrollTop -= 20
+        element.dispatchEvent(new Event('scroll'))
+        const viewportRect = element.getBoundingClientRect()
+        const rows = Array.from(document.querySelectorAll<HTMLElement>('.happy-thread-messages > [id]'))
+        const anchorIndex = rows.findIndex((candidate) => {
+            const rect = candidate.getBoundingClientRect()
+            return rect.bottom > viewportRect.top && rect.top < viewportRect.bottom
+        })
+        const anchor = rows[anchorIndex]
+        if (!anchor) throw new Error('Expected a visible message anchor')
+        const sourceId = anchor.id.replace(/^hapi-message-[^:]+:/, '').split(':')[0] ?? ''
+        const before = {
+            offset: anchor.getBoundingClientRect().top - viewportRect.top,
+            scrollTop: Math.round(element.scrollTop),
+            scrollHeight: Math.round(element.scrollHeight)
+        }
+        const replacement = anchor.cloneNode(true) as HTMLElement
+        replacement.id = `hapi-message-tool-group:tool-group:rekeyed-${Date.now()}`
+        replacement.setAttribute('data-hapi-source-message-ids', sourceId)
+        anchor.replaceWith(replacement)
+        for (const row of rows.slice(Math.max(0, anchorIndex - 100), Math.max(0, anchorIndex - 50))) {
+            row.style.display = 'none'
+        }
+        return new Promise<{ before: typeof before; after: { offset: number; scrollTop: number } }>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                const nextRect = element.getBoundingClientRect()
+                resolve({
+                    before,
+                    after: {
+                        offset: replacement.getBoundingClientRect().top - nextRect.top,
+                        scrollTop: Math.round(element.scrollTop)
+                    }
+                })
+            }))
+        })
+    })
+
+    expect(rekeyed.after.scrollTop).toBeLessThan(rekeyed.before.scrollTop - 1000)
+    expect(Math.abs(rekeyed.after.offset - rekeyed.before.offset)).toBeLessThanOrEqual(2)
 })

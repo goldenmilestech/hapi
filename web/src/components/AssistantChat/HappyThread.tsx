@@ -349,6 +349,9 @@ export function computeHistoryAnchorCorrection(params: {
 type HistoryScrollAnchor = {
     anchor: ScrollAnchor
     element: HTMLElement
+    /** Stable raw message id behind the row, used when a page apply re-keys a
+     *  tool group and the old row id disappears. */
+    sourceMessageId: string | null
     /** Viewport scrollTop when `anchor.topOffset` was last known correct. */
     scrollTop: number
     /** Content height at that moment; a different height means a resize is
@@ -368,9 +371,44 @@ function captureHistoryScrollAnchor(viewport: HTMLElement): HistoryScrollAnchor 
     return {
         anchor,
         element,
+        sourceMessageId: anchorMessageIdFromAnchor(anchor),
         scrollTop: viewport.scrollTop,
         scrollHeight: viewport.scrollHeight
     }
+}
+
+/**
+ * Resolve the row behind a stored anchor. Page applies re-key tool groups
+ * (the row id switches between the first and last tool id), so the captured
+ * element/id can vanish while the same content is still rendered under a new
+ * row. Fall back to the stable source message id carried by the new row.
+ */
+export function resolveHistoryAnchorElement(
+    saved: Pick<HistoryScrollAnchor, 'anchor' | 'element' | 'sourceMessageId'>,
+    viewport: HTMLElement
+): HTMLElement | null {
+    if (saved.element.isConnected && viewport.contains(saved.element)) {
+        return saved.element
+    }
+    const direct = document.getElementById(saved.anchor.id)
+    if (direct instanceof HTMLElement && viewport.contains(direct)) {
+        return direct
+    }
+    const sourceId = saved.sourceMessageId
+    if (!sourceId) {
+        return null
+    }
+    for (const row of Array.from(viewport.querySelectorAll<HTMLElement>(MESSAGE_ANCHOR_SELECTOR))) {
+        const values = [
+            row.getAttribute('data-hapi-source-message-id'),
+            row.getAttribute('data-hapi-source-message-ids'),
+            row.getAttribute('data-hapi-source-part-message-ids')
+        ]
+        if (values.some((value) => value !== null && value.split(/\s+/).includes(sourceId))) {
+            return row
+        }
+    }
+    return null
 }
 
 export function restoreScrollAnchor(viewport: HTMLElement, anchor: ScrollAnchor): boolean {
@@ -1886,10 +1924,8 @@ export function HappyThread(props: {
         if (!saved) {
             return false
         }
-        const target = saved.element.isConnected
-            ? saved.element
-            : document.getElementById(saved.anchor.id)
-        if (!(target instanceof HTMLElement) || !viewport.contains(target)) {
+        const target = resolveHistoryAnchorElement(saved, viewport)
+        if (!target) {
             historyAnchorRef.current = null
             return false
         }
