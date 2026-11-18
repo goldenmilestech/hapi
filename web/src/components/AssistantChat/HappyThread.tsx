@@ -2763,6 +2763,42 @@ export function HappyThread(props: {
         scheduleCoverageAfterSettling
     ])
 
+    // A store update or page apply can re-create the rendered rows (tool
+    // groups re-key, the window is trimmed) without a scroll event, leaving
+    // the stored anchor pointing at an element that no longer exists. Refresh
+    // it right after the mutation so the next asynchronous card resize still
+    // has a resolvable row. In-flight prepends are skipped: their layout
+    // effect restores and re-baselines the anchor itself.
+    useEffect(() => {
+        const content = contentRef.current
+        if (!content || typeof MutationObserver === 'undefined') {
+            return
+        }
+        const observer = new MutationObserver(() => {
+            const viewport = viewportRef.current
+            const saved = historyAnchorRef.current
+            if (
+                !viewport
+                || autoScrollEnabledRef.current
+                || searchTargetHistoryLockRef.current
+                || pendingScrollRef.current !== null
+                || pendingForwardAnchorRef.current !== null
+                || isInitialScrollSettling()
+            ) {
+                return
+            }
+            if (saved && resolveHistoryAnchorElement(saved, viewport)) {
+                return
+            }
+            const next = captureHistoryScrollAnchor(viewport)
+            if (next) {
+                historyAnchorRef.current = next
+            }
+        })
+        observer.observe(content, { childList: true, subtree: true })
+        return () => observer.disconnect()
+    }, [isInitialScrollSettling])
+
     useLayoutEffect(() => {
         const forwardAnchor = pendingForwardAnchorRef.current
         if (forwardAnchor) {
