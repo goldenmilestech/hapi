@@ -17,6 +17,7 @@ import {
     locateOutlineTargetMessage,
     prependMissingUserSnapshot,
     restoreScrollAnchor,
+    resolveHistoryAnchorElement,
     shouldLoadOlderForViewport,
     shouldCancelInitialScrollSettling,
     shouldPreserveHistoryScrollAnchor,
@@ -514,6 +515,38 @@ describe('scroll anchor helpers', () => {
             id: 'row-2',
             topOffset: -10
         })
+
+        viewport.remove()
+    })
+
+    it('recovers a re-keyed anchor through its source message id', () => {
+        const viewport = document.createElement('div')
+        const messages = document.createElement('div')
+        messages.className = 'happy-thread-messages'
+        viewport.append(messages)
+        document.body.append(viewport)
+
+        const original = document.createElement('div')
+        original.id = 'hapi-message-tool-call:msg-1'
+        messages.append(original)
+
+        const replacement = document.createElement('div')
+        replacement.id = 'hapi-message-tool-group:tool-group:call-2'
+        replacement.setAttribute('data-hapi-source-message-ids', 'msg-0 msg-1')
+
+        const saved = {
+            anchor: { id: original.id, topOffset: 10 },
+            element: original,
+            sourceMessageId: 'msg-1'
+        }
+
+        // A page apply re-creates the row under a new id; the old element is
+        // gone and getElementById can no longer find the anchor.
+        original.remove()
+        messages.append(replacement)
+
+        expect(resolveHistoryAnchorElement(saved, viewport)).toBe(replacement)
+        expect(resolveHistoryAnchorElement({ ...saved, sourceMessageId: null }, viewport)).toBeNull()
 
         viewport.remove()
     })
