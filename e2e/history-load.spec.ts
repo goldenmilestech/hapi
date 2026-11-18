@@ -762,4 +762,51 @@ test('keeps the reader anchor when content above the viewport resizes later', as
     expect(after.scrollHeight).toBeLessThan(before.scrollHeight - 1000)
     expect(after.scrollTop).toBeLessThan(before.scrollTop - 1000)
     expect(Math.abs(after.offset - before.offset)).toBeLessThanOrEqual(2)
+
+    // Same regression while the reader is actively scrolling: the scroll and
+    // the resize land in the same frame. The scroll event must not re-baseline
+    // onto the already-shifted position; the correction is measured from the
+    // pre-resize baseline plus the scroll delta.
+    const scrolled = await page.evaluate(() => {
+        const element = document.querySelector('.app-scroll-y') as HTMLElement
+        const viewportRect = element.getBoundingClientRect()
+        const rows = Array.from(document.querySelectorAll<HTMLElement>('.happy-thread-messages > [id]'))
+        const anchor = rows.find((candidate) => {
+            const rect = candidate.getBoundingClientRect()
+            return rect.bottom > viewportRect.top && rect.top < viewportRect.bottom
+        })
+        if (!anchor) throw new Error('Expected a visible message anchor')
+        const before = {
+            id: anchor.id,
+            offset: anchor.getBoundingClientRect().top - viewportRect.top,
+            scrollTop: Math.round(element.scrollTop),
+            scrollHeight: Math.round(element.scrollHeight)
+        }
+        // Scroll up and shrink content above the viewport in one task, so the
+        // pending scroll event observes the already-shrunk layout.
+        element.scrollTop -= 200
+        for (const row of rows.slice(50, 100)) {
+            row.style.display = 'none'
+        }
+        element.dispatchEvent(new Event('scroll'))
+        return new Promise<{ before: typeof before; after: { offset: number; scrollTop: number; scrollHeight: number } }>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                const nextRect = element.getBoundingClientRect()
+                resolve({
+                    before,
+                    after: {
+                        offset: anchor.getBoundingClientRect().top - nextRect.top,
+                        scrollTop: Math.round(element.scrollTop),
+                        scrollHeight: Math.round(element.scrollHeight)
+                    }
+                })
+            }))
+        })
+    })
+
+    expect(scrolled.after.scrollHeight).toBeLessThan(scrolled.before.scrollHeight - 1000)
+    expect(scrolled.after.scrollTop).toBeLessThan(scrolled.before.scrollTop - 200 - 1000)
+    // Scrolling up by 200 moves the row down by 200; the resize above it must
+    // not move it any further.
+    expect(Math.abs(scrolled.after.offset - (scrolled.before.offset + 200))).toBeLessThanOrEqual(2)
 })

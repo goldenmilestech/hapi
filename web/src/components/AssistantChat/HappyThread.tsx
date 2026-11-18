@@ -155,13 +155,6 @@ const AUTO_SCROLL_RESUME_THRESHOLD_PX = 1
 const MANUAL_SCROLL_EPSILON_PX = 1
 const INITIAL_SCROLL_SETTLE_MS = 1800
 const INITIAL_SCROLL_SETTLE_DELAYS_MS = [0, 16, 50, 120, 250, 500, 900, 1400, 1800] as const
-// While the reader browses history, card content that loads asynchronously
-// (image previews, media attachments) can change height long after the page
-// applied. Browser scroll anchoring is disabled for message rows, so keep a
-// live anchor and re-apply it when the content box resizes; otherwise the
-// viewport jumps by the height deltas above it. Capturing walks the rendered
-// rows, so throttle it to this interval while scrolling.
-const HISTORY_ANCHOR_CAPTURE_INTERVAL_MS = 80
 const HISTORY_PRELOAD_MARGIN_PX = 200
 // Bounded backoff for the same logical history load. A failed page leaves the
 // viewport geometry unchanged, so no new scroll/resize signal is guaranteed.
@@ -301,16 +294,83 @@ export function anchorMessageIdFromAnchor(anchor: ScrollAnchor | null): string |
 export function captureScrollAnchor(viewport: HTMLElement): ScrollAnchor | null {
     const viewportRect = viewport.getBoundingClientRect()
     const messages = Array.from(viewport.querySelectorAll<HTMLElement>(MESSAGE_ANCHOR_SELECTOR))
-    for (const message of messages) {
-        const rect = message.getBoundingClientRect()
-        if (rect.bottom > viewportRect.top && rect.top < viewportRect.bottom) {
-            return {
-                id: message.id,
-                topOffset: rect.top - viewportRect.top
-            }
+    if (messages.length === 0) {
+        return null
+    }
+
+    // Row boxes are ordered top-to-bottom, and this runs on every scroll
+    // event while the reader browses history. A deep window can hold hundreds
+    // of rows, so binary-search the first row that reaches the viewport
+    // instead of measuring each one.
+    let low = 0
+    let high = messages.length - 1
+    let first = messages.length
+    while (low <= high) {
+        const middle = (low + high) >> 1
+        const rect = messages[middle]!.getBoundingClientRect()
+        if (rect.bottom > viewportRect.top) {
+            first = middle
+            high = middle - 1
+        } else {
+            low = middle + 1
         }
     }
-    return null
+    const message = messages[first]
+    if (!message) {
+        return null
+    }
+    const rect = message.getBoundingClientRect()
+    if (rect.top >= viewportRect.bottom) {
+        return null
+    }
+    return {
+        id: message.id,
+        topOffset: rect.top - viewportRect.top
+    }
+}
+
+/**
+ * Where the anchored row should appear after the reader scrolled
+ * `baselineScrollTop -> currentScrollTop` without any layout change, and how
+ * much the viewport must move to get back there. The ResizeObserver applies
+ * the correction, so a resize that lands in the same frame as a scroll is
+ * compensated instead of being adopted as the new position.
+ */
+export function computeHistoryAnchorCorrection(params: {
+    anchorTopOffset: number
+    baselineScrollTop: number
+    currentScrollTop: number
+    currentAnchorOffset: number
+}): number {
+    const expectedOffset = params.anchorTopOffset + params.baselineScrollTop - params.currentScrollTop
+    return params.currentAnchorOffset - expectedOffset
+}
+
+type HistoryScrollAnchor = {
+    anchor: ScrollAnchor
+    element: HTMLElement
+    /** Viewport scrollTop when `anchor.topOffset` was last known correct. */
+    scrollTop: number
+    /** Content height at that moment; a different height means a resize is
+     *  pending and the scroll handler must not re-baseline onto it. */
+    scrollHeight: number
+}
+
+function captureHistoryScrollAnchor(viewport: HTMLElement): HistoryScrollAnchor | null {
+    const anchor = captureScrollAnchor(viewport)
+    if (!anchor) {
+        return null
+    }
+    const element = document.getElementById(anchor.id)
+    if (!(element instanceof HTMLElement) || !viewport.contains(element)) {
+        return null
+    }
+    return {
+        anchor,
+        element,
+        scrollTop: viewport.scrollTop,
+        scrollHeight: viewport.scrollHeight
+    }
 }
 
 export function restoreScrollAnchor(viewport: HTMLElement, anchor: ScrollAnchor): boolean {
@@ -958,8 +1018,7 @@ export function HappyThread(props: {
     // Latest visible row while the reader browses history. The content
     // ResizeObserver re-applies it when asynchronous card content changes
     // height above the viewport.
-    const historyAnchorRef = useRef<ScrollAnchor | null>(null)
-    const historyAnchorCapturedAtRef = useRef(0)
+    const historyAnchorRef = useRef<HistoryScrollAnchor | null>(null)
     const isLoadingMoreRef = useRef(props.isLoadingMoreMessages)
     const hasMoreMessagesRef = useRef(props.hasMoreMessages)
     const isSyncingTailRef = useRef(props.isSyncingTail)
@@ -1437,28 +1496,31 @@ export function HappyThread(props: {
                 pending.scrollTop = viewport.scrollTop
                 pending.scrollHeight = viewport.scrollHeight
                 if (pending.anchor) {
-                    historyAnchorRef.current = pending.anchor
-                    historyAnchorCapturedAtRef.current = Date.now()
+                    historyAnchorRef.current = captureHistoryScrollAnchor(viewport)
                 }
             }
 
-            // Keep the reader's history anchor live. Asynchronous card content
-            // (image/media previews) can change height above the viewport long
-            // after the page applied; the content ResizeObserver re-applies
-            // this row. Browser scroll anchoring is disabled for message rows,
-            // so without this the viewport jumps by the height delta.
+            // Keep the reader's history anchor live. The content
+            // ResizeObserver compares the row's expected offset (baseline
+            // plus the scroll delta) with the measured one and corrects the
+            // difference, so a resize that lands in the same frame as a
+            // scroll is compensated instead of being adopted as the new
+            // position. Do not re-baseline while the content height changed:
+            // that means a resize is pending for this frame and the old
+            // baseline is what the correction must be measured from.
             if (
                 !pending
                 && !intent.isNearBottom
                 && !searchTargetHistoryLockRef.current
                 && !isInitialScrollSettling()
             ) {
-                const capturedAt = Date.now()
-                if (capturedAt - historyAnchorCapturedAtRef.current >= HISTORY_ANCHOR_CAPTURE_INTERVAL_MS) {
-                    const anchor = captureScrollAnchor(viewport)
-                    if (anchor) {
-                        historyAnchorRef.current = anchor
-                        historyAnchorCapturedAtRef.current = capturedAt
+                const saved = historyAnchorRef.current
+                const resizePending = saved !== null
+                    && Math.abs(viewport.scrollHeight - saved.scrollHeight) > 0.5
+                if (!resizePending) {
+                    const next = captureHistoryScrollAnchor(viewport)
+                    if (next) {
+                        historyAnchorRef.current = next
                     }
                 }
             }
@@ -1492,11 +1554,7 @@ export function HappyThread(props: {
                     clearInitialScrollTimers()
                     setAutoScrollMode(false)
                     setAtBottomMode(false)
-                    const anchor = captureScrollAnchor(viewport)
-                    if (anchor) {
-                        historyAnchorRef.current = anchor
-                        historyAnchorCapturedAtRef.current = Date.now()
-                    }
+                    historyAnchorRef.current = captureHistoryScrollAnchor(viewport)
                     if (explicitUpwardIntent) {
                         void requestOlderRef.current('user')
                     }
@@ -1890,7 +1948,6 @@ export function HappyThread(props: {
         initialScrollSessionRef.current = null
         initialScrollDeadlineRef.current = 0
         historyAnchorRef.current = null
-        historyAnchorCapturedAtRef.current = 0
         clearInitialScrollTimers()
         clearSearchTargetMarker()
         clearSearchTargetScrollTimers()
@@ -2576,14 +2633,17 @@ export function HappyThread(props: {
             // finish loading long after the page applied and change height
             // above the viewport. Re-apply the reader's anchor here: the
             // callback runs after layout but before paint, so the correction
-            // is not visible. Tail-following, a search-target jump, an
-            // in-flight older-page restore, and the initial settling window
-            // each own the viewport instead.
+            // is not visible. Expected offset = baseline offset + the scroll
+            // delta since the baseline, which keeps a resize that lands in
+            // the same frame as a scroll from being adopted as the new
+            // position. Tail-following, a search-target jump, an in-flight
+            // page restore, and the initial settling window each own the
+            // viewport instead.
             const historyViewport = viewportRef.current
-            const historyAnchor = historyAnchorRef.current
+            const savedAnchor = historyAnchorRef.current
             if (
                 historyViewport
-                && historyAnchor
+                && savedAnchor
                 && shouldPreserveHistoryScrollAnchor({
                     hasAnchor: true,
                     autoScrollEnabled: autoScrollEnabledRef.current,
@@ -2594,11 +2654,26 @@ export function HappyThread(props: {
                     initialScrollSettling: isInitialScrollSettling()
                 })
             ) {
-                if (restoreScrollAnchor(historyViewport, historyAnchor)) {
-                    lastScrollTopRef.current = historyViewport.scrollTop
-                } else {
-                    historyAnchorRef.current = null
+                const target = savedAnchor.element.isConnected
+                    ? savedAnchor.element
+                    : document.getElementById(savedAnchor.anchor.id)
+                if (target instanceof HTMLElement && historyViewport.contains(target)) {
+                    const viewportRect = historyViewport.getBoundingClientRect()
+                    const currentAnchorOffset = target.getBoundingClientRect().top - viewportRect.top
+                    const correction = computeHistoryAnchorCorrection({
+                        anchorTopOffset: savedAnchor.anchor.topOffset,
+                        baselineScrollTop: savedAnchor.scrollTop,
+                        currentScrollTop: historyViewport.scrollTop,
+                        currentAnchorOffset
+                    })
+                    if (Math.abs(correction) >= 0.5) {
+                        historyViewport.scrollTop += correction
+                        lastScrollTopRef.current = historyViewport.scrollTop
+                    }
                 }
+                // Re-baseline on the row visible now so the next resize is
+                // measured against the reader's current position.
+                historyAnchorRef.current = captureHistoryScrollAnchor(historyViewport)
             }
             // Message DOM can grow after messagesVersion commits (assistant-ui
             // updates its external runtime in an effect, then markdown/tool
@@ -2646,11 +2721,7 @@ export function HappyThread(props: {
             const forwardViewport = viewportRef.current
             if (forwardViewport && restoreScrollAnchor(forwardViewport, forwardAnchor)) {
                 lastScrollTopRef.current = forwardViewport.scrollTop
-                const anchor = captureScrollAnchor(forwardViewport)
-                if (anchor) {
-                    historyAnchorRef.current = anchor
-                    historyAnchorCapturedAtRef.current = Date.now()
-                }
+                historyAnchorRef.current = captureHistoryScrollAnchor(forwardViewport)
             }
             pendingForwardAnchorRef.current = null
         }
@@ -2677,11 +2748,7 @@ export function HappyThread(props: {
             // Keep compensating later resizes from the row that is visible
             // now: the prepended page often contains media cards that finish
             // loading seconds after this restore.
-            const restoredAnchor = restoredByAnchor ? pending.anchor : captureScrollAnchor(viewport)
-            if (restoredAnchor) {
-                historyAnchorRef.current = restoredAnchor
-                historyAnchorCapturedAtRef.current = Date.now()
-            }
+            historyAnchorRef.current = captureHistoryScrollAnchor(viewport)
             const loaderState = historyLoaderRef.current
             if (loaderState.runId !== pending.runId || loaderState.phase !== 'awaiting-render') {
                 pendingScrollRef.current = null

@@ -6,6 +6,7 @@ import {
     ConversationOutlinePanel,
     anchorMessageIdFromAnchor,
     captureScrollAnchor,
+    computeHistoryAnchorCorrection,
     getHistoryCoverageRetryDelay,
     getPullToLoadState,
     getScrollIntent,
@@ -456,6 +457,65 @@ describe('scroll anchor helpers', () => {
             tailScrollInProgress: false,
             initialScrollSettling: false
         })).toBe(true)
+    })
+
+    it('computes the history correction from the baseline plus the scroll delta', () => {
+        // Scrolled up 300px, no layout change: the row sits exactly where the
+        // scroll moved it, so there is nothing to correct.
+        expect(computeHistoryAnchorCorrection({
+            anchorTopOffset: 10,
+            baselineScrollTop: 1000,
+            currentScrollTop: 700,
+            currentAnchorOffset: 310
+        })).toBe(0)
+
+        // A card above the viewport collapsed by 172px in the same frame as
+        // that scroll. The correction scrolls the viewport up by the shrink
+        // (negative), restoring the row before paint.
+        expect(computeHistoryAnchorCorrection({
+            anchorTopOffset: 10,
+            baselineScrollTop: 1000,
+            currentScrollTop: 700,
+            currentAnchorOffset: 310 - 172
+        })).toBe(-172)
+
+        // A resize without any scroll keeps the baseline offset.
+        expect(computeHistoryAnchorCorrection({
+            anchorTopOffset: 10,
+            baselineScrollTop: 1000,
+            currentScrollTop: 1000,
+            currentAnchorOffset: -1204
+        })).toBe(-1214)
+    })
+
+    it('finds the first visible row in a long list', () => {
+        const viewport = document.createElement('div')
+        const messages = document.createElement('div')
+        messages.className = 'happy-thread-messages'
+        viewport.className = 'viewport'
+        viewport.append(messages)
+        document.body.append(viewport)
+
+        const rows = Array.from({ length: 6 }, (_, index) => {
+            const row = document.createElement('div')
+            row.id = `row-${index}`
+            messages.append(row)
+            return row
+        })
+
+        vi.spyOn(viewport, 'getBoundingClientRect').mockReturnValue(rect({ top: 100, bottom: 500 }))
+        const tops = [0, 40, 90, 140, 200, 260]
+        rows.forEach((row, index) => {
+            const top = tops[index]!
+            vi.spyOn(row, 'getBoundingClientRect').mockReturnValue(rect({ top, bottom: top + 40 }))
+        })
+
+        expect(captureScrollAnchor(viewport)).toEqual({
+            id: 'row-2',
+            topOffset: -10
+        })
+
+        viewport.remove()
     })
 
     it('leaves viewport ownership to tail-following, jumps, loads, and settling', () => {
