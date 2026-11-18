@@ -51,7 +51,6 @@ type ScrollAnchor = {
 
 type PendingScrollRestore = {
     runId: number
-    anchor: ScrollAnchor | null
     scrollTop: number
     scrollHeight: number
     targetHistoryVersion: number | null
@@ -240,9 +239,10 @@ export function shouldCancelInitialScrollSettling(
 
 /**
  * A content resize must re-apply the reader's history anchor only when the
- * viewport is not owned by tail-following, a search-target jump, an in-flight
- * older-page restore (it restores once on apply), a smooth jump to the bottom,
- * or the initial bottom-settling window.
+ * viewport is not owned by tail-following, a search-target jump, a forward
+ * page restore, a smooth jump to the bottom, or the initial bottom-settling
+ * window. Older-page prepends use the same correction, so they do not block
+ * it.
  */
 export function shouldPreserveHistoryScrollAnchor(params: {
     hasAnchor: boolean
@@ -1488,16 +1488,12 @@ export function HappyThread(props: {
 
             // A slow older-page request must not restore the position from
             // when it started after the user has already scrolled elsewhere.
-            // Keep the pending baseline aligned with the latest visible row;
-            // the eventual prepend will preserve that row instead.
+            // Keep the pending fallback aligned with the latest scrollTop; the
+            // row anchor itself lives on historyAnchorRef and is restored by
+            // the same correction the ResizeObserver uses.
             const pending = pendingScrollRef.current
             if (pending && historyLoaderRef.current.runId === pending.runId) {
-                pending.anchor = captureScrollAnchor(viewport)
                 pending.scrollTop = viewport.scrollTop
-                pending.scrollHeight = viewport.scrollHeight
-                if (pending.anchor) {
-                    historyAnchorRef.current = captureHistoryScrollAnchor(viewport)
-                }
             }
 
             // Keep the reader's history anchor live. The content
@@ -1509,8 +1505,7 @@ export function HappyThread(props: {
             // that means a resize is pending for this frame and the old
             // baseline is what the correction must be measured from.
             if (
-                !pending
-                && !intent.isNearBottom
+                !intent.isNearBottom
                 && !searchTargetHistoryLockRef.current
                 && !isInitialScrollSettling()
             ) {
@@ -1877,6 +1872,44 @@ export function HappyThread(props: {
         } else {
             viewport.scrollTo({ top: viewport.scrollHeight, behavior: 'smooth' })
         }
+    }, [])
+
+    /**
+     * Keep the reader's row at its expected viewport offset after the content
+     * box changed height (prepends and asynchronous card content alike).
+     * Returns false when no usable anchor exists; callers may fall back to the
+     * scrollTop + height-delta restore. Re-baselines on success so the next
+     * change is measured from the reader's current position.
+     */
+    const applyHistoryAnchorCorrection = useCallback((viewport: HTMLElement): boolean => {
+        const saved = historyAnchorRef.current
+        if (!saved) {
+            return false
+        }
+        const target = saved.element.isConnected
+            ? saved.element
+            : document.getElementById(saved.anchor.id)
+        if (!(target instanceof HTMLElement) || !viewport.contains(target)) {
+            historyAnchorRef.current = null
+            return false
+        }
+        const viewportRect = viewport.getBoundingClientRect()
+        const currentAnchorOffset = target.getBoundingClientRect().top - viewportRect.top
+        const correction = computeHistoryAnchorCorrection({
+            anchorTopOffset: saved.anchor.topOffset,
+            baselineScrollTop: saved.scrollTop,
+            currentScrollTop: viewport.scrollTop,
+            currentAnchorOffset
+        })
+        if (Math.abs(correction) >= 0.5) {
+            viewport.scrollTop += correction
+            lastScrollTopRef.current = viewport.scrollTop
+        }
+        const next = captureHistoryScrollAnchor(viewport)
+        if (next) {
+            historyAnchorRef.current = next
+        }
+        return true
     }, [])
 
     const handleNestedScrollFollowChange = useCallback((followLatest: boolean) => {
@@ -2393,7 +2426,6 @@ export function HappyThread(props: {
         clearFailureRetryTimer()
         pendingScrollRef.current = {
             runId,
-            anchor: captureScrollAnchor(viewport),
             scrollTop: viewport.scrollTop,
             scrollHeight: viewport.scrollHeight,
             targetHistoryVersion: null
@@ -2636,44 +2668,23 @@ export function HappyThread(props: {
             // is not visible. Expected offset = baseline offset + the scroll
             // delta since the baseline, which keeps a resize that lands in
             // the same frame as a scroll from being adopted as the new
-            // position. Tail-following, a search-target jump, an in-flight
-            // page restore, and the initial settling window each own the
-            // viewport instead.
+            // position. Tail-following, a search-target jump, a forward-page
+            // restore, and the initial settling window each own the viewport
+            // instead. An older-page prepend uses the same correction, so this
+            // callback and the apply-time layout effect are idempotent.
             const historyViewport = viewportRef.current
-            const savedAnchor = historyAnchorRef.current
             if (
                 historyViewport
-                && savedAnchor
                 && shouldPreserveHistoryScrollAnchor({
-                    hasAnchor: true,
+                    hasAnchor: historyAnchorRef.current !== null,
                     autoScrollEnabled: autoScrollEnabledRef.current,
                     searchTargetLocked: searchTargetHistoryLockRef.current,
-                    pendingScrollRestore: pendingScrollRef.current !== null
-                        || pendingForwardAnchorRef.current !== null,
+                    pendingScrollRestore: pendingForwardAnchorRef.current !== null,
                     tailScrollInProgress: tailScrollInProgressRef.current,
                     initialScrollSettling: isInitialScrollSettling()
                 })
             ) {
-                const target = savedAnchor.element.isConnected
-                    ? savedAnchor.element
-                    : document.getElementById(savedAnchor.anchor.id)
-                if (target instanceof HTMLElement && historyViewport.contains(target)) {
-                    const viewportRect = historyViewport.getBoundingClientRect()
-                    const currentAnchorOffset = target.getBoundingClientRect().top - viewportRect.top
-                    const correction = computeHistoryAnchorCorrection({
-                        anchorTopOffset: savedAnchor.anchor.topOffset,
-                        baselineScrollTop: savedAnchor.scrollTop,
-                        currentScrollTop: historyViewport.scrollTop,
-                        currentAnchorOffset
-                    })
-                    if (Math.abs(correction) >= 0.5) {
-                        historyViewport.scrollTop += correction
-                        lastScrollTopRef.current = historyViewport.scrollTop
-                    }
-                }
-                // Re-baseline on the row visible now so the next resize is
-                // measured against the reader's current position.
-                historyAnchorRef.current = captureHistoryScrollAnchor(historyViewport)
+                applyHistoryAnchorCorrection(historyViewport)
             }
             // Message DOM can grow after messagesVersion commits (assistant-ui
             // updates its external runtime in an effect, then markdown/tool
@@ -2708,6 +2719,7 @@ export function HappyThread(props: {
         observer.observe(content)
         return () => observer.disconnect()
     }, [
+        applyHistoryAnchorCorrection,
         scrollToBottomInstant,
         scrollToBottomSmooth,
         isInitialScrollSettling,
@@ -2740,15 +2752,14 @@ export function HappyThread(props: {
             ) {
                 return
             }
-            const restoredByAnchor = pending.anchor ? restoreScrollAnchor(viewport, pending.anchor) : false
-            if (!restoredByAnchor) {
+            if (!applyHistoryAnchorCorrection(viewport)) {
                 const delta = viewport.scrollHeight - pending.scrollHeight
                 viewport.scrollTop = pending.scrollTop + delta
+                const next = captureHistoryScrollAnchor(viewport)
+                if (next) {
+                    historyAnchorRef.current = next
+                }
             }
-            // Keep compensating later resizes from the row that is visible
-            // now: the prepended page often contains media cards that finish
-            // loading seconds after this restore.
-            historyAnchorRef.current = captureHistoryScrollAnchor(viewport)
             const loaderState = historyLoaderRef.current
             if (loaderState.runId !== pending.runId || loaderState.phase !== 'awaiting-render') {
                 pendingScrollRef.current = null
@@ -2780,6 +2791,7 @@ export function HappyThread(props: {
     }, [
         appliedMessagesVersion,
         appliedHistoryVersion,
+        applyHistoryAnchorCorrection,
         scrollToBottomInstant,
         settlePendingLoad,
         clearFailureRetryTimer
