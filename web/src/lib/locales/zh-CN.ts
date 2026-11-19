@@ -357,6 +357,11 @@ export default {
   'session.outline.searchLabel': '搜索大纲条目',
   'session.outline.searchResults': '{matched}/{total} 个条目',
   'session.outline.noSearchResults': '没有匹配的大纲条目',
+  'session.stickyPrompt.region': '当前提问',
+  'session.stickyPrompt.locate': '回到这条提问',
+  'session.stickyPrompt.previous': '上一条提问',
+  'session.stickyPrompt.next': '下一条提问',
+  'session.stickyPrompt.position': '第 {current} 条提问，共 {total} 条',
 
   // Session actions
   'session.action.openSeparateWindow': '独立窗口',

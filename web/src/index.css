@@ -670,6 +670,13 @@ html:has(.chat-scroll-y) #root {
     }
 }
 
+/* Sticky prompt bar path: the flash targets the user bubble itself, so it
+ * must not override the bubble's radius or background like the root-level
+ * pending-target class does. */
+.hapi-user-bubble-flash {
+    animation: hapi-pending-target-highlight 1.8s ease-out both;
+}
+
 mark.hapi-message-search-target {
     color: var(--app-search-match-fg);
     background-color: var(--app-search-match-bg);
