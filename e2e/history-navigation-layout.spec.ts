@@ -132,3 +132,39 @@ test('outline jump is not interrupted by media settling above the target', async
     expect(offset as number).toBeGreaterThanOrEqual(-4)
     expect(offset as number).toBeLessThanOrEqual(28)
 })
+
+// Regression: a jumped-to history window can stop short of the session head.
+// Reaching the end of that window is the end of the loaded page, not the end
+// of the conversation; it must page the next messages forward. It used to
+// switch to tail mode and replace the window, teleporting the reader to the
+// newest message.
+test('reading past a jumped history window pages forward instead of jumping to the end', async ({ page }) => {
+    await page.goto('/e2e-fixtures/history-load-fixture.html?navigationShell=1&forwardPages=1')
+    await expect(page.getByText('Fixture message 1200', { exact: true })).toBeVisible()
+    await page.waitForTimeout(2000)
+
+    // Pick a prompt outside the initial tail window: the hub returns a bounded
+    // context window around it that still has newer rows below.
+    await page.getByRole('button', { name: 'Open history', exact: true }).click()
+    await page.getByRole('searchbox', { name: 'Search outline items' }).fill('Fixture message 600')
+    await page.getByRole('button', { name: /Fixture message 600/ }).click()
+    await expect(page.locator('[id="hapi-message-user-text:m-600"]')).toBeInViewport()
+    await page.waitForTimeout(2000)
+    expect(await page.evaluate(() => window.__probe.windowState().hasMoreNewer)).toBe(true)
+
+    // Reach the end of the loaded window.
+    await page.evaluate(() => {
+        const chat = document.querySelector<HTMLElement>('.chat-scroll-y')
+        if (chat) chat.scrollTop = chat.scrollHeight
+    })
+
+    await expect.poll(() => page.evaluate(
+        () => window.__probe.requests.filter((request) => request.direction === 'after').length
+    )).toBeGreaterThan(0)
+    await page.waitForTimeout(1000)
+    const state = await page.evaluate(() => window.__probe.windowState())
+    expect(state.viewMode).toBe('history')
+    expect(state.hasMoreNewer).toBe(true)
+    // The tail window was not swapped in: the newest message stays unloaded.
+    await expect(page.locator('[id="hapi-message-user-text:m-1200"]')).toHaveCount(0)
+})

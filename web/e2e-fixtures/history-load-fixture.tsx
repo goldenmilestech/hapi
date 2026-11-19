@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import ReactDOM from 'react-dom/client'
 import { AssistantRuntimeProvider } from '@assistant-ui/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -16,7 +16,10 @@ import { useHappyRuntime } from '../src/lib/assistant-runtime'
 import { HappyThread } from '../src/components/AssistantChat/HappyThread'
 import type { ChatBlock } from '../src/chat/types'
 import { getMessageWindowState } from '../src/lib/message-window-store'
-import { buildConversationOutline } from '../src/chat/outline'
+import {
+    buildConversationOutline,
+    mergeConversationOutline
+} from '../src/chat/outline'
 
 // Drives the real message-window store + chat pipeline + HappyThread against a
 // fake paginated message API, so e2e tests can exercise older-history loading
@@ -28,7 +31,13 @@ const TOTAL_MESSAGES = 1200
 const BASE_AT = 1_700_000_000_000
 
 type Probe = {
-    requests: { direction: string; beforeSeq: number | null; limit: number | undefined; at: number }[]
+    requests: {
+        direction: string
+        beforeSeq: number | null
+        afterSeq: number | null
+        limit: number | undefined
+        at: number
+    }[]
     loadMore: () => Promise<unknown>
     refetch: () => Promise<void>
     releaseLatest: () => void
@@ -39,6 +48,8 @@ type Probe = {
         oldestSeq: number | null
         newestSeq: number | null
         isLoadingMore: boolean
+        viewMode: 'tail' | 'history'
+        hasMoreNewer: boolean
     }
 }
 
@@ -73,7 +84,9 @@ window.__probe = {
             messageCount: state.messages.length,
             oldestSeq: state.oldestSeq,
             newestSeq: state.newestSeq,
-            isLoadingMore: state.isLoadingMore
+            isLoadingMore: state.isLoadingMore,
+            viewMode: state.viewMode,
+            hasMoreNewer: state.hasMoreNewer
         }
     }
 }
@@ -100,8 +113,12 @@ window.__probe = {
 //   is called, making the cached first paint observable.
 // - ?navigationShell=1 — add a pinned header/composer and outline controls.
 // - ?navigationMedia=1 — include generated-image previews in older history.
+// - ?forwardPages=1 — serve `after` pages and message-context windows, and
+//   index every prompt in the outline, so a jump can land in a bounded
+//   history window that still has newer rows to page forward through.
 const fixtureParams = new URLSearchParams(window.location.search)
 const navigationShell = fixtureParams.has('navigationShell')
+const forwardPages = fixtureParams.has('forwardPages')
 const navigationMedia = fixtureParams.has('navigationMedia')
 const shortPages = fixtureParams.has('shortPages')
 const failBeforeCount = Number(fixtureParams.get('failBefore') ?? '0')
@@ -163,6 +180,11 @@ function positionOf(message: DecryptedMessage): { at: number; seq: number } {
     return { at: message.invokedAt ?? message.createdAt, seq: message.seq ?? 0 }
 }
 
+function isUserPromptMessage(message: DecryptedMessage): boolean {
+    const content = message.content as { role?: string } | null | undefined
+    return content?.role === 'user'
+}
+
 function pageFrom(messages: DecryptedMessage[], overrides: Partial<MessagesResponse['page']>): MessagesResponse['page'] {
     const oldest = messages[0] ?? null
     const newest = messages[messages.length - 1] ?? null
@@ -186,6 +208,39 @@ const fakeApi = {
     getHubSettings: async () => ({ sessionSummaryInChat: false }),
     getMachines: async () => ({ machines: [] }),
     getGeneratedImageBlob: async () => new Blob(['<svg xmlns="http://www.w3.org/2000/svg" width="240" height="160"><rect width="240" height="160" fill="lightblue"/></svg>'], { type: 'image/svg+xml' }),
+    getMessageContext: async (_sessionId: string, messageId: string) => {
+        window.__probe.requests.push({
+            direction: 'context',
+            beforeSeq: null,
+            afterSeq: null,
+            limit: undefined,
+            at: Date.now()
+        })
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        const index = allMessages.findIndex((message) => message.id === messageId)
+        const head = allMessages[allMessages.length - 1] ?? null
+        if (index < 0 || !head) {
+            return null
+        }
+        // A bounded window centered on the target, like the hub returns for a
+        // search or outline jump: it stops well short of the session head.
+        const start = Math.max(0, index - 100)
+        const end = Math.min(allMessages.length, index + 100)
+        const pageMessages = allMessages.slice(start, end)
+        const oldest = pageMessages[0] ?? null
+        return {
+            messages: pageMessages,
+            targetMessageId: messageId,
+            page: {
+                epoch: 1,
+                nextBeforeSeq: oldest?.seq ?? null,
+                nextBeforeAt: oldest ? positionOf(oldest).at : null,
+                snapshotHeadSeq: head.seq ?? null,
+                snapshotHeadAt: positionOf(head).at,
+                hasMore: start > 0
+            }
+        }
+    },
     getMessages: async (_sessionId: string, query: {
         limit?: number
         beforeAt?: number | null
@@ -202,6 +257,7 @@ const fakeApi = {
         window.__probe.requests.push({
             direction,
             beforeSeq: query.beforeSeq ?? null,
+            afterSeq: query.afterSeq ?? null,
             limit: query.limit,
             at: Date.now()
         })
@@ -243,6 +299,31 @@ const fakeApi = {
                     nextAfterAt: null,
                     snapshotHeadSeq: null,
                     snapshotHeadAt: null
+                })
+            }
+        }
+
+        if (direction === 'after') {
+            const cursorAt = query.afterAt ?? Number.NEGATIVE_INFINITY
+            const cursorSeq = query.afterSeq ?? Number.NEGATIVE_INFINITY
+            const newer = allMessages.filter((message) => {
+                const position = positionOf(message)
+                return position.at > cursorAt
+                    || (position.at === cursorAt && position.seq > cursorSeq)
+            })
+            const pageMessages = newer.slice(0, limit)
+            const newest = pageMessages[pageMessages.length - 1] ?? null
+            const head = allMessages[allMessages.length - 1] ?? null
+            return {
+                messages: pageMessages,
+                page: pageFrom(pageMessages, {
+                    direction: 'after',
+                    limit,
+                    hasMore: newer.length > pageMessages.length,
+                    nextAfterSeq: newest?.seq ?? null,
+                    nextAfterAt: newest ? positionOf(newest).at : null,
+                    snapshotHeadSeq: head?.seq ?? null,
+                    snapshotHeadAt: head ? positionOf(head).at : null
                 })
             }
         }
@@ -292,9 +373,12 @@ function FixtureThread() {
         isSyncingTail,
         isLoadingMore,
         hasMore,
+        hasMoreNewer,
         messagesVersion,
         historyVersion,
         loadMore,
+        loadNewer,
+        loadMessageContext,
         cancelLoadMore,
         refetch,
         setViewMode
@@ -325,6 +409,34 @@ function FixtureThread() {
         () => buildVisibleChatBlocks(reconciled.blocks, { hasMoreMessages: hasMore }),
         [reconciled.blocks, hasMore]
     )
+
+    // With forward pagination enabled the outline mirrors production: the
+    // session-wide prompt index fills in messages the bounded window has not
+    // paged in yet, so a jump can land outside the current window.
+    const loadedOutlineItems = useMemo(
+        () => buildConversationOutline(reconciled.blocks),
+        [reconciled.blocks]
+    )
+    const outlineItems = useMemo(() => {
+        if (!forwardPages) {
+            return loadedOutlineItems
+        }
+        return mergeConversationOutline(
+            loadedOutlineItems,
+            allMessages
+                .filter(isUserPromptMessage)
+                .map((message) => ({
+                    messageId: message.id,
+                    createdAt: positionOf(message).at,
+                    label: `Fixture message ${message.seq}`
+                }))
+        )
+    }, [loadedOutlineItems])
+
+    const loadNewerPage = useCallback(async (resolvePreserveMessageId?: () => string | null) => {
+        const outcome = await loadNewer(resolvePreserveMessageId)
+        return outcome.kind === 'caught-up'
+    }, [loadNewer])
 
     const runtime = useHappyRuntime({
         session: fakeSession,
@@ -360,8 +472,11 @@ function FixtureThread() {
                         isSyncingTail={isSyncingTail}
                         messagesWarning={warning}
                         hasMoreMessages={hasMore}
+                        hasMoreNewerMessages={hasMoreNewer}
                         isLoadingMoreMessages={isLoadingMore}
                         onLoadMore={loadMore}
+                        onLoadNewer={forwardPages ? loadNewerPage : undefined}
+                        onLoadMessageContext={forwardPages ? loadMessageContext : undefined}
                         onCancelLoadMore={cancelLoadMore}
                         // This fixture drives HappyThread directly, bypassing the
                         // SessionChat block reduction that computes the real count.
@@ -372,7 +487,7 @@ function FixtureThread() {
                         historyVersion={historyVersion}
                         forceScrollToken={forceScrollToken}
                         outlineOpen={navigationShell && outlineOpen}
-                        outlineItems={navigationShell ? buildConversationOutline(reconciled.blocks) : []}
+                        outlineItems={navigationShell ? outlineItems : []}
                         onOutlineOpenChange={setOutlineOpen}
                     />
                     {navigationShell ? (
