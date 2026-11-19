@@ -1525,6 +1525,7 @@ export default {
   'misc.changeModel': '更换模型…',
   'misc.backToModelList': '← 模型',
   'misc.loading': '加载中…',
+  'misc.loadNewerMessages': '加载后续消息',
   'misc.newMessage': '{n} 条新消息',
   'misc.scrollToBottom': '跳到底部',
   'misc.loadingMessages': '加载消息中…',

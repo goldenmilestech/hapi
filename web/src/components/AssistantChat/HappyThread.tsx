@@ -161,6 +161,11 @@ const MANUAL_SCROLL_EPSILON_PX = 1
 const INITIAL_SCROLL_SETTLE_MS = 1800
 const INITIAL_SCROLL_SETTLE_DELAYS_MS = [0, 16, 50, 120, 250, 500, 900, 1400, 1800] as const
 const HISTORY_PRELOAD_MARGIN_PX = 200
+// At the bottom edge of a bounded history window the viewport cannot move, so
+// no scroll event can ask for the next forward page. A downward wheel (or an
+// upward swipe) within this margin requests it explicitly.
+const FORWARD_PAGE_TRIGGER_MARGIN_PX = 24
+const FORWARD_SWIPE_TRIGGER_PX = 16
 // Bounded backoff for the same logical history load. A failed page leaves the
 // viewport geometry unchanged, so no new scroll/resize signal is guaranteed.
 const COVERAGE_FAILURE_RETRY_DELAY_MS = 1000
@@ -1143,6 +1148,7 @@ export function HappyThread(props: {
     const [pullToLoadState, setPullToLoadState] = useState<PullToLoadState>('idle')
     const [searchTargetRetryVersion, setSearchTargetRetryVersion] = useState(0)
     const [isLocatingSearchTarget, setIsLocatingSearchTarget] = useState(false)
+    const [isRequestingNewer, setIsRequestingNewer] = useState(false)
     const [showScrollToBottom, setShowScrollToBottom] = useState(false)
     const pullToLoadStateRef = useRef<PullToLoadState>('idle')
     const shareTurnIdRef = useRef(0)
@@ -1296,13 +1302,17 @@ export function HappyThread(props: {
             const load = onLoadNewerRef.current
             if (!load) return
             loadingNewerRef.current = true
+            setIsRequestingNewer(true)
             const viewport = viewportRef.current
             pendingForwardAnchorRef.current = viewport ? captureScrollAnchor(viewport) : null
             // Resolved when the page is applied, so a reader who scrolled
             // during the request keeps the row they are on rather than the
             // one they started from.
             void load(() => anchorMessageIdFromAnchor(pendingForwardAnchorRef.current))
-                .finally(() => { loadingNewerRef.current = false })
+                .finally(() => {
+                    loadingNewerRef.current = false
+                    setIsRequestingNewer(false)
+                })
         }
     }, [])
 
@@ -1839,6 +1849,7 @@ export function HappyThread(props: {
         // touch users progressive feedback, then load only when they release
         // after crossing the threshold.
         let pullStartY: number | null = null
+        let forwardTouchStartY: number | null = null
 
         const updatePullToLoadState = (state: PullToLoadState) => {
             if (pullToLoadStateRef.current === state) {
@@ -1950,6 +1961,18 @@ export function HappyThread(props: {
             keyboardResumeActive = false
             if (event.deltaY >= 0) {
                 wheelIntentUntil = 0
+                // At the bottom edge of a bounded history window the viewport
+                // cannot move, so no scroll event can ask for the next page.
+                // Treat a downward wheel there as the explicit request.
+                if (
+                    event.deltaY > 0
+                    && hasMoreNewerRef.current
+                    && !isSyncingTailRef.current
+                    && viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
+                        <= FORWARD_PAGE_TRIGGER_MARGIN_PX
+                ) {
+                    requestForwardPageRef.current()
+                }
                 return
             }
             // One trigger per gesture: a trackpad swipe is a burst of wheel
@@ -1975,6 +1998,14 @@ export function HappyThread(props: {
             cancelSearchRecentering()
             keyboardResumeActive = false
             updatePullToLoadState('idle')
+            const touch = event.touches[0]
+            forwardTouchStartY = (
+                touch
+                && hasMoreNewerRef.current
+                && !isSyncingTailRef.current
+                && viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
+                    <= FORWARD_PAGE_TRIGGER_MARGIN_PX
+            ) ? touch.clientY : null
             pullStartY = (
                 viewport.scrollTop <= 0
                 && hasMoreMessagesRef.current
@@ -1988,6 +2019,15 @@ export function HappyThread(props: {
 
         const handleTouchMove = (event: TouchEvent) => {
             if (isNestedScrollEvent(event)) return
+            // A swipe up at the bottom of a bounded window cannot move the
+            // viewport; treat it as a request for the next forward page.
+            if (forwardTouchStartY !== null) {
+                const currentY = event.touches[0]?.clientY
+                if (currentY !== undefined && forwardTouchStartY - currentY >= FORWARD_SWIPE_TRIGGER_PX) {
+                    forwardTouchStartY = null
+                    requestForwardPageRef.current()
+                }
+            }
             if (pullStartY === null) {
                 return
             }
@@ -2008,6 +2048,7 @@ export function HappyThread(props: {
                 && pullToLoadStateRef.current === 'ready'
                 && viewport.scrollTop <= 0
             pullStartY = null
+            forwardTouchStartY = null
             updatePullToLoadState('idle')
             if (shouldLoad) {
                 void requestOlderRef.current('user')
@@ -2017,6 +2058,7 @@ export function HappyThread(props: {
         const handleTouchCancel = (event: TouchEvent) => {
             if (isNestedScrollEvent(event)) return
             pullStartY = null
+            forwardTouchStartY = null
             updatePullToLoadState('idle')
         }
 
@@ -3423,7 +3465,7 @@ export function HappyThread(props: {
                         <Spinner size="sm" label={null} className="text-current" />
                         <span>{t('misc.locatingMessage')}</span>
                     </div>
-                ) : !props.isSyncingTail && (
+                ) : !props.isSyncingTail && !isRequestingNewer && (
                     props.isLoadingMoreMessages || pullToLoadState !== 'idle'
                 ) ? (
                     <div
@@ -3483,6 +3525,41 @@ export function HappyThread(props: {
                 <NewMessagesIndicator count={props.unseenCount} onClick={scrollToBottom} />
                 {shouldRenderScrollToBottomButton(showScrollToBottom, props.unseenCount) ? (
                     <ScrollToBottomButton onClick={scrollToBottom} />
+                ) : null}
+                {props.hasMoreNewerMessages === true && !props.isSyncingTail ? (
+                    <div
+                        className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center px-3"
+                        data-testid="newer-messages-loader"
+                    >
+                        <Button
+                            variant="outline"
+                            type="button"
+                            onClick={() => requestForwardPageRef.current()}
+                            disabled={isRequestingNewer || props.isLoadingMoreMessages}
+                            aria-busy={isRequestingNewer}
+                            aria-label={t('misc.loadNewerMessages')}
+                            title={t('misc.loadNewerMessages')}
+                            className="pointer-events-auto h-7 gap-1.5 rounded-full border-[var(--app-border)] bg-[var(--app-bg)]/90 px-3 text-xs text-[var(--app-fg)] shadow-sm backdrop-blur hover:bg-[var(--app-secondary-bg)]"
+                        >
+                            {isRequestingNewer ? (
+                                <Spinner size="sm" label={null} className="text-current" />
+                            ) : (
+                                <svg
+                                    className="h-3.5 w-3.5"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="2.2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    aria-hidden="true"
+                                >
+                                    <path d="m6 9 6 6 6-6" />
+                                </svg>
+                            )}
+                            <span>{isRequestingNewer ? t('misc.loading') : t('misc.loadNewerMessages')}</span>
+                        </Button>
+                    </div>
                 ) : null}
                 {props.outlineOpen ? (
                     <>

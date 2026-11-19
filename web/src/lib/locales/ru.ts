@@ -1357,6 +1357,7 @@ export default {
   'misc.changeModel': 'Сменить модель…',
   'misc.backToModelList': '← Модели',
   'misc.loading': 'Загрузка…',
+  'misc.loadNewerMessages': 'Загрузить новые сообщения',
   'misc.newMessage': 'Новых сообщений: {n}',
   'misc.scrollToBottom': 'Прокрутить вниз',
   'misc.loadingMessages': 'Загрузка сообщений…',

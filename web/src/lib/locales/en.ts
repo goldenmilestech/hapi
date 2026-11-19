@@ -1527,6 +1527,7 @@ export default {
   'misc.changeModel': 'Change model…',
   'misc.backToModelList': '← Models',
   'misc.loading': 'Loading…',
+  'misc.loadNewerMessages': 'Load newer messages',
   'misc.newMessage': '{n} new message{s}',
   'misc.scrollToBottom': 'Scroll to bottom',
   'misc.loadingMessages': 'Loading messages…',

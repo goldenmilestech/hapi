@@ -1994,6 +1994,12 @@ describe('reading forward from a context window', () => {
             makeAgentMessage({ id: 'live', seq: 1_001, at: 1_001_000 })
         ])
 
+        // The live row belongs to the unloaded forward gap: it must not render
+        // directly after the historical window. The forward pager brings it in
+        // order once the reader walks there.
+        expect(getMessageWindowState(id).messages.map((m) => m.id)).toEqual(['target'])
+        expect(getMessageWindowState(id).hasMoreNewer).toBe(true)
+
         getMessages.mockResolvedValueOnce(afterResponse([
             makeAgentMessage({ id: 'mid', seq: 60, at: 60_000 })
         ], {
