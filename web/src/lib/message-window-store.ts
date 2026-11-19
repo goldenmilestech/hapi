@@ -1852,9 +1852,31 @@ export function setMessageViewMode(sessionId: string, mode: MessageViewMode): vo
 export function ingestIncomingMessages(sessionId: string, incoming: DecryptedMessage[]): void {
     if (incoming.length === 0) return
     updateState(sessionId, (previous) => {
-        let merged = mergeIntoWindow(previous, incoming, {
-            advanceTailRevision: true
-        })
+        const contextNewest = readPosition(previous.contextNewestAt, previous.contextNewestSeq)
+        // A bounded context window deliberately stops short of the session
+        // head. Live rows past its newest cursor belong to the unloaded
+        // forward gap: splicing them in would render new output directly
+        // after old history and hide every message in between. Keep only rows
+        // that update the window (same id/localId) or sit inside it; the
+        // forward pager delivers the rest in order.
+        const isolateForwardGap = previous.viewMode === 'history'
+            && previous.hasMoreNewer
+            && contextNewest !== null
+        const accepted = isolateForwardGap
+            ? incoming.filter((message) => {
+                const position = messagePosition(message)
+                if (!position) return true
+                if (comparePosition(position, contextNewest) <= 0) return true
+                const localId = message.localId
+                return previous.messages.some((existing) => (
+                    existing.id === message.id
+                    || (localId !== null && localId !== undefined && existing.localId === localId)
+                ))
+            })
+            : incoming
+        let merged = accepted.length > 0
+            ? mergeIntoWindow(previous, accepted, { advanceTailRevision: true })
+            : previous
         if (merged.epoch === null || merged.requiresLatestReset) {
             return merged
         }
