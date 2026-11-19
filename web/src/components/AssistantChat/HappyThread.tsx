@@ -2862,23 +2862,33 @@ export function HappyThread(props: {
         })
         if (!isCurrent()) return
         if (target) {
+            // The message window can replace the row (and even rebuild it under
+            // a new element) while the jump is landing, so resolve the target
+            // by id at every measurement instead of holding this node.
+            const targetAnchorId = getConversationMessageAnchorId(item.targetMessageId)
+            const findTarget = () => {
+                const viewport = viewportRef.current
+                const element = document.getElementById(targetAnchorId)
+                return viewport && element && viewport.contains(element) ? element : null
+            }
             outlineJumpTargetRef.current = {
                 isOffTarget: () => {
                     const viewport = viewportRef.current
-                    if (!viewport || !target.isConnected) return false
+                    const element = findTarget()
+                    if (!viewport || !element) return false
                     // `scrollIntoView` honours the row's scroll margin and the
                     // viewport's scroll padding, so the landed offset is not 0.
-                    const targetStyle = window.getComputedStyle(target)
+                    const targetStyle = window.getComputedStyle(element)
                     const viewportStyle = window.getComputedStyle(viewport)
                     const landedOffset =
                         (Number.parseFloat(targetStyle.scrollMarginTop) || 0)
                         + (Number.parseFloat(viewportStyle.scrollPaddingTop) || 0)
                     const currentOffset =
-                        target.getBoundingClientRect().top - viewport.getBoundingClientRect().top
+                        element.getBoundingClientRect().top - viewport.getBoundingClientRect().top
                     return Math.abs(currentOffset - landedOffset) > 8
                 },
-                recenter: () => target.scrollIntoView({ block: 'start', behavior: 'smooth' }),
-                settle: () => target.scrollIntoView({ block: 'start' })
+                recenter: () => findTarget()?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
+                settle: () => findTarget()?.scrollIntoView({ block: 'start' })
             }
             target.scrollIntoView({ block: 'start', behavior: 'smooth' })
             outlineJumpEndTimerRef.current = window.setTimeout(() => {
@@ -2956,12 +2966,19 @@ export function HappyThread(props: {
             outlineJumpEndTimerRef.current = null
         }
         // Park the prompt just above the viewport top: the bar becomes that
-        // turn's header. Recompute the delta from live geometry so a resize
-        // during the animation can re-centre the step.
+        // turn's header. Recompute the delta from live geometry, resolving the
+        // row by id, so a re-render during the animation cannot leave a stale
+        // element behind.
+        const findAnchor = () => {
+            const current = viewportRef.current
+            const element = document.getElementById(anchorId)
+            return current && element && current.contains(element) ? element : null
+        }
         const jumpDelta = () => {
             const current = viewportRef.current
-            if (!current || !anchor.isConnected) return 0
-            return anchor.getBoundingClientRect().bottom - current.getBoundingClientRect().top + 2
+            const element = findAnchor()
+            if (!current || !element) return 0
+            return element.getBoundingClientRect().bottom - current.getBoundingClientRect().top + 2
         }
         const scrollJump = (behavior: ScrollBehavior) => {
             const current = viewportRef.current
