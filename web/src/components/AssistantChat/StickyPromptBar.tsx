@@ -49,11 +49,9 @@ export function findPinnedPromptIndex(
 
 type PinnedPrompt = {
     item: ConversationOutlineItem
-    /** Index among the prompts currently rendered in the message window. */
-    renderedIndex: number
-    renderedTotal: number
-    /** Index in the session-wide outline index. */
+    /** 1-based index in the session-wide outline index. */
     position: number
+    /** Prompt count in the session-wide outline index. */
     total: number
 }
 
@@ -78,7 +76,6 @@ export function StickyPromptBar(props: StickyPromptBarProps) {
     const { t, locale } = useTranslation()
     const [pinned, setPinned] = useState<PinnedPrompt | null>(null)
     const pinnedRef = useRef<PinnedPrompt | null>(null)
-    const renderedItemsRef = useRef<readonly ConversationOutlineItem[]>([])
 
     const itemByAnchorId = useMemo(() => {
         const map = new Map<string, ConversationOutlineItem>()
@@ -99,8 +96,6 @@ export function StickyPromptBar(props: StickyPromptBarProps) {
     const publish = useCallback((next: PinnedPrompt | null) => {
         const current = pinnedRef.current
         const unchanged = current?.item === next?.item
-            && current?.renderedIndex === next?.renderedIndex
-            && current?.renderedTotal === next?.renderedTotal
             && current?.position === next?.position
             && current?.total === next?.total
         if (unchanged) {
@@ -114,7 +109,6 @@ export function StickyPromptBar(props: StickyPromptBarProps) {
         const viewport = props.viewportRef.current
         const content = props.contentRef.current
         if (!viewport || !content) {
-            renderedItemsRef.current = []
             publish(null)
             return
         }
@@ -137,7 +131,6 @@ export function StickyPromptBar(props: StickyPromptBarProps) {
             items.push(item)
             rects.push({ top: rect.top, bottom: rect.bottom })
         })
-        renderedItemsRef.current = items
 
         const index = findPinnedPromptIndex(rects, viewportTop)
         if (index === null) {
@@ -147,8 +140,8 @@ export function StickyPromptBar(props: StickyPromptBarProps) {
         const item = items[index]
         publish({
             item,
-            renderedIndex: index,
-            renderedTotal: items.length,
+            // The outline index is session-wide, so the pinned item's position
+            // and the total stay stable while the message window swaps.
             position: (indexById.get(item.id) ?? index) + 1,
             total: Math.max(props.items.length, items.length)
         })
@@ -189,16 +182,19 @@ export function StickyPromptBar(props: StickyPromptBarProps) {
         if (!current) {
             return
         }
-        const target = renderedItemsRef.current[current.renderedIndex + direction]
+        // Step through the session-wide outline index, not just the rendered
+        // window: older prompts are usually outside the loaded message window
+        // and the thread loads their context on demand.
+        const target = props.items[current.position - 1 + direction]
         if (target) {
             props.onNavigate(target)
         }
-    }, [props.onNavigate, sync])
+    }, [props.items, props.onNavigate, sync])
 
     const visible = pinned !== null && props.hidden !== true
     const createdAt = pinned ? new Date(pinned.item.createdAt) : null
-    const canGoPrevious = Boolean(pinned && pinned.renderedIndex > 0)
-    const canGoNext = Boolean(pinned && pinned.renderedIndex + 1 < pinned.renderedTotal)
+    const canGoPrevious = Boolean(pinned && pinned.position > 1)
+    const canGoNext = Boolean(pinned && pinned.position < pinned.total)
     const locateLabel = t('session.stickyPrompt.locate')
 
     return (

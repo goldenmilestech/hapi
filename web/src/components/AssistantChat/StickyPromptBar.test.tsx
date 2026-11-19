@@ -55,6 +55,8 @@ function setPromptRect(item: ConversationOutlineItem, top: number, bottom: numbe
 
 function Harness(props: {
     items: readonly ConversationOutlineItem[]
+    /** Rendered message window; defaults to every indexed prompt. */
+    renderItems?: readonly ConversationOutlineItem[]
     hidden?: boolean
     onLocate: (item: ConversationOutlineItem) => void
     onNavigate: (item: ConversationOutlineItem) => void
@@ -74,7 +76,7 @@ function Harness(props: {
                 data-testid="viewport"
             >
                 <div ref={contentRef}>
-                    {props.items.map((item) => (
+                    {(props.renderItems ?? props.items).map((item) => (
                         <div
                             key={item.id}
                             id={getConversationMessageAnchorId(item.targetMessageId)}
@@ -104,13 +106,18 @@ function Harness(props: {
 
 const READING_LINE = STICKY_PROMPT_BAR_HEIGHT_PX + STICKY_PROMPT_READING_GAP_PX
 
-function mount(props?: { hidden?: boolean }) {
+function mount(props?: {
+    hidden?: boolean
+    items?: readonly ConversationOutlineItem[]
+    renderItems?: readonly ConversationOutlineItem[]
+}) {
     const onLocate = vi.fn()
     const onNavigate = vi.fn()
     render(
         <I18nProvider>
             <Harness
-                items={ITEMS}
+                items={props?.items ?? ITEMS}
+                renderItems={props?.renderItems}
                 hidden={props?.hidden}
                 onLocate={onLocate}
                 onNavigate={onNavigate}
@@ -197,7 +204,42 @@ describe('StickyPromptBar', () => {
         expect(onNavigate).toHaveBeenLastCalledWith(ITEMS[0])
     })
 
-    it('disables stepping past the rendered window edges', async () => {
+    it('steps into a prompt outside the rendered window through the session outline', async () => {
+        const extra: ConversationOutlineItem[] = [
+            {
+                id: 'outline:user-text:m4',
+                targetMessageId: 'user-text:m4',
+                kind: 'user',
+                label: '第四条提问',
+                createdAt: Date.parse('2026-11-19T15:22:00')
+            },
+            {
+                id: 'outline:user-text:m5',
+                targetMessageId: 'user-text:m5',
+                kind: 'user',
+                label: '第五条提问',
+                createdAt: Date.parse('2026-11-19T15:40:00')
+            }
+        ]
+        const all = [...ITEMS, ...extra]
+        // The loaded window only holds the last three prompts; the first two
+        // are still lazy and only exist in the session-wide outline index.
+        const rendered = all.slice(2)
+        const { bar, scroll, onNavigate } = mount({ items: all, renderItems: rendered })
+        setPromptRect(all[2]!, -300, -260)
+        setPromptRect(all[3]!, 320, 360)
+        setPromptRect(all[4]!, 620, 660)
+        scroll()
+        await expectVisible(bar, true)
+
+        expect(within(bar).getByText('3 / 5')).toBeInTheDocument()
+        const previous = within(bar).getByRole('button', { name: 'Previous question' })
+        expect(previous).toBeEnabled()
+        fireEvent.click(previous)
+        expect(onNavigate).toHaveBeenCalledWith(all[1])
+    })
+
+    it('disables stepping past the session outline edges', async () => {
         const { bar, scroll } = mount()
         setPromptRect(ITEMS[0]!, -300, -260)
         setPromptRect(ITEMS[1]!, 420, 460)
