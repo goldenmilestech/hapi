@@ -17,20 +17,34 @@ type PromptRect = {
 }
 
 /**
+ * State of the turn at the reading line.
+ *
+ * - `pinned`: the prompt crossed the line and is out of view; show its bar.
+ * - `visible`: the prompt crossed the line but is still on screen; hide the
+ *   bar because the bubble is its own header.
+ * - `above-first`: the line sits above the first rendered prompt, which means
+ *   the loaded message window starts in the middle of an answer and the
+ *   turn's own prompt is not rendered at all.
+ */
+export type PinnedPromptTurn =
+    | { kind: 'pinned'; index: number }
+    | { kind: 'visible'; index: number }
+    | { kind: 'above-first' }
+
+/**
  * Pick the turn whose question the sticky bar should pin.
  *
  * The turn is the last prompt whose *top* crossed the reading line, not the
  * last whose bottom did: when the viewport lands in the gap above a prompt,
- * the visible content still belongs to the previous turn. The bar hides while
- * the pinned prompt itself is visible — the bubble is its own header.
+ * the visible content still belongs to the previous turn.
  *
  * @internal Exported for unit testing.
  */
-export function findPinnedPromptIndex(
+export function resolvePinnedPrompt(
     rects: readonly PromptRect[],
     viewportTop: number,
     readingOffsetPx: number = STICKY_PROMPT_BAR_HEIGHT_PX + STICKY_PROMPT_READING_GAP_PX
-): number | null {
+): PinnedPromptTurn {
     const readingLine = viewportTop + readingOffsetPx
     let turnIndex = -1
     for (let index = 0; index < rects.length; index += 1) {
@@ -39,12 +53,22 @@ export function findPinnedPromptIndex(
         }
     }
     if (turnIndex === -1) {
-        return null
+        return { kind: 'above-first' }
     }
     if (rects[turnIndex].bottom > readingLine) {
-        return null
+        return { kind: 'visible', index: turnIndex }
     }
-    return turnIndex
+    return { kind: 'pinned', index: turnIndex }
+}
+
+/** @internal Exported for unit testing. */
+export function findPinnedPromptIndex(
+    rects: readonly PromptRect[],
+    viewportTop: number,
+    readingOffsetPx: number = STICKY_PROMPT_BAR_HEIGHT_PX + STICKY_PROMPT_READING_GAP_PX
+): number | null {
+    const turn = resolvePinnedPrompt(rects, viewportTop, readingOffsetPx)
+    return turn.kind === 'pinned' ? turn.index : null
 }
 
 type PinnedPrompt = {
@@ -132,20 +156,38 @@ export function StickyPromptBar(props: StickyPromptBarProps) {
             rects.push({ top: rect.top, bottom: rect.bottom })
         })
 
-        const index = findPinnedPromptIndex(rects, viewportTop)
-        if (index === null) {
+        const total = Math.max(props.items.length, items.length)
+        const turn = resolvePinnedPrompt(rects, viewportTop)
+        if (turn.kind === 'pinned') {
+            const item = items[turn.index]
+            publish({
+                item,
+                // The outline index is session-wide, so the pinned item's
+                // position and the total stay stable while the window swaps.
+                position: (indexById.get(item.id) ?? turn.index) + 1,
+                total
+            })
+            return
+        }
+        if (turn.kind === 'visible') {
             publish(null)
             return
         }
-        const item = items[index]
-        publish({
-            item,
-            // The outline index is session-wide, so the pinned item's position
-            // and the total stay stable while the message window swaps.
-            position: (indexById.get(item.id) ?? index) + 1,
-            total: Math.max(props.items.length, items.length)
-        })
-    }, [itemByAnchorId, indexById, props.contentRef, props.items.length, props.viewportRef, publish])
+        // The loaded window starts mid-answer, so the turn's own prompt is not
+        // rendered. Keep a bar for the outline item just before the first
+        // rendered prompt: the reading line still belongs to that turn, and
+        // the reader can load it with the locator or the step buttons.
+        const firstRendered = items[0]
+        const firstPosition = firstRendered ? indexById.get(firstRendered.id) : undefined
+        if (firstPosition !== undefined && firstPosition > 0) {
+            const previous = props.items[firstPosition - 1]
+            if (previous) {
+                publish({ item: previous, position: firstPosition, total })
+                return
+            }
+        }
+        publish(null)
+    }, [itemByAnchorId, indexById, props.contentRef, props.items, props.viewportRef, publish])
 
     useEffect(() => {
         const viewport = props.viewportRef.current
