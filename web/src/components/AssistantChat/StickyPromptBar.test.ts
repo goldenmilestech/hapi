@@ -2,11 +2,36 @@ import { describe, expect, it } from 'vitest'
 import {
     STICKY_PROMPT_BAR_HEIGHT_PX,
     STICKY_PROMPT_READING_GAP_PX,
-    findPinnedPromptIndex
+    findPinnedPromptIndex,
+    resolvePinnedPrompt
 } from './StickyPromptBar'
 
 const READING_OFFSET = STICKY_PROMPT_BAR_HEIGHT_PX + STICKY_PROMPT_READING_GAP_PX
 const VIEWPORT_TOP = 100
+
+describe('resolvePinnedPrompt', () => {
+    it('reports above-first when the window starts before the first prompt', () => {
+        expect(resolvePinnedPrompt([
+            { top: VIEWPORT_TOP + READING_OFFSET + 20, bottom: VIEWPORT_TOP + READING_OFFSET + 60 }
+        ], VIEWPORT_TOP)).toEqual({ kind: 'above-first' })
+    })
+
+    it('reports above-first when nothing is rendered', () => {
+        expect(resolvePinnedPrompt([], VIEWPORT_TOP)).toEqual({ kind: 'above-first' })
+    })
+
+    it('reports visible while the prompt bubble is on screen', () => {
+        expect(resolvePinnedPrompt([
+            { top: VIEWPORT_TOP - 10, bottom: VIEWPORT_TOP + READING_OFFSET + 20 }
+        ], VIEWPORT_TOP)).toEqual({ kind: 'visible', index: 0 })
+    })
+
+    it('reports pinned once the prompt crossed the reading line', () => {
+        expect(resolvePinnedPrompt([
+            { top: VIEWPORT_TOP - 200, bottom: VIEWPORT_TOP - 160 }
+        ], VIEWPORT_TOP)).toEqual({ kind: 'pinned', index: 0 })
+    })
+})
 
 describe('findPinnedPromptIndex', () => {
     it('returns null when nothing is rendered', () => {

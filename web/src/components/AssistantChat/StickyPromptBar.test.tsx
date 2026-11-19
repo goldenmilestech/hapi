@@ -30,6 +30,24 @@ const ITEMS: ConversationOutlineItem[] = [
     }
 ]
 
+const EXTENDED_ITEMS: ConversationOutlineItem[] = [
+    ...ITEMS,
+    {
+        id: 'outline:user-text:m4',
+        targetMessageId: 'user-text:m4',
+        kind: 'user',
+        label: '第四条提问',
+        createdAt: Date.parse('2026-11-19T15:22:00')
+    },
+    {
+        id: 'outline:user-text:m5',
+        targetMessageId: 'user-text:m5',
+        kind: 'user',
+        label: '第五条提问',
+        createdAt: Date.parse('2026-11-19T15:40:00')
+    }
+]
+
 function rect(top: number, bottom: number): DOMRect {
     return {
         top,
@@ -205,30 +223,13 @@ describe('StickyPromptBar', () => {
     })
 
     it('steps into a prompt outside the rendered window through the session outline', async () => {
-        const extra: ConversationOutlineItem[] = [
-            {
-                id: 'outline:user-text:m4',
-                targetMessageId: 'user-text:m4',
-                kind: 'user',
-                label: '第四条提问',
-                createdAt: Date.parse('2026-11-19T15:22:00')
-            },
-            {
-                id: 'outline:user-text:m5',
-                targetMessageId: 'user-text:m5',
-                kind: 'user',
-                label: '第五条提问',
-                createdAt: Date.parse('2026-11-19T15:40:00')
-            }
-        ]
-        const all = [...ITEMS, ...extra]
         // The loaded window only holds the last three prompts; the first two
         // are still lazy and only exist in the session-wide outline index.
-        const rendered = all.slice(2)
-        const { bar, scroll, onNavigate } = mount({ items: all, renderItems: rendered })
-        setPromptRect(all[2]!, -300, -260)
-        setPromptRect(all[3]!, 320, 360)
-        setPromptRect(all[4]!, 620, 660)
+        const rendered = EXTENDED_ITEMS.slice(2)
+        const { bar, scroll, onNavigate } = mount({ items: EXTENDED_ITEMS, renderItems: rendered })
+        setPromptRect(EXTENDED_ITEMS[2]!, -300, -260)
+        setPromptRect(EXTENDED_ITEMS[3]!, 320, 360)
+        setPromptRect(EXTENDED_ITEMS[4]!, 620, 660)
         scroll()
         await expectVisible(bar, true)
 
@@ -236,7 +237,32 @@ describe('StickyPromptBar', () => {
         const previous = within(bar).getByRole('button', { name: 'Previous question' })
         expect(previous).toBeEnabled()
         fireEvent.click(previous)
-        expect(onNavigate).toHaveBeenCalledWith(all[1])
+        expect(onNavigate).toHaveBeenCalledWith(EXTENDED_ITEMS[1])
+    })
+
+    it('keeps a bar for the previous prompt when the window starts mid-answer', async () => {
+        // The window begins inside prompt 2's answer: prompts 3-5 render, but
+        // their tops are all below the reading line. The bar must still say
+        // which turn the visible content belongs to and offer to load it.
+        const rendered = EXTENDED_ITEMS.slice(2)
+        const { bar, scroll, onLocate, onNavigate } = mount({ items: EXTENDED_ITEMS, renderItems: rendered })
+        setPromptRect(EXTENDED_ITEMS[2]!, 320, 360)
+        setPromptRect(EXTENDED_ITEMS[3]!, 620, 660)
+        setPromptRect(EXTENDED_ITEMS[4]!, 920, 960)
+        scroll()
+
+        await expectVisible(bar, true)
+        expect(within(bar).getByText('第二条提问')).toBeInTheDocument()
+        expect(within(bar).getByText('2 / 5')).toBeInTheDocument()
+
+        fireEvent.click(within(bar).getByRole('button', { name: 'Previous question' }))
+        expect(onNavigate).toHaveBeenLastCalledWith(EXTENDED_ITEMS[0])
+        fireEvent.click(within(bar).getByRole('button', { name: 'Next question' }))
+        expect(onNavigate).toHaveBeenLastCalledWith(EXTENDED_ITEMS[2])
+
+        const locateButtons = within(bar).getAllByRole('button', { name: 'Jump to this question' })
+        fireEvent.click(locateButtons[0]!)
+        expect(onLocate).toHaveBeenCalledWith(EXTENDED_ITEMS[1])
     })
 
     it('disables stepping past the session outline edges', async () => {
