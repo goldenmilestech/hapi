@@ -457,7 +457,8 @@ describe('scroll anchor helpers', () => {
             searchTargetLocked: false,
             pendingScrollRestore: false,
             tailScrollInProgress: false,
-            initialScrollSettling: false
+            initialScrollSettling: false,
+            outlineJumpInProgress: false
         })).toBe(true)
     })
 
@@ -601,7 +602,8 @@ describe('scroll anchor helpers', () => {
             searchTargetLocked: false,
             pendingScrollRestore: false,
             tailScrollInProgress: false,
-            initialScrollSettling: false
+            initialScrollSettling: false,
+            outlineJumpInProgress: false
         }
 
         expect(shouldPreserveHistoryScrollAnchor({ ...base, hasAnchor: false })).toBe(false)
@@ -610,6 +612,7 @@ describe('scroll anchor helpers', () => {
         expect(shouldPreserveHistoryScrollAnchor({ ...base, pendingScrollRestore: true })).toBe(false)
         expect(shouldPreserveHistoryScrollAnchor({ ...base, tailScrollInProgress: true })).toBe(false)
         expect(shouldPreserveHistoryScrollAnchor({ ...base, initialScrollSettling: true })).toBe(false)
+        expect(shouldPreserveHistoryScrollAnchor({ ...base, outlineJumpInProgress: true })).toBe(false)
     })
 
     it('resolves a streamed card anchor to its raw message id, not the stream id', () => {
