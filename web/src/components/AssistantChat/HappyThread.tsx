@@ -2934,8 +2934,9 @@ export function HappyThread(props: {
     /**
      * Step between turns from the sticky bar: park the target prompt just
      * above the viewport so the bar becomes that turn's header and the answer
-     * starts on the first readable row. Like the outline jump, the step owns
-     * the viewport until the smooth scroll lands.
+     * starts on the first readable row. A target outside the lazily loaded
+     * window loads its bounded context first (the same path as the outline
+     * jump), so stepping does not stop at the edge of the rendered window.
      */
     const handleStickyPromptNavigate = useCallback((item: ConversationOutlineItem) => {
         const viewport = viewportRef.current
@@ -2944,30 +2945,28 @@ export function HappyThread(props: {
             return
         }
         const anchorId = getConversationMessageAnchorId(item.targetMessageId)
-        const anchor = Array.from(
-            content.querySelectorAll<HTMLElement>('[data-hapi-message-role="user"]')
-        ).find((element) => element.id === anchorId)
-        if (!anchor) {
-            return
-        }
+
+        const selectToken = outlineSelectTokenRef.current + 1
+        outlineSelectTokenRef.current = selectToken
+        const isCurrent = () => outlineSelectTokenRef.current === selectToken
+
         autoScrollEnabledRef.current = false
         atBottomRef.current = false
         onViewModeChangeRef.current('history')
         tailScrollInProgressRef.current = false
         historyAnchorRef.current = null
-        // A slow outline/context jump from an earlier click must not land after
-        // this one and move the reader somewhere else.
-        outlineSelectTokenRef.current += 1
-        // Same viewport ownership as the outline jump: a settling card must
-        // not write scrollTop and cancel the smooth step.
+        // Claim the viewport before a possibly slow context load: settling
+        // cards and coverage requests must not move the reader while the row
+        // is fetched, and the smooth step owns the viewport once it starts.
         outlineJumpInProgressRef.current = true
         if (outlineJumpEndTimerRef.current !== null) {
             window.clearTimeout(outlineJumpEndTimerRef.current)
             outlineJumpEndTimerRef.current = null
         }
+
         // Park the prompt just above the viewport top: the bar becomes that
         // turn's header. Recompute the delta from live geometry, resolving the
-        // row by id, so a re-render during the animation cannot leave a stale
+        // row by id, so a re-render or context load cannot leave a stale
         // element behind.
         const findAnchor = () => {
             const current = viewportRef.current
@@ -2985,16 +2984,44 @@ export function HappyThread(props: {
             if (!current) return
             current.scrollTo({ top: current.scrollTop + jumpDelta(), behavior })
         }
-        outlineJumpTargetRef.current = {
-            isOffTarget: () => Math.abs(jumpDelta()) > 4,
-            recenter: () => scrollJump('smooth'),
-            settle: () => scrollJump('instant')
+        const beginJump = () => {
+            outlineJumpTargetRef.current = {
+                isOffTarget: () => Math.abs(jumpDelta()) > 4,
+                recenter: () => scrollJump('smooth'),
+                settle: () => scrollJump('instant')
+            }
+            scrollJump('smooth')
+            outlineJumpEndTimerRef.current = window.setTimeout(() => {
+                finishOutlineJump()
+            }, OUTLINE_JUMP_SETTLE_MS)
         }
-        scrollJump('smooth')
-        outlineJumpEndTimerRef.current = window.setTimeout(() => {
-            finishOutlineJump()
-        }, OUTLINE_JUMP_SETTLE_MS)
-    }, [finishOutlineJump])
+
+        if (findAnchor()) {
+            beginJump()
+            return
+        }
+
+        void (async () => {
+            const target = await focusOutlineTargetMessage({
+                targetMessageId: item.targetMessageId,
+                sourceMessageId: getOutlineSourceMessageId(item.targetMessageId),
+                findTarget: (anchor) => document.getElementById(anchor),
+                loadMessageContext: props.onLoadMessageContext,
+                waitForTarget: (anchor) => waitForOutlineAnchor(anchor, isCurrent),
+                hasMoreMessages: () => hasMoreMessagesRef.current,
+                loadOlderPreservingScroll: loadOlderForOutline,
+                isCurrent
+            })
+            if (!isCurrent()) {
+                return
+            }
+            if (!target || !findAnchor()) {
+                finishOutlineJump()
+                return
+            }
+            beginJump()
+        })()
+    }, [finishOutlineJump, loadOlderForOutline, props.onLoadMessageContext])
 
     useEffect(() => {
         if (searchTargetHistoryLockRef.current || outlineJumpInProgressRef.current) {
