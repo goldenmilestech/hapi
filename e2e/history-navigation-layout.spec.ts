@@ -81,3 +81,54 @@ for (const device of [
         })
     })
 }
+
+// Regression: the outline jump is a smooth scroll, and media cards inside the
+// already-rendered window settle asynchronously. The history anchor used to
+// write scrollTop mid-animation, which cancels the smooth scroll and strands
+// the reader between the old position and the row they picked. The jump must
+// own the viewport until it lands.
+test('outline jump is not interrupted by media settling above the target', async ({ page }) => {
+    await page.goto('/e2e-fixtures/history-load-fixture.html?navigationShell=1&navigationMedia=1')
+    await expect(page.getByText('Fixture message 1200', { exact: true })).toBeVisible()
+    await page.waitForTimeout(2000)
+
+    // Collapse the rows above the picked turn one frame after the jump starts,
+    // the same layout change a media card finishing above the viewport makes.
+    await page.evaluate(() => {
+        const proto = Element.prototype
+        const original = proto.scrollIntoView
+        proto.scrollIntoView = function (...args: Parameters<Element['scrollIntoView']>) {
+            const result = original.apply(this, args)
+            const jumped = this
+            requestAnimationFrame(() => {
+                const chat = document.querySelector<HTMLElement>('.chat-scroll-y')
+                if (!chat) return
+                const targetTop = jumped.getBoundingClientRect().top
+                for (const row of Array.from(
+                    chat.querySelectorAll<HTMLElement>('.happy-thread-messages > [id]')
+                )) {
+                    if (row.getBoundingClientRect().bottom <= targetTop) {
+                        row.style.display = 'none'
+                    }
+                }
+            })
+            return result
+        }
+    })
+
+    await page.getByRole('button', { name: 'Open history', exact: true }).click()
+    await page.getByRole('searchbox', { name: 'Search outline items' }).fill('Fixture message 1010')
+    await page.getByRole('button', { name: /Fixture message 1010/ }).click()
+    await page.waitForTimeout(2000)
+
+    const offset = await page.evaluate(() => {
+        const chat = document.querySelector<HTMLElement>('.chat-scroll-y')
+        const target = document.getElementById('hapi-message-user-text:m-1010')
+        if (!chat || !target) return null
+        return Math.round(target.getBoundingClientRect().top - chat.getBoundingClientRect().top)
+    })
+    expect(offset).not.toBeNull()
+    // The row carries `scroll-mt-4` (16px), so a landing at the top is not 0.
+    expect(offset as number).toBeGreaterThanOrEqual(-4)
+    expect(offset as number).toBeLessThanOrEqual(28)
+})

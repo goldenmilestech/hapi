@@ -145,6 +145,10 @@ const MAX_SEARCH_TARGET_RENDER_RETRIES = 120
 // jump on a stale DOM read.
 const OUTLINE_CONTEXT_RENDER_POLL_INTERVAL_MS = 50
 const OUTLINE_CONTEXT_RENDER_TIMEOUT_MS = 4000
+// Fallback for browsers that do not emit `scrollend`: an outline jump keeps
+// the viewport until this deadline so its smooth animation cannot be cancelled
+// by a media card settling underneath it.
+const OUTLINE_JUMP_SETTLE_MS = 1600
 const SEARCH_TARGET_SCROLL_DELAYS_MS = [
     0, 16, 50, 120, 250, 500, 900, 1400, 2200, 3500, 5000, 7000,
     10_000, 15_000, 22_000, 30_000, 45_000
@@ -253,6 +257,7 @@ export function shouldPreserveHistoryScrollAnchor(params: {
     pendingScrollRestore: boolean
     tailScrollInProgress: boolean
     initialScrollSettling: boolean
+    outlineJumpInProgress: boolean
 }): boolean {
     return params.hasAnchor
         && !params.autoScrollEnabled
@@ -260,6 +265,7 @@ export function shouldPreserveHistoryScrollAnchor(params: {
         && !params.pendingScrollRestore
         && !params.tailScrollInProgress
         && !params.initialScrollSettling
+        && !params.outlineJumpInProgress
 }
 
 /**
@@ -405,6 +411,18 @@ export function computeHistoryAnchorCorrection(params: {
 }): number {
     const expectedOffset = params.anchorTopOffset + params.baselineScrollTop - params.currentScrollTop
     return params.currentAnchorOffset - expectedOffset
+}
+
+/**
+ * A programmatic jump (outline entry or sticky-bar step) owns the viewport
+ * until it lands. A layout change during the smooth animation re-centres the
+ * jump on the target instead of moving the anchor underneath it, and a drift
+ * that survives the animation is snapped away on release.
+ */
+type OutlineJumpTarget = {
+    isOffTarget: () => boolean
+    recenter: () => void
+    settle: () => void
 }
 
 type HistoryScrollAnchor = {
@@ -1217,6 +1235,12 @@ export function HappyThread(props: {
     // Latest outline selection wins: a slow context load from an earlier click
     // must not scroll the viewport after a newer row was selected.
     const outlineSelectTokenRef = useRef(0)
+    // An outline jump owns the viewport while it lands. A card settling under
+    // the smooth scroll would otherwise write scrollTop and cancel the jump,
+    // leaving the reader short of the target they picked.
+    const outlineJumpInProgressRef = useRef(false)
+    const outlineJumpEndTimerRef = useRef<number | null>(null)
+    const outlineJumpTargetRef = useRef<OutlineJumpTarget | null>(null)
     const searchTargetScrollCleanupTimerRef = useRef<number | null>(null)
     const preserveSearchTargetScrollOnReleaseRef = useRef(false)
     const pendingRequestTargetCleanupTimerRef = useRef<number | null>(null)
@@ -1373,6 +1397,55 @@ export function HappyThread(props: {
         }
         initialScrollTimersRef.current = []
     }, [])
+
+    /**
+     * Abandon an in-flight jump without settling on its target. Used when the
+     * reader takes the viewport back (wheel/keyboard/pointer) or asks for the
+     * tail: snapping back to a jump they are overriding would be a worse
+     * surprise than the interruption the lock prevents.
+     */
+    const cancelOutlineJump = useCallback(() => {
+        outlineJumpInProgressRef.current = false
+        outlineJumpTargetRef.current = null
+        if (outlineJumpEndTimerRef.current !== null) {
+            window.clearTimeout(outlineJumpEndTimerRef.current)
+            outlineJumpEndTimerRef.current = null
+        }
+    }, [])
+
+    /**
+     * Release the outline jump's ownership of the viewport and rebaseline the
+     * history anchor on the position the jump actually reached. `scrollend`
+     * retires the lock once the smooth animation settles; the timer is the
+     * fallback for browsers that never emit it.
+     */
+    const finishOutlineJump = useCallback(() => {
+        if (outlineJumpEndTimerRef.current !== null) {
+            window.clearTimeout(outlineJumpEndTimerRef.current)
+            outlineJumpEndTimerRef.current = null
+        }
+        if (!outlineJumpInProgressRef.current) {
+            return
+        }
+        const jump = outlineJumpTargetRef.current
+        outlineJumpTargetRef.current = null
+        outlineJumpInProgressRef.current = false
+        const viewport = viewportRef.current
+        if (viewport && jump && jump.isOffTarget()) {
+            jump.settle()
+        }
+        if (
+            viewport
+            && !autoScrollEnabledRef.current
+            && !searchTargetHistoryLockRef.current
+            && !isInitialScrollSettling()
+        ) {
+            const next = captureHistoryScrollAnchor(viewport)
+            if (next) {
+                historyAnchorRef.current = next
+            }
+        }
+    }, [isInitialScrollSettling])
     const clearSearchTargetScrollTimers = useCallback(() => {
         for (const timer of searchTargetScrollTimersRef.current) {
             window.clearTimeout(timer)
@@ -1618,6 +1691,14 @@ export function HappyThread(props: {
                 pending.scrollTop = viewport.scrollTop
             }
 
+            // An outline jump owns the viewport until its smooth animation
+            // lands. The intermediate scroll positions it passes through must
+            // not re-enter tail mode, capture anchors, or request older pages:
+            // any of those writes scrollTop and cancels the jump.
+            if (outlineJumpInProgressRef.current) {
+                return
+            }
+
             // Keep the reader's history anchor live. The content
             // ResizeObserver compares the row's expected offset (baseline
             // plus the scroll delta) with the measured one and corrects the
@@ -1629,6 +1710,7 @@ export function HappyThread(props: {
             if (
                 !intent.isNearBottom
                 && !searchTargetHistoryLockRef.current
+                && !outlineJumpInProgressRef.current
                 && !isInitialScrollSettling()
             ) {
                 const saved = historyAnchorRef.current
@@ -1774,6 +1856,8 @@ export function HappyThread(props: {
             ) {
                 return
             }
+            // The reader is taking the viewport back; do not snap to the jump.
+            cancelOutlineJump()
             cancelSearchRecentering()
             // Native keyboard scrolling can outlive a fixed intent timeout.
             // Keep this gesture armed until consumed, completed, or cancelled.
@@ -1795,6 +1879,7 @@ export function HappyThread(props: {
             if (isNestedScrollEvent(event) || event.button !== 0) {
                 return
             }
+            cancelOutlineJump()
             cancelSearchRecentering()
             armPointerIntent()
         }
@@ -1849,6 +1934,7 @@ export function HappyThread(props: {
 
         const handleWheel = (event: WheelEvent) => {
             if (isNestedScrollEvent(event)) return
+            cancelOutlineJump()
             cancelSearchRecentering()
             keyboardResumeActive = false
             if (event.deltaY >= 0) {
@@ -1874,6 +1960,7 @@ export function HappyThread(props: {
 
         const handleTouchStart = (event: TouchEvent) => {
             if (isNestedScrollEvent(event)) return
+            cancelOutlineJump()
             cancelSearchRecentering()
             keyboardResumeActive = false
             updatePullToLoadState('idle')
@@ -1927,6 +2014,9 @@ export function HappyThread(props: {
         }
         const handleScrollEnd = (event: Event) => {
             if (event.target !== viewport) return
+            // The outline jump's smooth animation owns the viewport until it
+            // stops; release it before retiring unconsumed demand.
+            finishOutlineJump()
             // Recheck the final geometry before retiring unconsumed demand.
             if (keyboardResumeActive && needsViewportCoverageRef.current()) {
                 void requestOlderRef.current('user')
@@ -1974,6 +2064,7 @@ export function HappyThread(props: {
 
     const scrollToBottomInstant = useCallback(() => {
         if (searchTargetHistoryLockRef.current) return
+        cancelOutlineJump()
         const viewport = viewportRef.current
         historyAnchorRef.current = null
         setShowScrollToBottom(false)
@@ -1981,7 +2072,7 @@ export function HappyThread(props: {
             viewport.scrollTo({ top: viewport.scrollHeight, behavior: 'instant' })
             lastScrollTopRef.current = viewport.scrollTop
         }
-    }, [])
+    }, [cancelOutlineJump])
 
     const scrollToBottomSmooth = useCallback(() => {
         const viewport = viewportRef.current
@@ -2055,6 +2146,7 @@ export function HappyThread(props: {
 
     // Scroll to bottom handler for the indicator button
     const scrollToBottom = useCallback(() => {
+        cancelOutlineJump()
         if (activeSearchTargetId) {
             dismissSearchTarget()
         } else {
@@ -2084,12 +2176,18 @@ export function HappyThread(props: {
         } else {
             onViewModeChangeRef.current('tail')
         }
-    }, [activeSearchTargetId, dismissSearchTarget, props.onJumpToTail, releaseSearchTargetHistoryLock, scrollToBottomSmooth])
+    }, [activeSearchTargetId, cancelOutlineJump, dismissSearchTarget, props.onJumpToTail, releaseSearchTargetHistoryLock, scrollToBottomSmooth])
 
     // Reset state when session changes
     useLayoutEffect(() => {
         const hasInitialSearchTarget = Boolean(props.initialTargetMessageId?.trim())
         searchTargetHistoryLockRef.current = false
+        outlineJumpInProgressRef.current = false
+        outlineJumpTargetRef.current = null
+        if (outlineJumpEndTimerRef.current !== null) {
+            window.clearTimeout(outlineJumpEndTimerRef.current)
+            outlineJumpEndTimerRef.current = null
+        }
         setShowScrollToBottom(false)
         autoScrollEnabledRef.current = true
         tailScrollInProgressRef.current = false
@@ -2734,10 +2832,24 @@ export function HappyThread(props: {
         // the pre-jump "at bottom" state and snap the viewport back to the end,
         // undoing the scroll below.
         autoScrollEnabledRef.current = false
+        atBottomRef.current = false
+        // A historical target lives outside the tail window; leaving the view
+        // mode on `tail` would let a background sync replace the context the
+        // jump just loaded.
+        onViewModeChangeRef.current('history')
         // The jump owns the viewport from here on: a stale history anchor would
         // be re-applied to the resized context and fight the smooth scroll.
         // The resulting scroll events capture a fresh anchor at the target.
         historyAnchorRef.current = null
+        // Cards settling while the smooth animation runs must not write
+        // scrollTop: Chrome cancels the animation and strands the reader
+        // between the old position and the row they picked. `scrollend`
+        // releases the lock when the jump lands.
+        outlineJumpInProgressRef.current = true
+        if (outlineJumpEndTimerRef.current !== null) {
+            window.clearTimeout(outlineJumpEndTimerRef.current)
+            outlineJumpEndTimerRef.current = null
+        }
 
         const target = await focusOutlineTargetMessage({
             targetMessageId: item.targetMessageId,
@@ -2750,11 +2862,34 @@ export function HappyThread(props: {
         })
         if (!isCurrent()) return
         if (target) {
+            outlineJumpTargetRef.current = {
+                isOffTarget: () => {
+                    const viewport = viewportRef.current
+                    if (!viewport || !target.isConnected) return false
+                    // `scrollIntoView` honours the row's scroll margin and the
+                    // viewport's scroll padding, so the landed offset is not 0.
+                    const targetStyle = window.getComputedStyle(target)
+                    const viewportStyle = window.getComputedStyle(viewport)
+                    const landedOffset =
+                        (Number.parseFloat(targetStyle.scrollMarginTop) || 0)
+                        + (Number.parseFloat(viewportStyle.scrollPaddingTop) || 0)
+                    const currentOffset =
+                        target.getBoundingClientRect().top - viewport.getBoundingClientRect().top
+                    return Math.abs(currentOffset - landedOffset) > 8
+                },
+                recenter: () => target.scrollIntoView({ block: 'start', behavior: 'smooth' }),
+                settle: () => target.scrollIntoView({ block: 'start' })
+            }
             target.scrollIntoView({ block: 'start', behavior: 'smooth' })
+            outlineJumpEndTimerRef.current = window.setTimeout(() => {
+                finishOutlineJump()
+            }, OUTLINE_JUMP_SETTLE_MS)
+        } else {
+            finishOutlineJump()
         }
         props.onOutlineItemClick?.(item)
         props.onOutlineOpenChange(false)
-    }, [loadOlderForOutline, props.onLoadMessageContext, props.onOutlineItemClick, props.onOutlineOpenChange])
+    }, [finishOutlineJump, loadOlderForOutline, props.onLoadMessageContext, props.onOutlineItemClick, props.onOutlineOpenChange])
 
     /**
      * Locate from the sticky prompt bar: reuse the outline jump (it can load a
@@ -2806,21 +2941,46 @@ export function HappyThread(props: {
             return
         }
         autoScrollEnabledRef.current = false
+        atBottomRef.current = false
+        onViewModeChangeRef.current('history')
         tailScrollInProgressRef.current = false
         historyAnchorRef.current = null
         // A slow outline/context jump from an earlier click must not land after
         // this one and move the reader somewhere else.
         outlineSelectTokenRef.current += 1
-        const viewportRect = viewport.getBoundingClientRect()
-        const anchorRect = anchor.getBoundingClientRect()
-        viewport.scrollTo({
-            top: viewport.scrollTop + (anchorRect.bottom - viewportRect.top) + 2,
-            behavior: 'smooth'
-        })
-    }, [])
+        // Same viewport ownership as the outline jump: a settling card must
+        // not write scrollTop and cancel the smooth step.
+        outlineJumpInProgressRef.current = true
+        if (outlineJumpEndTimerRef.current !== null) {
+            window.clearTimeout(outlineJumpEndTimerRef.current)
+            outlineJumpEndTimerRef.current = null
+        }
+        // Park the prompt just above the viewport top: the bar becomes that
+        // turn's header. Recompute the delta from live geometry so a resize
+        // during the animation can re-centre the step.
+        const jumpDelta = () => {
+            const current = viewportRef.current
+            if (!current || !anchor.isConnected) return 0
+            return anchor.getBoundingClientRect().bottom - current.getBoundingClientRect().top + 2
+        }
+        const scrollJump = (behavior: ScrollBehavior) => {
+            const current = viewportRef.current
+            if (!current) return
+            current.scrollTo({ top: current.scrollTop + jumpDelta(), behavior })
+        }
+        outlineJumpTargetRef.current = {
+            isOffTarget: () => Math.abs(jumpDelta()) > 4,
+            recenter: () => scrollJump('smooth'),
+            settle: () => scrollJump('instant')
+        }
+        scrollJump('smooth')
+        outlineJumpEndTimerRef.current = window.setTimeout(() => {
+            finishOutlineJump()
+        }, OUTLINE_JUMP_SETTLE_MS)
+    }, [finishOutlineJump])
 
     useEffect(() => {
-        if (searchTargetHistoryLockRef.current) {
+        if (searchTargetHistoryLockRef.current || outlineJumpInProgressRef.current) {
             clearCoverageCheckTimer()
             return
         }
@@ -2870,6 +3030,12 @@ export function HappyThread(props: {
             // instead. An older-page prepend uses the same correction, so this
             // callback and the apply-time layout effect are idempotent.
             const historyViewport = viewportRef.current
+            if (historyViewport && outlineJumpInProgressRef.current) {
+                const jump = outlineJumpTargetRef.current
+                if (jump && jump.isOffTarget()) {
+                    jump.recenter()
+                }
+            }
             if (
                 historyViewport
                 && shouldPreserveHistoryScrollAnchor({
@@ -2878,7 +3044,8 @@ export function HappyThread(props: {
                     searchTargetLocked: searchTargetHistoryLockRef.current,
                     pendingScrollRestore: pendingForwardAnchorRef.current !== null,
                     tailScrollInProgress: tailScrollInProgressRef.current,
-                    initialScrollSettling: isInitialScrollSettling()
+                    initialScrollSettling: isInitialScrollSettling(),
+                    outlineJumpInProgress: outlineJumpInProgressRef.current
                 })
             ) {
                 applyHistoryAnchorCorrection(historyViewport)
@@ -2903,6 +3070,7 @@ export function HappyThread(props: {
             // in-flight load, backoff, or paused run remains exclusive.
             if (
                 !searchTargetHistoryLockRef.current
+                && !outlineJumpInProgressRef.current
                 && !pendingScrollRef.current
                 && needsViewportCoverage()
             ) {
@@ -2944,6 +3112,7 @@ export function HappyThread(props: {
                 || searchTargetHistoryLockRef.current
                 || pendingScrollRef.current !== null
                 || pendingForwardAnchorRef.current !== null
+                || outlineJumpInProgressRef.current
                 || isInitialScrollSettling()
             ) {
                 return
