@@ -1610,15 +1610,15 @@ export function HappyThread(props: {
             if (atBottom === atBottomRef.current) {
                 return
             }
-            if (atBottom && searchTargetHistoryLockRef.current) {
+            if (atBottom && (searchTargetHistoryLockRef.current || hasMoreNewerRef.current)) {
                 // A clamped/programmatic scroll can look like the bottom was
-                // reached while the historical search window is being mounted.
-                // Do not let that transient event re-enter tail mode.
+                // reached while a historical window is being mounted, and a
+                // bounded window can also stop short of the session head.
+                // Either way this bottom is the end of the loaded context, not
+                // the end of the conversation: pull the next page forward
+                // instead of stranding the reader or swapping in the tail
+                // (tiann/hapi#1598 review).
                 atBottomRef.current = false
-                // The window stops short of the head, so this bottom is the
-                // end of the loaded context rather than the end of the
-                // conversation. Pull the next page forward instead of
-                // stranding the reader (tiann/hapi#1598 review).
                 requestForwardPageRef.current()
                 return
             }
@@ -1805,6 +1805,17 @@ export function HappyThread(props: {
             if (intent.isNearBottom) {
                 tailScrollInProgressRef.current = false
                 setShowScrollToBottom(false)
+                // A jumped-to history window can stop short of the session
+                // head. Its bottom is the end of the loaded page, not the end
+                // of the conversation: walk the next page forward and stay in
+                // history. Entering tail mode here would replace the window
+                // and teleport the reader to the newest message.
+                if (hasMoreNewerRef.current && !isSyncingTailRef.current) {
+                    setAutoScrollMode(false)
+                    setAtBottomMode(false)
+                    requestForwardPageRef.current()
+                    return
+                }
                 setAutoScrollMode(true)
                 setAtBottomMode(true)
                 return
