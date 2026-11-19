@@ -27,6 +27,7 @@ import { getToolCardDisplayPresentation, useToolCardDisplayMode } from '@/hooks/
 import { useTranslation } from '@/lib/use-translation'
 import { CloseIcon } from '@/components/icons'
 import { ShareTurnDialog } from '@/components/AssistantChat/ShareTurnDialog'
+import { StickyPromptBar } from '@/components/AssistantChat/StickyPromptBar'
 import { getSessionModelLabel } from '@/lib/sessionModelLabel'
 import { getSessionTitle } from '@/lib/sessionTitle'
 import { isFastServiceTier } from '@/components/AssistantChat/codexFastMode'
@@ -132,6 +133,7 @@ export function prependMissingUserSnapshot(
 const MESSAGE_ANCHOR_SELECTOR = '.happy-thread-messages > [id]'
 const SEARCH_TARGET_HIGHLIGHT_CLASS = 'hapi-message-search-target'
 const PENDING_REQUEST_TARGET_HIGHLIGHT_CLASS = 'hapi-message-pending-target'
+const STICKY_PROMPT_FLASH_CLASS = 'hapi-user-bubble-flash'
 const SEARCH_TARGET_MATCH_ATTRIBUTE = 'data-hapi-source-search-match'
 const SEARCH_TARGET_QUERY_RETRY_DELAY_MS = 75
 const MAX_SEARCH_TARGET_QUERY_RETRIES = 80
@@ -1218,9 +1220,16 @@ export function HappyThread(props: {
     const searchTargetScrollCleanupTimerRef = useRef<number | null>(null)
     const preserveSearchTargetScrollOnReleaseRef = useRef(false)
     const pendingRequestTargetCleanupTimerRef = useRef<number | null>(null)
+    const stickyLocateCleanupTimerRef = useRef<number | null>(null)
 
     // Smart scroll state: enabled only while the user is intentionally at the bottom.
     const autoScrollEnabledRef = useRef(true)
+
+    useEffect(() => () => {
+        if (stickyLocateCleanupTimerRef.current !== null) {
+            window.clearTimeout(stickyLocateCleanupTimerRef.current)
+        }
+    }, [])
     useLayoutEffect(() => {
         if (!props.initialTargetMessageId) return
         // A target jump owns the viewport immediately. A passive effect is too
@@ -2747,6 +2756,69 @@ export function HappyThread(props: {
         props.onOutlineOpenChange(false)
     }, [loadOlderForOutline, props.onLoadMessageContext, props.onOutlineItemClick, props.onOutlineOpenChange])
 
+    /**
+     * Locate from the sticky prompt bar: reuse the outline jump (it can load a
+     * bounded context window for rows outside the rendered window) and flash
+     * the bubble so the reader can see where they landed.
+     */
+    const handleStickyPromptLocate = useCallback((item: ConversationOutlineItem) => {
+        void (async () => {
+            await handleOutlineSelect(item)
+            const target = document.getElementById(getConversationMessageAnchorId(item.targetMessageId))
+            if (!target) {
+                return
+            }
+            const bubble = target.querySelector<HTMLElement>('.happy-user-bubble') ?? target
+            for (const previous of Array.from(document.querySelectorAll<HTMLElement>(
+                `.${STICKY_PROMPT_FLASH_CLASS}`
+            ))) {
+                previous.classList.remove(STICKY_PROMPT_FLASH_CLASS)
+            }
+            void bubble.offsetWidth
+            bubble.classList.add(STICKY_PROMPT_FLASH_CLASS)
+            if (stickyLocateCleanupTimerRef.current !== null) {
+                window.clearTimeout(stickyLocateCleanupTimerRef.current)
+            }
+            stickyLocateCleanupTimerRef.current = window.setTimeout(() => {
+                bubble.classList.remove(STICKY_PROMPT_FLASH_CLASS)
+                stickyLocateCleanupTimerRef.current = null
+            }, 1_800)
+        })()
+    }, [handleOutlineSelect])
+
+    /**
+     * Step between turns from the sticky bar: park the target prompt just
+     * above the viewport so the bar becomes that turn's header and the answer
+     * starts on the first readable row. Like the outline jump, the step owns
+     * the viewport until the smooth scroll lands.
+     */
+    const handleStickyPromptNavigate = useCallback((item: ConversationOutlineItem) => {
+        const viewport = viewportRef.current
+        const content = contentRef.current
+        if (!viewport || !content) {
+            return
+        }
+        const anchorId = getConversationMessageAnchorId(item.targetMessageId)
+        const anchor = Array.from(
+            content.querySelectorAll<HTMLElement>('[data-hapi-message-role="user"]')
+        ).find((element) => element.id === anchorId)
+        if (!anchor) {
+            return
+        }
+        autoScrollEnabledRef.current = false
+        tailScrollInProgressRef.current = false
+        historyAnchorRef.current = null
+        // A slow outline/context jump from an earlier click must not land after
+        // this one and move the reader somewhere else.
+        outlineSelectTokenRef.current += 1
+        const viewportRect = viewport.getBoundingClientRect()
+        const anchorRect = anchor.getBoundingClientRect()
+        viewport.scrollTo({
+            top: viewport.scrollTop + (anchorRect.bottom - viewportRect.top) + 2,
+            behavior: 'smooth'
+        })
+    }, [])
+
     useEffect(() => {
         if (searchTargetHistoryLockRef.current) {
             clearCoverageCheckTimer()
@@ -3062,6 +3134,15 @@ export function HappyThread(props: {
             loadOlderMessagesPreservingScroll: loadOlderFromConsumer
         }}>
             <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col relative">
+                <StickyPromptBar
+                    viewportRef={viewportRef}
+                    contentRef={contentRef}
+                    items={props.outlineItems}
+                    revision={`${appliedMessagesVersion}:${appliedHistoryVersion}`}
+                    hidden={props.outlineOpen || hasSearchTarget}
+                    onLocate={handleStickyPromptLocate}
+                    onNavigate={handleStickyPromptNavigate}
+                />
                 {hasSearchTarget ? (
                     <div
                         data-testid="search-match-navigation"

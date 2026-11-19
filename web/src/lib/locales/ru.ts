@@ -295,6 +295,11 @@ export default {
   'session.outline.searchLabel': 'Поиск элементов плана',
   'session.outline.searchResults': '{matched} из {total} элементов',
   'session.outline.noSearchResults': 'Нет подходящих элементов плана',
+  'session.stickyPrompt.region': 'Текущий вопрос',
+  'session.stickyPrompt.locate': 'Перейти к вопросу',
+  'session.stickyPrompt.previous': 'Предыдущий вопрос',
+  'session.stickyPrompt.next': 'Следующий вопрос',
+  'session.stickyPrompt.position': 'Вопрос {current} из {total}',
 
   // Действия с сессией
   'session.action.openSeparateWindow': 'Открыть в отдельном окне',

@@ -357,6 +357,11 @@ export default {
   'session.outline.searchLabel': 'Search outline items',
   'session.outline.searchResults': '{matched} of {total} items',
   'session.outline.noSearchResults': 'No matching outline items',
+  'session.stickyPrompt.region': 'Current question',
+  'session.stickyPrompt.locate': 'Jump to this question',
+  'session.stickyPrompt.previous': 'Previous question',
+  'session.stickyPrompt.next': 'Next question',
+  'session.stickyPrompt.position': 'Question {current} of {total}',
 
   // Session actions
   'session.action.openSeparateWindow': 'Open in separate window',
