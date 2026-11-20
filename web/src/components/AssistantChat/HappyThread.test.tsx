@@ -12,6 +12,7 @@ import {
     getPullToLoadState,
     getScrollIntent,
     getScrollToBottomButtonVisibility,
+    getStickyPromptParkDelta,
     hasAppliedHistoryVersion,
     isNestedScrollEvent,
     focusOutlineTargetMessage,
@@ -831,5 +832,21 @@ describe('share turn snapshots', () => {
         const fallback = { html: '', text: 'prompt', role: 'user' as const }
 
         expect(prependMissingUserSnapshot([user], fallback)).toEqual([user])
+    })
+})
+
+describe('sticky prompt park delta', () => {
+    it('parks the prompt root at the bar bottom edge', () => {
+        // A 40px bar: the root ends at the top of the covered strip, so the
+        // 12px message gap puts the first answer row on the reading line.
+        expect(getStickyPromptParkDelta({ anchorBottom: 300, viewportTop: 100 })).toBe(160)
+    })
+
+    it('scrolls upward when the target prompt is above the viewport', () => {
+        expect(getStickyPromptParkDelta({ anchorBottom: 60, viewportTop: 100 })).toBe(-80)
+    })
+
+    it('uses the provided bar height', () => {
+        expect(getStickyPromptParkDelta({ anchorBottom: 300, viewportTop: 100, barHeight: 52 })).toBe(148)
     })
 })

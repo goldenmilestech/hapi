@@ -27,7 +27,7 @@ import { getToolCardDisplayPresentation, useToolCardDisplayMode } from '@/hooks/
 import { useTranslation } from '@/lib/use-translation'
 import { CloseIcon } from '@/components/icons'
 import { ShareTurnDialog } from '@/components/AssistantChat/ShareTurnDialog'
-import { StickyPromptBar } from '@/components/AssistantChat/StickyPromptBar'
+import { STICKY_PROMPT_BAR_HEIGHT_PX, StickyPromptBar } from '@/components/AssistantChat/StickyPromptBar'
 import { getSessionModelLabel } from '@/lib/sessionModelLabel'
 import { getSessionTitle } from '@/lib/sessionTitle'
 import { isFastServiceTier } from '@/components/AssistantChat/codexFastMode'
@@ -223,6 +223,22 @@ export function getScrollIntent(params: {
 
 export function shouldShowScrollToBottomButton(intent: ScrollIntent): boolean {
     return !intent.isNearBottom
+}
+
+/**
+ * Scroll delta that parks a prompt behind the sticky prompt bar. The message
+ * root ends at the bar's bottom edge, so the inter-message gap puts the first
+ * answer row on the bar's reading line instead of underneath it.
+ *
+ * @internal Exported for unit testing.
+ */
+export function getStickyPromptParkDelta(params: {
+    anchorBottom: number
+    viewportTop: number
+    barHeight?: number
+}): number {
+    const barHeight = params.barHeight ?? STICKY_PROMPT_BAR_HEIGHT_PX
+    return params.anchorBottom - params.viewportTop - barHeight
 }
 
 export function getScrollToBottomButtonVisibility(
@@ -3017,10 +3033,11 @@ export function HappyThread(props: {
             outlineJumpEndTimerRef.current = null
         }
 
-        // Park the prompt just above the viewport top: the bar becomes that
-        // turn's header. Recompute the delta from live geometry, resolving the
-        // row by id, so a re-render or context load cannot leave a stale
-        // element behind.
+        // Park the prompt behind the bar: the root's bottom (bubble plus its
+        // action row) ends at the bar's bottom edge, so the answer starts in
+        // the first row the bar does not cover. Recompute the delta from live
+        // geometry, resolving the row by id, so a re-render or context load
+        // cannot leave a stale element behind.
         const findAnchor = () => {
             const current = viewportRef.current
             const element = document.getElementById(anchorId)
@@ -3030,7 +3047,10 @@ export function HappyThread(props: {
             const current = viewportRef.current
             const element = findAnchor()
             if (!current || !element) return 0
-            return element.getBoundingClientRect().bottom - current.getBoundingClientRect().top + 2
+            return getStickyPromptParkDelta({
+                anchorBottom: element.getBoundingClientRect().bottom,
+                viewportTop: current.getBoundingClientRect().top
+            })
         }
         const scrollJump = (behavior: ScrollBehavior) => {
             const current = viewportRef.current
