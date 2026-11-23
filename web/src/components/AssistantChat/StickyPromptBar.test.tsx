@@ -81,6 +81,7 @@ function Harness(props: {
     /** Rendered message window; defaults to every indexed prompt. */
     renderItems?: readonly ConversationOutlineItem[]
     hidden?: boolean
+    heldItem?: ConversationOutlineItem | null
     onLocate: (item: ConversationOutlineItem) => void
     onStep: (direction: -1 | 1, current: StickyPromptStep) => void
 }) {
@@ -120,6 +121,7 @@ function Harness(props: {
                 items={props.items}
                 revision={0}
                 hidden={props.hidden}
+                heldItem={props.heldItem}
                 onLocate={props.onLocate}
                 onStep={props.onStep}
             />
@@ -133,6 +135,7 @@ function mount(props?: {
     hidden?: boolean
     items?: readonly ConversationOutlineItem[]
     renderItems?: readonly ConversationOutlineItem[]
+    heldItem?: ConversationOutlineItem | null
 }) {
     const onLocate = vi.fn()
     const onStep = vi.fn()
@@ -142,6 +145,7 @@ function mount(props?: {
                 items={props?.items ?? ITEMS}
                 renderItems={props?.renderItems}
                 hidden={props?.hidden}
+                heldItem={props?.heldItem}
                 onLocate={onLocate}
                 onStep={onStep}
             />
@@ -304,6 +308,36 @@ describe('StickyPromptBar', () => {
         setPromptRect(ITEMS[0]!, -300, -260)
         setPromptRect(ITEMS[1]!, -120, -80)
         setPromptRect(ITEMS[2]!, 420, 460)
+        scroll()
+
+        await expectVisible(bar, false)
+    })
+
+    it('keeps a landed turn pinned while its prompt bubble is on screen', async () => {
+        // A jump lands the bubble below the bar; geometry alone would treat it
+        // as "visible" and hide the bar, taking the step controls with it.
+        const { bar, scroll } = mount({ heldItem: ITEMS[1] })
+        setPromptRect(ITEMS[0]!, 300, 340)
+        setPromptRect(ITEMS[1]!, 420, 460)
+        setPromptRect(ITEMS[2]!, 720, 760)
+        scroll()
+
+        await expectVisible(bar, true)
+        expect(within(bar).getByText('第二条提问')).toBeInTheDocument()
+        expect(within(bar).getByText('2 / 3')).toBeInTheDocument()
+    })
+
+    it('ignores a held turn that is no longer in the session outline', async () => {
+        const { bar, scroll } = mount({
+            heldItem: {
+                ...ITEMS[1]!,
+                id: 'outline:user-text:gone',
+                targetMessageId: 'user-text:gone'
+            }
+        })
+        setPromptRect(ITEMS[0]!, 300, 340)
+        setPromptRect(ITEMS[1]!, 420, 460)
+        setPromptRect(ITEMS[2]!, 720, 760)
         scroll()
 
         await expectVisible(bar, false)

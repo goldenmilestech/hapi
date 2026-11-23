@@ -166,8 +166,13 @@ const STICKY_STEP_RENDER_WAIT_MS = 600
 // owning the animation means foreign `scrollend` events cannot settle the jump
 // early with an instant snap.
 const STICKY_SCROLL_MIN_MS = 260
-const STICKY_SCROLL_MAX_MS = 2400
-const STICKY_SCROLL_MS_PER_PX = 0.4
+const STICKY_SCROLL_MAX_MS = 4500
+const STICKY_SCROLL_MS_PER_PX = 0.6
+// Land a revealed row a few pixels above the reading line. Landing it exactly
+// on the line is a coin flip on subpixel rounding: the bar would fall back to
+// the previous turn (above-first) instead of recognizing the row it just
+// revealed.
+const STICKY_REVEAL_OVERLAP_PX = 4
 // Fallback for browsers that do not emit `scrollend`: an outline jump keeps
 // the viewport until this deadline so its smooth animation cannot be cancelled
 // by a media card settling underneath it.
@@ -249,26 +254,12 @@ export function shouldShowScrollToBottomButton(intent: ScrollIntent): boolean {
 }
 
 /**
- * Scroll delta that parks a prompt behind the sticky prompt bar. The message
- * root ends at the bar's bottom edge, so the inter-message gap puts the first
- * answer row on the bar's reading line instead of underneath it.
- *
- * @internal Exported for unit testing.
- */
-export function getStickyPromptParkDelta(params: {
-    anchorBottom: number
-    viewportTop: number
-    barHeight?: number
-}): number {
-    const barHeight = params.barHeight ?? STICKY_PROMPT_BAR_HEIGHT_PX
-    return params.anchorBottom - params.viewportTop - barHeight
-}
-
-/**
- * Scroll delta that puts an outline target fully below the sticky bar. Used by
- * locate and the outline panel: both leave the bar visible, so landing the
- * row at its `scroll-mt` offset would hide the prompt bubble (and its flash)
- * behind the bar.
+ * Scroll delta that puts an outline target just below the sticky bar. Used by
+ * steps, locate, and the outline panel: all leave the bar visible, so landing
+ * the row at its `scroll-mt` offset would hide the prompt bubble (and its
+ * flash) behind the bar. The small overlap keeps the row's top just above the
+ * reading line, so the bar recognizes the row it revealed instead of falling
+ * back to the previous turn on subpixel rounding.
  *
  * @internal Exported for unit testing.
  */
@@ -277,10 +268,12 @@ export function getStickyRevealDelta(params: {
     viewportTop: number
     barHeight?: number
     gap?: number
+    overlapPx?: number
 }): number {
     const barHeight = params.barHeight ?? STICKY_PROMPT_BAR_HEIGHT_PX
     const gap = params.gap ?? STICKY_PROMPT_READING_GAP_PX
-    return params.anchorTop - params.viewportTop - barHeight - gap
+    const overlap = params.overlapPx ?? STICKY_REVEAL_OVERLAP_PX
+    return params.anchorTop - params.viewportTop - barHeight - gap + overlap
 }
 
 /**
@@ -1312,6 +1305,9 @@ export function HappyThread(props: {
     const [searchTargetRetryVersion, setSearchTargetRetryVersion] = useState(0)
     const [isLocatingSearchTarget, setIsLocatingSearchTarget] = useState(false)
     const [isRequestingNewer, setIsRequestingNewer] = useState(false)
+    // The turn a jump landed on. The bar keeps showing it while its bubble is
+    // visible below the bar, until the reader scrolls or jumps elsewhere.
+    const [stickyHoldItem, setStickyHoldItem] = useState<ConversationOutlineItem | null>(null)
     const [showScrollToBottom, setShowScrollToBottom] = useState(false)
     const pullToLoadStateRef = useRef<PullToLoadState>('idle')
     const shareTurnIdRef = useRef(0)
@@ -1548,6 +1544,7 @@ export function HappyThread(props: {
         // A step target belongs to the session it was picked in; switching
         // sessions must not make the next step continue from the old outline.
         stickyStepTargetRef.current = null
+        setStickyHoldItem(null)
     }, [props.sessionId])
 
     useLayoutEffect(() => {
@@ -1669,6 +1666,9 @@ export function HappyThread(props: {
         outlineJumpInProgressRef.current = false
         outlineJumpTargetRef.current = null
         stickyStepTargetRef.current = null
+        // The reader is taking the viewport back; the bar follows geometry
+        // again instead of holding the turn the jump landed on.
+        setStickyHoldItem(null)
         if (outlineJumpEndTimerRef.current !== null) {
             window.clearTimeout(outlineJumpEndTimerRef.current)
             outlineJumpEndTimerRef.current = null
@@ -3156,6 +3156,9 @@ export function HappyThread(props: {
         // An explicit outline row replaces whatever turn a bar step was
         // heading to, so a later step starts from the reader's actual view.
         stickyStepTargetRef.current = null
+        // The bar follows the selection immediately, including while the
+        // context loads; the landing keeps the bubble visible below it.
+        setStickyHoldItem(item)
         // A running step animation must not keep writing scrollTop under the
         // context load this selection starts.
         cancelStickyScrollAnimation()
@@ -3239,6 +3242,7 @@ export function HappyThread(props: {
                 finishOutlineJump({ force: true })
             }, fallbackMs)
         } else {
+            setStickyHoldItem(null)
             finishOutlineJump({ force: true })
         }
         props.onOutlineItemClick?.(item)
@@ -3276,12 +3280,12 @@ export function HappyThread(props: {
     }, [handleOutlineSelect])
 
     /**
-     * Step between turns from the sticky bar: park the target prompt just
-     * above the viewport so the bar becomes that turn's header and the answer
-     * starts on the first readable row. A target outside the lazily loaded
-     * window grows the window in the step direction first (older rows above,
-     * newer rows below) so the reader sees the conversation load and then
-     * scroll, rather than being teleported to a swapped-in context window.
+     * Step between turns from the sticky bar: land the target prompt fully
+     * below the bar so the reader sees the message itself, then animate the
+     * answer into view. A target outside the lazily loaded window grows the
+     * window in the step direction first (older rows above, newer rows below)
+     * so the reader sees the conversation load and then scroll, rather than
+     * being teleported to a swapped-in context window.
      */
     const handleStickyPromptNavigate = useCallback((item: ConversationOutlineItem, direction: -1 | 1) => {
         const viewport = viewportRef.current
@@ -3295,11 +3299,15 @@ export function HappyThread(props: {
         outlineSelectTokenRef.current = selectToken
         const isCurrent = () => outlineSelectTokenRef.current === selectToken
 
+        // Show the destination turn immediately, including during the load.
+        setStickyHoldItem(item)
         autoScrollEnabledRef.current = false
         atBottomRef.current = false
         onViewModeChangeRef.current('history')
         tailScrollInProgressRef.current = false
-        historyAnchorRef.current = null
+        // Keep the history anchor: a step grows the window (older rows above,
+        // newer below) instead of replacing it, and the loader's row-based
+        // restore keeps the reader's row pixel-stable during the prepend.
         // Claim the viewport before a possibly slow context load: settling
         // cards and coverage requests must not move the reader while the row
         // is fetched, and the smooth step owns the viewport once it starts.
@@ -3312,11 +3320,11 @@ export function HappyThread(props: {
             outlineJumpEndTimerRef.current = null
         }
 
-        // Park the prompt behind the bar: the root's bottom (bubble plus its
-        // action row) ends at the bar's bottom edge, so the answer starts in
-        // the first row the bar does not cover. Recompute the delta from live
-        // geometry, resolving the row by id, so a re-render or context load
-        // cannot leave a stale element behind.
+        // Land the prompt itself below the bar: the bubble and any attachments
+        // stay readable, and the answer starts after it. The bar keeps the
+        // same turn through `stickyHoldItem` while the bubble is on screen.
+        // Recompute the delta from live geometry, resolving the row by id, so
+        // a re-render or context load cannot leave a stale element behind.
         const findAnchor = () => {
             const current = viewportRef.current
             const element = document.getElementById(anchorId)
@@ -3326,8 +3334,8 @@ export function HappyThread(props: {
             const current = viewportRef.current
             const element = findAnchor()
             if (!current || !element) return 0
-            return getStickyPromptParkDelta({
-                anchorBottom: element.getBoundingClientRect().bottom,
+            return getStickyRevealDelta({
+                anchorTop: element.getBoundingClientRect().top,
                 viewportTop: current.getBoundingClientRect().top
             })
         }
@@ -3373,6 +3381,7 @@ export function HappyThread(props: {
                 return
             }
             if (!target || !findAnchor()) {
+                setStickyHoldItem(null)
                 finishOutlineJump({ force: true })
                 return
             }
@@ -3728,6 +3737,7 @@ export function HappyThread(props: {
                     items={props.outlineItems}
                     revision={`${appliedMessagesVersion}:${appliedHistoryVersion}`}
                     hidden={props.outlineOpen || hasSearchTarget}
+                    heldItem={stickyHoldItem}
                     onLocate={handleStickyPromptLocate}
                     onStep={handleStickyPromptStep}
                 />

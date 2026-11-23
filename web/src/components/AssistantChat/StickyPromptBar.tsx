@@ -94,6 +94,14 @@ type StickyPromptBarProps = {
     revision: number | string
     /** Search jumps and the outline drawer own the top edge while open. */
     hidden?: boolean
+    /**
+     * Turn to keep pinned after a jump, even while its bubble is still on
+     * screen. A jump lands the prompt bubble just below the bar so the reader
+     * can see the message itself; geometry alone would hide the bar as
+     * "visible", removing the step and locate controls. The thread clears the
+     * hold on the next manual scroll.
+     */
+    heldItem?: ConversationOutlineItem | null
     onLocate: (item: ConversationOutlineItem) => void
     onStep: (direction: -1 | 1, current: StickyPromptStep) => void
 }
@@ -164,6 +172,18 @@ export function StickyPromptBar(props: StickyPromptBarProps) {
         })
 
         const total = Math.max(props.items.length, items.length)
+        // A landed jump keeps its turn on the bar even while the prompt bubble
+        // is visible below it. Without the hold the bar would hide as
+        // "visible" and the reader would lose the step/locate controls right
+        // after using them.
+        const heldItem = props.heldItem
+        const heldIndex = heldItem ? indexById.get(heldItem.id) : undefined
+        if (heldItem && heldIndex !== undefined) {
+            // Prefer the live index entry: the held object can predate a
+            // window merge that refreshed its label.
+            publish({ item: props.items[heldIndex] ?? heldItem, position: heldIndex + 1, total })
+            return
+        }
         const turn = resolvePinnedPrompt(rects, viewportTop)
         if (turn.kind === 'pinned') {
             const item = items[turn.index]
@@ -194,7 +214,7 @@ export function StickyPromptBar(props: StickyPromptBarProps) {
             }
         }
         publish(null)
-    }, [itemByAnchorId, indexById, props.contentRef, props.items, props.viewportRef, publish])
+    }, [itemByAnchorId, indexById, props.contentRef, props.heldItem, props.items, props.viewportRef, publish])
 
     useEffect(() => {
         const viewport = props.viewportRef.current
