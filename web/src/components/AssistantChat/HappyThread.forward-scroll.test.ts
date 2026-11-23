@@ -17,8 +17,8 @@ describe('forward history load scroll anchoring', () => {
 
     it('captures a scroll anchor before requesting a newer page', () => {
         const trigger = source.slice(
-            source.indexOf('requestForwardPageRef.current = () => {'),
-            source.indexOf('.finally(() => { loadingNewerRef.current = false })')
+            source.indexOf('requestForwardPageRef.current = async () => {'),
+            source.indexOf('.finally(() => {')
         )
 
         expect(trigger).toContain('captureScrollAnchor')

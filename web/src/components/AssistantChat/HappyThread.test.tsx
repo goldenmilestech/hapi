@@ -18,8 +18,10 @@ import {
     focusOutlineTargetMessage,
     locateOutlineTargetMessage,
     prependMissingUserSnapshot,
+    resolveStickyStepTarget,
     restoreScrollAnchor,
     resolveHistoryAnchorElement,
+    revealStepTarget,
     shouldLoadOlderForViewport,
     shouldCancelInitialScrollSettling,
     shouldPreserveHistoryScrollAnchor,
@@ -816,6 +818,233 @@ describe('outline target loading', () => {
 
         expect(await pending).toBeNull()
         expect(waitForTarget).not.toHaveBeenCalled()
+    })
+})
+
+describe('sticky prompt stepping', () => {
+    const items: ConversationOutlineItem[] = outlineItems.map((item, index) => ({
+        ...item,
+        id: `outline:user-text:s${index + 1}`,
+        targetMessageId: `user-text:s${index + 1}`
+    }))
+    const threeItems: ConversationOutlineItem[] = [
+        ...items,
+        {
+            ...items[1]!,
+            id: 'outline:user-text:s3',
+            targetMessageId: 'user-text:s3'
+        }
+    ]
+
+    it('steps from the pinned turn when no step is in flight', () => {
+        expect(resolveStickyStepTarget({
+            items,
+            baseItemId: null,
+            pinnedPosition: 1,
+            direction: 1
+        })).toBe(items[1])
+        expect(resolveStickyStepTarget({
+            items,
+            baseItemId: null,
+            pinnedPosition: 2,
+            direction: -1
+        })).toBe(items[0])
+    })
+
+    it('continues from the in-flight target so quick clicks accumulate', () => {
+        // The viewport still measures turn 1 while the first click's jump is
+        // still loading, but that step is already heading to turn 2, so the
+        // next click must resolve turn 3.
+        expect(resolveStickyStepTarget({
+            items: threeItems,
+            baseItemId: threeItems[1]!.id,
+            pinnedPosition: 1,
+            direction: 1
+        })).toBe(threeItems[2])
+        expect(resolveStickyStepTarget({
+            items: threeItems,
+            baseItemId: threeItems[1]!.id,
+            pinnedPosition: 1,
+            direction: -1
+        })).toBe(threeItems[0])
+    })
+
+    it('falls back to the measured position when the in-flight target left the index', () => {
+        expect(resolveStickyStepTarget({
+            items,
+            baseItemId: 'outline:user-text:gone',
+            pinnedPosition: 2,
+            direction: -1
+        })).toBe(items[0])
+    })
+
+    it('returns null at either edge of the session outline', () => {
+        expect(resolveStickyStepTarget({
+            items,
+            baseItemId: null,
+            pinnedPosition: 1,
+            direction: -1
+        })).toBeNull()
+        expect(resolveStickyStepTarget({
+            items,
+            baseItemId: null,
+            pinnedPosition: items.length,
+            direction: 1
+        })).toBeNull()
+        expect(resolveStickyStepTarget({
+            items,
+            baseItemId: null,
+            pinnedPosition: 0,
+            direction: 1
+        })).toBeNull()
+    })
+})
+
+describe('revealStepTarget', () => {
+    const anchor = () => document.createElement('div')
+
+    it('uses an already rendered target without paging', async () => {
+        const rendered = anchor()
+        const loadOlder = vi.fn(async () => true)
+        const loadNewer = vi.fn(async () => true)
+
+        const target = await revealStepTarget({
+            direction: -1,
+            findTarget: () => rendered,
+            waitForTarget: async () => null,
+            loadOlder,
+            loadNewer,
+            canLoadOlder: () => true,
+            canLoadNewer: () => true,
+            isCurrent: () => true
+        })
+
+        expect(target).toBe(rendered)
+        expect(loadOlder).not.toHaveBeenCalled()
+        expect(loadNewer).not.toHaveBeenCalled()
+    })
+
+    it('prepends older pages until the prompt is rendered', async () => {
+        const rendered = anchor()
+        let pages = 0
+        const loadOlder = vi.fn(async () => {
+            pages += 1
+            return true
+        })
+
+        const target = await revealStepTarget({
+            direction: -1,
+            findTarget: () => pages >= 2 ? rendered : null,
+            waitForTarget: async () => null,
+            loadOlder,
+            loadNewer: async () => false,
+            canLoadOlder: () => pages < 2,
+            canLoadNewer: () => false,
+            isCurrent: () => true
+        })
+
+        expect(target).toBe(rendered)
+        expect(loadOlder).toHaveBeenCalledTimes(2)
+    })
+
+    it('waits for the render after a page applies', async () => {
+        const rendered = anchor()
+        const loadOlder = vi.fn(async () => true)
+        const waitForTarget = vi.fn(async () => rendered)
+
+        const target = await revealStepTarget({
+            direction: -1,
+            findTarget: () => null,
+            waitForTarget,
+            loadOlder,
+            loadNewer: async () => false,
+            canLoadOlder: () => true,
+            canLoadNewer: () => false,
+            isCurrent: () => true
+        })
+
+        expect(target).toBe(rendered)
+        expect(loadOlder).toHaveBeenCalledTimes(1)
+        expect(waitForTarget).toHaveBeenCalledTimes(1)
+    })
+
+    it('grows newer rows for a downward step', async () => {
+        const rendered = anchor()
+        let pages = 0
+        const loadNewer = vi.fn(async () => {
+            pages += 1
+            return true
+        })
+
+        const target = await revealStepTarget({
+            direction: 1,
+            findTarget: () => pages >= 1 ? rendered : null,
+            waitForTarget: async () => null,
+            loadOlder: async () => false,
+            loadNewer,
+            canLoadOlder: () => false,
+            canLoadNewer: () => true,
+            isCurrent: () => true
+        })
+
+        expect(target).toBe(rendered)
+        expect(loadNewer).toHaveBeenCalledTimes(1)
+    })
+
+    it('stops when the window has no more pages in that direction', async () => {
+        const loadOlder = vi.fn(async () => true)
+
+        const target = await revealStepTarget({
+            direction: -1,
+            findTarget: () => null,
+            waitForTarget: async () => null,
+            loadOlder,
+            loadNewer: async () => false,
+            canLoadOlder: () => false,
+            canLoadNewer: () => false,
+            isCurrent: () => true
+        })
+
+        expect(target).toBeNull()
+        expect(loadOlder).not.toHaveBeenCalled()
+    })
+
+    it('drops the result when a newer step replaced this one', async () => {
+        const loadOlder = vi.fn(async () => true)
+        let current = false
+
+        const target = await revealStepTarget({
+            direction: -1,
+            findTarget: () => null,
+            waitForTarget: async () => anchor(),
+            loadOlder,
+            loadNewer: async () => false,
+            canLoadOlder: () => true,
+            canLoadNewer: () => false,
+            isCurrent: () => current
+        })
+
+        expect(target).toBeNull()
+        expect(loadOlder).not.toHaveBeenCalled()
+    })
+
+    it('bounds the page count when the anchor never appears', async () => {
+        const loadOlder = vi.fn(async () => true)
+
+        const target = await revealStepTarget({
+            direction: -1,
+            findTarget: () => null,
+            waitForTarget: async () => null,
+            loadOlder,
+            loadNewer: async () => false,
+            canLoadOlder: () => true,
+            canLoadNewer: () => false,
+            isCurrent: () => true,
+            maxPages: 2
+        })
+
+        expect(target).toBeNull()
+        expect(loadOlder).toHaveBeenCalledTimes(2)
     })
 })
 

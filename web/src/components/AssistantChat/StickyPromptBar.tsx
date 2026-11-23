@@ -79,6 +79,13 @@ type PinnedPrompt = {
     total: number
 }
 
+/** The turn the reader is stepping from. */
+export type StickyPromptStep = {
+    item: ConversationOutlineItem
+    /** 1-based index in the session-wide outline index. */
+    position: number
+}
+
 type StickyPromptBarProps = {
     viewportRef: RefObject<HTMLDivElement | null>
     contentRef: RefObject<HTMLDivElement | null>
@@ -88,7 +95,7 @@ type StickyPromptBarProps = {
     /** Search jumps and the outline drawer own the top edge while open. */
     hidden?: boolean
     onLocate: (item: ConversationOutlineItem) => void
-    onNavigate: (item: ConversationOutlineItem) => void
+    onStep: (direction: -1 | 1, current: StickyPromptStep) => void
 }
 
 /**
@@ -218,20 +225,17 @@ export function StickyPromptBar(props: StickyPromptBarProps) {
 
     const step = useCallback((direction: -1 | 1) => {
         // Re-measure first so a click on a fast-scrolling viewport still steps
-        // from the turn the reader actually sees.
+        // from the turn the reader actually sees. Resolving the next turn is
+        // the thread's job: while a step is still loading or settling, the
+        // next click must continue from that step's target rather than from
+        // geometry that has not caught up yet.
         sync()
         const current = pinnedRef.current
         if (!current) {
             return
         }
-        // Step through the session-wide outline index, not just the rendered
-        // window: older prompts are usually outside the loaded message window
-        // and the thread loads their context on demand.
-        const target = props.items[current.position - 1 + direction]
-        if (target) {
-            props.onNavigate(target)
-        }
-    }, [props.items, props.onNavigate, sync])
+        props.onStep(direction, { item: current.item, position: current.position })
+    }, [props.onStep, sync])
 
     const visible = pinned !== null && props.hidden !== true
     const createdAt = pinned ? new Date(pinned.item.createdAt) : null

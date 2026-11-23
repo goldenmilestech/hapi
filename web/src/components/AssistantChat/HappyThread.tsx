@@ -27,7 +27,7 @@ import { getToolCardDisplayPresentation, useToolCardDisplayMode } from '@/hooks/
 import { useTranslation } from '@/lib/use-translation'
 import { CloseIcon } from '@/components/icons'
 import { ShareTurnDialog } from '@/components/AssistantChat/ShareTurnDialog'
-import { STICKY_PROMPT_BAR_HEIGHT_PX, StickyPromptBar } from '@/components/AssistantChat/StickyPromptBar'
+import { STICKY_PROMPT_BAR_HEIGHT_PX, StickyPromptBar, type StickyPromptStep } from '@/components/AssistantChat/StickyPromptBar'
 import { getSessionModelLabel } from '@/lib/sessionModelLabel'
 import { getSessionTitle } from '@/lib/sessionTitle'
 import { isFastServiceTier } from '@/components/AssistantChat/codexFastMode'
@@ -145,6 +145,15 @@ const MAX_SEARCH_TARGET_RENDER_RETRIES = 120
 // jump on a stale DOM read.
 const OUTLINE_CONTEXT_RENDER_POLL_INTERVAL_MS = 50
 const OUTLINE_CONTEXT_RENDER_TIMEOUT_MS = 4000
+// Bounded request budget for growing the window one page at a time when a
+// sticky-bar step lands outside it. A step target is adjacent to the current
+// turn, so one or two pages are the normal case; the cap only stops a
+// pathological loop.
+const STICKY_STEP_MAX_PAGES = 12
+// One page can apply without the anchor being rendered yet (assistant-ui
+// commits the new window on a later render). Keep the wait short: if the
+// target is still missing, another page is the next useful action.
+const STICKY_STEP_RENDER_WAIT_MS = 600
 // Fallback for browsers that do not emit `scrollend`: an outline jump keeps
 // the viewport until this deadline so its smooth animation cannot be cancelled
 // by a media card settling underneath it.
@@ -565,9 +574,10 @@ export async function locateOutlineTargetMessage(options: LocateOutlineTargetOpt
  */
 async function waitForOutlineAnchor(
     anchorId: string,
-    isCurrent: () => boolean
+    isCurrent: () => boolean,
+    timeoutMs: number = OUTLINE_CONTEXT_RENDER_TIMEOUT_MS
 ): Promise<HTMLElement | null> {
-    const deadline = Date.now() + OUTLINE_CONTEXT_RENDER_TIMEOUT_MS
+    const deadline = Date.now() + timeoutMs
     let target = document.getElementById(anchorId)
     while (!target && Date.now() < deadline && isCurrent()) {
         await new Promise<void>((resolve) => {
@@ -617,6 +627,88 @@ export async function focusOutlineTargetMessage(options: FocusOutlineTargetOptio
         hasMoreMessages: options.hasMoreMessages,
         loadOlderPreservingScroll: options.loadOlderPreservingScroll
     })
+}
+
+/**
+ * Resolve the next turn for a sticky-bar step against the session-wide outline
+ * index.
+ *
+ * While the previous step is still loading or settling, the viewport still
+ * shows the turn that step started from, so stepping from geometry would
+ * request the same turn again. `baseItemId` carries that step's target;
+ * `pinnedPosition` (1-based, from the bar's measurement) is only the fallback
+ * when no step is in flight or the target left the index.
+ */
+export function resolveStickyStepTarget(params: {
+    items: readonly ConversationOutlineItem[]
+    baseItemId: string | null
+    pinnedPosition: number
+    direction: -1 | 1
+}): ConversationOutlineItem | null {
+    const baseIndex = params.baseItemId
+        ? params.items.findIndex((item) => item.id === params.baseItemId)
+        : -1
+    const index = baseIndex >= 0 ? baseIndex : params.pinnedPosition - 1
+    if (index < 0) {
+        return null
+    }
+    return params.items[index + params.direction] ?? null
+}
+
+type RevealStepTargetOptions = {
+    /** -1 steps to an earlier turn, 1 to a later one; it selects the paging direction. */
+    direction: -1 | 1
+    findTarget: () => HTMLElement | null
+    /** Wait one bounded render tick for the anchor after a page applied. */
+    waitForTarget: () => Promise<HTMLElement | null>
+    loadOlder: () => Promise<boolean>
+    loadNewer: () => Promise<boolean>
+    canLoadOlder: () => boolean
+    canLoadNewer: () => boolean
+    isCurrent: () => boolean
+    maxPages?: number
+}
+
+/**
+ * Reveal a sticky-bar step target that is outside the rendered message window
+ * by growing the window in the direction of the step.
+ *
+ * Replacing the window with the target's bounded context (what an outline
+ * click does) teleports the reader: the old rows unmount at once and the new
+ * ones render wherever the preserved scrollTop lands. For a step the reader
+ * asked to move one turn, paging is the honest transition: older rows prepend
+ * above the current view (or newer rows append below it), the view stays put,
+ * and only then does the caller smooth-scroll to the prompt. A step target is
+ * adjacent to the current turn, so the loop normally stops after one page.
+ */
+export async function revealStepTarget(options: RevealStepTargetOptions): Promise<HTMLElement | null> {
+    const initial = options.findTarget()
+    if (initial) {
+        return initial
+    }
+    const maxPages = options.maxPages ?? STICKY_STEP_MAX_PAGES
+    const older = options.direction < 0
+    for (let page = 0; page < maxPages; page += 1) {
+        if (!options.isCurrent()) {
+            return null
+        }
+        if (older ? !options.canLoadOlder() : !options.canLoadNewer()) {
+            break
+        }
+        const loaded = older
+            ? await options.loadOlder()
+            : await options.loadNewer()
+        if (!options.isCurrent()) {
+            return null
+        }
+        // A busy or invalidated page still leaves an in-flight request that
+        // can land; always give the render a bounded wait before paging again.
+        const target = (loaded ? options.findTarget() : null) ?? await options.waitForTarget()
+        if (target) {
+            return target
+        }
+    }
+    return options.findTarget()
 }
 
 function createSearchMatchMarkerElement(sourceMessageId: string | null): HTMLElement {
@@ -1244,7 +1336,8 @@ export function HappyThread(props: {
     // CSS disables browser scroll anchoring, so without restoring an anchor
     // the unchanged scrollTop lands ~200 messages later.
     const pendingForwardAnchorRef = useRef<ScrollAnchor | null>(null)
-    const requestForwardPageRef = useRef<() => void>(() => {})
+    const requestForwardPageRef = useRef<() => Promise<boolean>>(async () => false)
+    const pendingForwardPageRef = useRef<Promise<boolean> | null>(null)
     const onLoadNewerRef = useRef(props.onLoadNewer)
     const loadingNewerRef = useRef(false)
     const searchTargetInputKeyRef = useRef<string | null>(null)
@@ -1263,6 +1356,11 @@ export function HappyThread(props: {
     const outlineJumpInProgressRef = useRef(false)
     const outlineJumpEndTimerRef = useRef<number | null>(null)
     const outlineJumpTargetRef = useRef<OutlineJumpTarget | null>(null)
+    // The turn the last sticky-bar step is heading to. While that step is
+    // loading or settling, live geometry still shows the turn it started from,
+    // so the next click must continue from here or two quick clicks would both
+    // request the same turn.
+    const stickyStepTargetRef = useRef<ConversationOutlineItem | null>(null)
     const searchTargetScrollCleanupTimerRef = useRef<number | null>(null)
     const preserveSearchTargetScrollOnReleaseRef = useRef(false)
     const pendingRequestTargetCleanupTimerRef = useRef<number | null>(null)
@@ -1313,10 +1411,13 @@ export function HappyThread(props: {
     }, [props.onLoadNewer])
 
     useEffect(() => {
-        requestForwardPageRef.current = () => {
-            if (!hasMoreNewerRef.current || loadingNewerRef.current) return
+        requestForwardPageRef.current = async () => {
+            if (!hasMoreNewerRef.current) return false
+            // A sticky-bar step can ask for a page while a gesture already
+            // started one. Share that request instead of dropping the step.
+            if (pendingForwardPageRef.current) return await pendingForwardPageRef.current
             const load = onLoadNewerRef.current
-            if (!load) return
+            if (!load) return false
             loadingNewerRef.current = true
             setIsRequestingNewer(true)
             const viewport = viewportRef.current
@@ -1324,11 +1425,15 @@ export function HappyThread(props: {
             // Resolved when the page is applied, so a reader who scrolled
             // during the request keeps the row they are on rather than the
             // one they started from.
-            void load(() => anchorMessageIdFromAnchor(pendingForwardAnchorRef.current))
+            const pending = load(() => anchorMessageIdFromAnchor(pendingForwardAnchorRef.current))
+                .catch(() => false)
                 .finally(() => {
                     loadingNewerRef.current = false
+                    pendingForwardPageRef.current = null
                     setIsRequestingNewer(false)
                 })
+            pendingForwardPageRef.current = pending
+            return await pending
         }
     }, [])
 
@@ -1381,6 +1486,9 @@ export function HappyThread(props: {
 
     useEffect(() => {
         sessionIdRef.current = props.sessionId
+        // A step target belongs to the session it was picked in; switching
+        // sessions must not make the next step continue from the old outline.
+        stickyStepTargetRef.current = null
     }, [props.sessionId])
 
     useLayoutEffect(() => {
@@ -1433,6 +1541,7 @@ export function HappyThread(props: {
     const cancelOutlineJump = useCallback(() => {
         outlineJumpInProgressRef.current = false
         outlineJumpTargetRef.current = null
+        stickyStepTargetRef.current = null
         if (outlineJumpEndTimerRef.current !== null) {
             window.clearTimeout(outlineJumpEndTimerRef.current)
             outlineJumpEndTimerRef.current = null
@@ -1444,18 +1553,28 @@ export function HappyThread(props: {
      * history anchor on the position the jump actually reached. `scrollend`
      * retires the lock once the smooth animation settles; the timer is the
      * fallback for browsers that never emit it.
+     *
+     * A `scrollend` that arrives while this jump is still preparing its target
+     * belongs to the previous animation (a step can start loading before it
+     * issues its own scroll). It must not retire the new jump or clear its
+     * pending step, so the no-target case returns without touching anything
+     * unless the caller is aborting the jump itself (`force`).
      */
-    const finishOutlineJump = useCallback(() => {
-        if (outlineJumpEndTimerRef.current !== null) {
-            window.clearTimeout(outlineJumpEndTimerRef.current)
-            outlineJumpEndTimerRef.current = null
-        }
+    const finishOutlineJump = useCallback((options?: { force?: boolean }) => {
         if (!outlineJumpInProgressRef.current) {
             return
         }
         const jump = outlineJumpTargetRef.current
+        if (!jump && options?.force !== true) {
+            return
+        }
+        if (outlineJumpEndTimerRef.current !== null) {
+            window.clearTimeout(outlineJumpEndTimerRef.current)
+            outlineJumpEndTimerRef.current = null
+        }
         outlineJumpTargetRef.current = null
         outlineJumpInProgressRef.current = false
+        stickyStepTargetRef.current = null
         const viewport = viewportRef.current
         if (viewport && jump && jump.isOffTarget()) {
             jump.settle()
@@ -2896,6 +3015,9 @@ export function HappyThread(props: {
         outlineSelectTokenRef.current = selectToken
         const isCurrent = () => outlineSelectTokenRef.current === selectToken
 
+        // An explicit outline row replaces whatever turn a bar step was
+        // heading to, so a later step starts from the reader's actual view.
+        stickyStepTargetRef.current = null
         // Stop tail-following before the context window swaps in. The window
         // replacement changes content height, and the ResizeObserver would see
         // the pre-jump "at bottom" state and snap the viewport back to the end,
@@ -2915,6 +3037,10 @@ export function HappyThread(props: {
         // between the old position and the row they picked. `scrollend`
         // releases the lock when the jump lands.
         outlineJumpInProgressRef.current = true
+        // Drop the previous jump's target before the context load: its
+        // animation can still emit `scrollend` while this one prepares, and
+        // that must not retire this jump or settle back to the old row.
+        outlineJumpTargetRef.current = null
         if (outlineJumpEndTimerRef.current !== null) {
             window.clearTimeout(outlineJumpEndTimerRef.current)
             outlineJumpEndTimerRef.current = null
@@ -2964,7 +3090,7 @@ export function HappyThread(props: {
                 finishOutlineJump()
             }, OUTLINE_JUMP_SETTLE_MS)
         } else {
-            finishOutlineJump()
+            finishOutlineJump({ force: true })
         }
         props.onOutlineItemClick?.(item)
         props.onOutlineOpenChange(false)
@@ -3004,10 +3130,11 @@ export function HappyThread(props: {
      * Step between turns from the sticky bar: park the target prompt just
      * above the viewport so the bar becomes that turn's header and the answer
      * starts on the first readable row. A target outside the lazily loaded
-     * window loads its bounded context first (the same path as the outline
-     * jump), so stepping does not stop at the edge of the rendered window.
+     * window grows the window in the step direction first (older rows above,
+     * newer rows below) so the reader sees the conversation load and then
+     * scroll, rather than being teleported to a swapped-in context window.
      */
-    const handleStickyPromptNavigate = useCallback((item: ConversationOutlineItem) => {
+    const handleStickyPromptNavigate = useCallback((item: ConversationOutlineItem, direction: -1 | 1) => {
         const viewport = viewportRef.current
         const content = contentRef.current
         if (!viewport || !content) {
@@ -3028,6 +3155,9 @@ export function HappyThread(props: {
         // cards and coverage requests must not move the reader while the row
         // is fetched, and the smooth step owns the viewport once it starts.
         outlineJumpInProgressRef.current = true
+        // A step can replace a step whose animation is still running; drop the
+        // old target so that animation's `scrollend` cannot retire this jump.
+        outlineJumpTargetRef.current = null
         if (outlineJumpEndTimerRef.current !== null) {
             window.clearTimeout(outlineJumpEndTimerRef.current)
             outlineJumpEndTimerRef.current = null
@@ -3075,26 +3205,44 @@ export function HappyThread(props: {
         }
 
         void (async () => {
-            const target = await focusOutlineTargetMessage({
-                targetMessageId: item.targetMessageId,
-                sourceMessageId: getOutlineSourceMessageId(item.targetMessageId),
-                findTarget: (anchor) => document.getElementById(anchor),
-                loadMessageContext: props.onLoadMessageContext,
-                waitForTarget: (anchor) => waitForOutlineAnchor(anchor, isCurrent),
-                hasMoreMessages: () => hasMoreMessagesRef.current,
-                loadOlderPreservingScroll: loadOlderForOutline,
+            const target = await revealStepTarget({
+                direction,
+                findTarget: findAnchor,
+                waitForTarget: () => waitForOutlineAnchor(anchorId, isCurrent, STICKY_STEP_RENDER_WAIT_MS),
+                loadOlder: loadOlderForOutline,
+                loadNewer: () => requestForwardPageRef.current(),
+                canLoadOlder: () => hasMoreMessagesRef.current,
+                canLoadNewer: () => hasMoreNewerRef.current,
                 isCurrent
             })
             if (!isCurrent()) {
                 return
             }
             if (!target || !findAnchor()) {
-                finishOutlineJump()
+                finishOutlineJump({ force: true })
                 return
             }
             beginJump()
         })()
-    }, [finishOutlineJump, loadOlderForOutline, props.onLoadMessageContext])
+    }, [finishOutlineJump, loadOlderForOutline])
+
+    /**
+     * Resolve a bar step against the session-wide outline index, continuing
+     * from the in-flight step target when there is one.
+     */
+    const handleStickyPromptStep = useCallback((direction: -1 | 1, current: StickyPromptStep) => {
+        const target = resolveStickyStepTarget({
+            items: props.outlineItems,
+            baseItemId: stickyStepTargetRef.current?.id ?? null,
+            pinnedPosition: current.position,
+            direction
+        })
+        if (!target) {
+            return
+        }
+        stickyStepTargetRef.current = target
+        handleStickyPromptNavigate(target, direction)
+    }, [handleStickyPromptNavigate, props.outlineItems])
 
     useEffect(() => {
         if (searchTargetHistoryLockRef.current || outlineJumpInProgressRef.current) {
@@ -3427,7 +3575,7 @@ export function HappyThread(props: {
                     revision={`${appliedMessagesVersion}:${appliedHistoryVersion}`}
                     hidden={props.outlineOpen || hasSearchTarget}
                     onLocate={handleStickyPromptLocate}
-                    onNavigate={handleStickyPromptNavigate}
+                    onStep={handleStickyPromptStep}
                 />
                 {hasSearchTarget ? (
                     <div
