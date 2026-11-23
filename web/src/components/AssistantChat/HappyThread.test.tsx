@@ -13,6 +13,8 @@ import {
     getScrollIntent,
     getScrollToBottomButtonVisibility,
     getStickyPromptParkDelta,
+    getStickyRevealDelta,
+    getStickyScrollDuration,
     hasAppliedHistoryVersion,
     isNestedScrollEvent,
     focusOutlineTargetMessage,
@@ -1077,5 +1079,41 @@ describe('sticky prompt park delta', () => {
 
     it('uses the provided bar height', () => {
         expect(getStickyPromptParkDelta({ anchorBottom: 300, viewportTop: 100, barHeight: 52 })).toBe(148)
+    })
+})
+
+describe('sticky prompt reveal delta', () => {
+    it('lands the whole prompt below the bar and its reading gap', () => {
+        // 40px bar + 12px gap: the row top ends 52px below the viewport top.
+        expect(getStickyRevealDelta({ anchorTop: 300, viewportTop: 100 })).toBe(148)
+    })
+
+    it('scrolls upward when the target row is above the viewport', () => {
+        expect(getStickyRevealDelta({ anchorTop: 40, viewportTop: 100 })).toBe(-112)
+    })
+
+    it('honours a custom bar height and gap', () => {
+        expect(getStickyRevealDelta({
+            anchorTop: 300,
+            viewportTop: 100,
+            barHeight: 52,
+            gap: 4
+        })).toBe(144)
+    })
+})
+
+describe('sticky scroll duration', () => {
+    it('scales with distance', () => {
+        expect(getStickyScrollDuration(1000)).toBe(400)
+        expect(getStickyScrollDuration(-1000)).toBe(400)
+    })
+
+    it('keeps a floor so short hops still read as motion', () => {
+        expect(getStickyScrollDuration(0)).toBe(260)
+        expect(getStickyScrollDuration(50)).toBe(260)
+    })
+
+    it('caps a far jump instead of stalling the reader', () => {
+        expect(getStickyScrollDuration(20_000)).toBe(2400)
     })
 })

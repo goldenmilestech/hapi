@@ -27,7 +27,12 @@ import { getToolCardDisplayPresentation, useToolCardDisplayMode } from '@/hooks/
 import { useTranslation } from '@/lib/use-translation'
 import { CloseIcon } from '@/components/icons'
 import { ShareTurnDialog } from '@/components/AssistantChat/ShareTurnDialog'
-import { STICKY_PROMPT_BAR_HEIGHT_PX, StickyPromptBar, type StickyPromptStep } from '@/components/AssistantChat/StickyPromptBar'
+import {
+    STICKY_PROMPT_BAR_HEIGHT_PX,
+    STICKY_PROMPT_READING_GAP_PX,
+    StickyPromptBar,
+    type StickyPromptStep
+} from '@/components/AssistantChat/StickyPromptBar'
 import { getSessionModelLabel } from '@/lib/sessionModelLabel'
 import { getSessionTitle } from '@/lib/sessionTitle'
 import { isFastServiceTier } from '@/components/AssistantChat/codexFastMode'
@@ -154,6 +159,15 @@ const STICKY_STEP_MAX_PAGES = 12
 // commits the new window on a later render). Keep the wait short: if the
 // target is still missing, another page is the next useful action.
 const STICKY_STEP_RENDER_WAIT_MS = 600
+// Step jumps scroll the viewport themselves: a native smooth scroll packs any
+// distance into a few hundred milliseconds, which reads as a teleport when the
+// target is a screenful or more away (especially right after a page was
+// prepended). Distance-scaled manual easing keeps the movement legible, and
+// owning the animation means foreign `scrollend` events cannot settle the jump
+// early with an instant snap.
+const STICKY_SCROLL_MIN_MS = 260
+const STICKY_SCROLL_MAX_MS = 2400
+const STICKY_SCROLL_MS_PER_PX = 0.4
 // Fallback for browsers that do not emit `scrollend`: an outline jump keeps
 // the viewport until this deadline so its smooth animation cannot be cancelled
 // by a media card settling underneath it.
@@ -248,6 +262,47 @@ export function getStickyPromptParkDelta(params: {
 }): number {
     const barHeight = params.barHeight ?? STICKY_PROMPT_BAR_HEIGHT_PX
     return params.anchorBottom - params.viewportTop - barHeight
+}
+
+/**
+ * Scroll delta that puts an outline target fully below the sticky bar. Used by
+ * locate and the outline panel: both leave the bar visible, so landing the
+ * row at its `scroll-mt` offset would hide the prompt bubble (and its flash)
+ * behind the bar.
+ *
+ * @internal Exported for unit testing.
+ */
+export function getStickyRevealDelta(params: {
+    anchorTop: number
+    viewportTop: number
+    barHeight?: number
+    gap?: number
+}): number {
+    const barHeight = params.barHeight ?? STICKY_PROMPT_BAR_HEIGHT_PX
+    const gap = params.gap ?? STICKY_PROMPT_READING_GAP_PX
+    return params.anchorTop - params.viewportTop - barHeight - gap
+}
+
+/**
+ * Duration for a manual sticky-bar scroll animation. A native smooth scroll
+ * caps its duration regardless of distance, so a long hop (typically right
+ * after a page was prepended above the view) lands before the reader can see
+ * the intermediate turns. Scale with distance, with a floor so short hops
+ * still read as motion and a ceiling so a far jump does not stall.
+ *
+ * @internal Exported for unit testing.
+ */
+export function getStickyScrollDuration(distancePx: number): number {
+    return Math.min(
+        STICKY_SCROLL_MAX_MS,
+        Math.max(STICKY_SCROLL_MIN_MS, Math.abs(distancePx) * STICKY_SCROLL_MS_PER_PX)
+    )
+}
+
+function easeInOutCubic(progress: number): number {
+    return progress < 0.5
+        ? 4 * progress * progress * progress
+        : 1 - Math.pow(-2 * progress + 2, 3) / 2
 }
 
 export function getScrollToBottomButtonVisibility(
@@ -1361,6 +1416,10 @@ export function HappyThread(props: {
     // so the next click must continue from here or two quick clicks would both
     // request the same turn.
     const stickyStepTargetRef = useRef<ConversationOutlineItem | null>(null)
+    // Manual scroll animation for sticky-bar steps, so long hops move visibly
+    // and only our own completion retires the jump.
+    const stickyScrollFrameRef = useRef<number | null>(null)
+    const stickyScrollTokenRef = useRef(0)
     const searchTargetScrollCleanupTimerRef = useRef<number | null>(null)
     const preserveSearchTargetScrollOnReleaseRef = useRef(false)
     const pendingRequestTargetCleanupTimerRef = useRef<number | null>(null)
@@ -1533,12 +1592,80 @@ export function HappyThread(props: {
     }, [])
 
     /**
+     * Stop the manual sticky-bar scroll animation. The token makes the frame
+     * loop exit even if a requested frame is already queued.
+     */
+    const cancelStickyScrollAnimation = useCallback(() => {
+        stickyScrollTokenRef.current += 1
+        if (stickyScrollFrameRef.current !== null) {
+            cancelAnimationFrame(stickyScrollFrameRef.current)
+            stickyScrollFrameRef.current = null
+        }
+    }, [])
+
+    /**
+     * Animate a sticky-bar jump with distance-scaled easing, then hand control
+     * to `onDone`. A native smooth scroll packs any distance into a few
+     * hundred milliseconds, so a hop across a long answer (typical right after
+     * a page was prepended) reads as a teleport; owning the loop also keeps
+     * foreign `scrollend` events from settling the remaining distance
+     * instantly. Returns the initial distance so the caller can size its
+     * fallback timer.
+     */
+    const animateStickyScroll = useCallback((getDelta: () => number, onDone: () => void): number => {
+        const viewport = viewportRef.current
+        if (!viewport) {
+            onDone()
+            return 0
+        }
+        cancelStickyScrollAnimation()
+        const distance = getDelta()
+        const reduceMotion = typeof window.matchMedia === 'function'
+            && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        if (Math.abs(distance) <= 2 || reduceMotion) {
+            viewport.scrollTop += distance
+            onDone()
+            return distance
+        }
+        const token = stickyScrollTokenRef.current
+        const startTop = viewport.scrollTop
+        const duration = getStickyScrollDuration(distance)
+        const startedAt = performance.now()
+        stickyScrollFrameRef.current = requestAnimationFrame(function animate(now) {
+            if (stickyScrollTokenRef.current !== token) {
+                return
+            }
+            const current = viewportRef.current
+            if (!current) {
+                stickyScrollFrameRef.current = null
+                onDone()
+                return
+            }
+            const progress = Math.min(1, (now - startedAt) / duration)
+            const eased = easeInOutCubic(progress)
+            // Recompute the live target every frame so a late layout shift
+            // above the view still lands on the target row.
+            const liveTarget = current.scrollTop + getDelta()
+            current.scrollTop = startTop + (liveTarget - startTop) * eased
+            if (progress >= 1) {
+                current.scrollTop += getDelta()
+                stickyScrollFrameRef.current = null
+                onDone()
+                return
+            }
+            stickyScrollFrameRef.current = requestAnimationFrame(animate)
+        })
+        return distance
+    }, [cancelStickyScrollAnimation])
+
+    /**
      * Abandon an in-flight jump without settling on its target. Used when the
      * reader takes the viewport back (wheel/keyboard/pointer) or asks for the
      * tail: snapping back to a jump they are overriding would be a worse
      * surprise than the interruption the lock prevents.
      */
     const cancelOutlineJump = useCallback(() => {
+        cancelStickyScrollAnimation()
         outlineJumpInProgressRef.current = false
         outlineJumpTargetRef.current = null
         stickyStepTargetRef.current = null
@@ -1546,7 +1673,7 @@ export function HappyThread(props: {
             window.clearTimeout(outlineJumpEndTimerRef.current)
             outlineJumpEndTimerRef.current = null
         }
-    }, [])
+    }, [cancelStickyScrollAnimation])
 
     /**
      * Release the outline jump's ownership of the viewport and rebaseline the
@@ -1558,7 +1685,10 @@ export function HappyThread(props: {
      * belongs to the previous animation (a step can start loading before it
      * issues its own scroll). It must not retire the new jump or clear its
      * pending step, so the no-target case returns without touching anything
-     * unless the caller is aborting the jump itself (`force`).
+     * unless the caller is aborting the jump itself (`force`). The same
+     * applies while our own scroll animation is running: only its completion
+     * may finish the jump, otherwise a stray `scrollend` would snap the
+     * remaining distance instantly.
      */
     const finishOutlineJump = useCallback((options?: { force?: boolean }) => {
         if (!outlineJumpInProgressRef.current) {
@@ -1568,10 +1698,14 @@ export function HappyThread(props: {
         if (!jump && options?.force !== true) {
             return
         }
+        if (stickyScrollFrameRef.current !== null && options?.force !== true) {
+            return
+        }
         if (outlineJumpEndTimerRef.current !== null) {
             window.clearTimeout(outlineJumpEndTimerRef.current)
             outlineJumpEndTimerRef.current = null
         }
+        cancelStickyScrollAnimation()
         outlineJumpTargetRef.current = null
         outlineJumpInProgressRef.current = false
         stickyStepTargetRef.current = null
@@ -1590,7 +1724,7 @@ export function HappyThread(props: {
                 historyAnchorRef.current = next
             }
         }
-    }, [isInitialScrollSettling])
+    }, [cancelStickyScrollAnimation, isInitialScrollSettling])
     const clearSearchTargetScrollTimers = useCallback(() => {
         for (const timer of searchTargetScrollTimersRef.current) {
             window.clearTimeout(timer)
@@ -2533,6 +2667,9 @@ export function HappyThread(props: {
             searchTargetQueryRetryCountRef.current = 0
             searchTargetContextRetryCountRef.current = 0
             searchTargetRenderRetryCountRef.current = 0
+            // A search target owns the viewport; a sticky-bar step animation
+            // that is still writing scrollTop must stop first.
+            cancelOutlineJump()
             searchTargetJumpRef.current = {
                 messageId: targetMessageId,
                 messageQuery: targetSearchQuery,
@@ -2712,6 +2849,7 @@ export function HappyThread(props: {
         })
     }, [
         activeSearchTargetId,
+        cancelOutlineJump,
         clearInitialScrollTimers,
         clearSearchTargetMarker,
         clearSearchTargetRetryTimer,
@@ -3018,6 +3156,9 @@ export function HappyThread(props: {
         // An explicit outline row replaces whatever turn a bar step was
         // heading to, so a later step starts from the reader's actual view.
         stickyStepTargetRef.current = null
+        // A running step animation must not keep writing scrollTop under the
+        // context load this selection starts.
+        cancelStickyScrollAnimation()
         // Stop tail-following before the context window swaps in. The window
         // replacement changes content height, and the ResizeObserver would see
         // the pre-jump "at bottom" state and snap the viewport back to the end,
@@ -3066,35 +3207,43 @@ export function HappyThread(props: {
                 const element = document.getElementById(targetAnchorId)
                 return viewport && element && viewport.contains(element) ? element : null
             }
-            outlineJumpTargetRef.current = {
-                isOffTarget: () => {
-                    const viewport = viewportRef.current
-                    const element = findTarget()
-                    if (!viewport || !element) return false
-                    // `scrollIntoView` honours the row's scroll margin and the
-                    // viewport's scroll padding, so the landed offset is not 0.
-                    const targetStyle = window.getComputedStyle(element)
-                    const viewportStyle = window.getComputedStyle(viewport)
-                    const landedOffset =
-                        (Number.parseFloat(targetStyle.scrollMarginTop) || 0)
-                        + (Number.parseFloat(viewportStyle.scrollPaddingTop) || 0)
-                    const currentOffset =
-                        element.getBoundingClientRect().top - viewport.getBoundingClientRect().top
-                    return Math.abs(currentOffset - landedOffset) > 8
-                },
-                recenter: () => findTarget()?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
-                settle: () => findTarget()?.scrollIntoView({ block: 'start' })
+            // Locate and the outline panel both leave the sticky bar visible,
+            // so land the row *below* the bar: `scroll-mt` alone puts the
+            // prompt bubble (and its locate flash) behind the bar.
+            const revealDelta = () => {
+                const viewport = viewportRef.current
+                const element = findTarget()
+                if (!viewport || !element) return 0
+                return getStickyRevealDelta({
+                    anchorTop: element.getBoundingClientRect().top,
+                    viewportTop: viewport.getBoundingClientRect().top
+                })
             }
-            target.scrollIntoView({ block: 'start', behavior: 'smooth' })
+            const settleReveal = () => {
+                const viewport = viewportRef.current
+                if (!viewport) return
+                viewport.scrollTop += revealDelta()
+            }
+            outlineJumpTargetRef.current = {
+                isOffTarget: () => Math.abs(revealDelta()) > 8,
+                // The animation already tracks live geometry; a resize
+                // callback must not restart it mid-flight.
+                recenter: () => {},
+                settle: settleReveal
+            }
+            const distance = animateStickyScroll(revealDelta, () => finishOutlineJump())
+            const fallbackMs = Math.abs(distance) <= 2
+                ? OUTLINE_JUMP_SETTLE_MS
+                : getStickyScrollDuration(distance) + 1000
             outlineJumpEndTimerRef.current = window.setTimeout(() => {
-                finishOutlineJump()
-            }, OUTLINE_JUMP_SETTLE_MS)
+                finishOutlineJump({ force: true })
+            }, fallbackMs)
         } else {
             finishOutlineJump({ force: true })
         }
         props.onOutlineItemClick?.(item)
         props.onOutlineOpenChange(false)
-    }, [finishOutlineJump, loadOlderForOutline, props.onLoadMessageContext, props.onOutlineItemClick, props.onOutlineOpenChange])
+    }, [animateStickyScroll, cancelStickyScrollAnimation, finishOutlineJump, loadOlderForOutline, props.onLoadMessageContext, props.onOutlineItemClick, props.onOutlineOpenChange])
 
     /**
      * Locate from the sticky prompt bar: reuse the outline jump (it can load a
@@ -3182,21 +3331,26 @@ export function HappyThread(props: {
                 viewportTop: current.getBoundingClientRect().top
             })
         }
-        const scrollJump = (behavior: ScrollBehavior) => {
+        const settleJump = () => {
             const current = viewportRef.current
             if (!current) return
-            current.scrollTo({ top: current.scrollTop + jumpDelta(), behavior })
+            current.scrollTop += jumpDelta()
         }
         const beginJump = () => {
             outlineJumpTargetRef.current = {
                 isOffTarget: () => Math.abs(jumpDelta()) > 4,
-                recenter: () => scrollJump('smooth'),
-                settle: () => scrollJump('instant')
+                // The animation already tracks live geometry; a resize
+                // callback must not restart it mid-flight.
+                recenter: () => {},
+                settle: settleJump
             }
-            scrollJump('smooth')
+            const distance = animateStickyScroll(jumpDelta, () => finishOutlineJump())
+            const fallbackMs = Math.abs(distance) <= 2
+                ? OUTLINE_JUMP_SETTLE_MS
+                : getStickyScrollDuration(distance) + 1000
             outlineJumpEndTimerRef.current = window.setTimeout(() => {
-                finishOutlineJump()
-            }, OUTLINE_JUMP_SETTLE_MS)
+                finishOutlineJump({ force: true })
+            }, fallbackMs)
         }
 
         if (findAnchor()) {
@@ -3224,7 +3378,7 @@ export function HappyThread(props: {
             }
             beginJump()
         })()
-    }, [finishOutlineJump, loadOlderForOutline])
+    }, [animateStickyScroll, finishOutlineJump, loadOlderForOutline])
 
     /**
      * Resolve a bar step against the session-wide outline index, continuing
