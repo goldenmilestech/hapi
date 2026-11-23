@@ -12,7 +12,6 @@ import {
     getPullToLoadState,
     getScrollIntent,
     getScrollToBottomButtonVisibility,
-    getStickyPromptParkDelta,
     getStickyRevealDelta,
     getStickyScrollDuration,
     hasAppliedHistoryVersion,
@@ -1066,30 +1065,15 @@ describe('share turn snapshots', () => {
     })
 })
 
-describe('sticky prompt park delta', () => {
-    it('parks the prompt root at the bar bottom edge', () => {
-        // A 40px bar: the root ends at the top of the covered strip, so the
-        // 12px message gap puts the first answer row on the reading line.
-        expect(getStickyPromptParkDelta({ anchorBottom: 300, viewportTop: 100 })).toBe(160)
-    })
-
-    it('scrolls upward when the target prompt is above the viewport', () => {
-        expect(getStickyPromptParkDelta({ anchorBottom: 60, viewportTop: 100 })).toBe(-80)
-    })
-
-    it('uses the provided bar height', () => {
-        expect(getStickyPromptParkDelta({ anchorBottom: 300, viewportTop: 100, barHeight: 52 })).toBe(148)
-    })
-})
-
 describe('sticky prompt reveal delta', () => {
     it('lands the whole prompt below the bar and its reading gap', () => {
-        // 40px bar + 12px gap: the row top ends 52px below the viewport top.
-        expect(getStickyRevealDelta({ anchorTop: 300, viewportTop: 100 })).toBe(148)
+        // 40px bar + 12px gap, minus the 4px overlap: the row top ends 48px
+        // below the viewport top, just above the reading line.
+        expect(getStickyRevealDelta({ anchorTop: 300, viewportTop: 100 })).toBe(152)
     })
 
     it('scrolls upward when the target row is above the viewport', () => {
-        expect(getStickyRevealDelta({ anchorTop: 40, viewportTop: 100 })).toBe(-112)
+        expect(getStickyRevealDelta({ anchorTop: 40, viewportTop: 100 })).toBe(-108)
     })
 
     it('honours a custom bar height and gap', () => {
@@ -1098,14 +1082,22 @@ describe('sticky prompt reveal delta', () => {
             viewportTop: 100,
             barHeight: 52,
             gap: 4
-        })).toBe(144)
+        })).toBe(148)
+    })
+
+    it('can disable the reading-line overlap', () => {
+        expect(getStickyRevealDelta({
+            anchorTop: 300,
+            viewportTop: 100,
+            overlapPx: 0
+        })).toBe(148)
     })
 })
 
 describe('sticky scroll duration', () => {
     it('scales with distance', () => {
-        expect(getStickyScrollDuration(1000)).toBe(400)
-        expect(getStickyScrollDuration(-1000)).toBe(400)
+        expect(getStickyScrollDuration(1000)).toBe(600)
+        expect(getStickyScrollDuration(-1000)).toBe(600)
     })
 
     it('keeps a floor so short hops still read as motion', () => {
@@ -1114,6 +1106,6 @@ describe('sticky scroll duration', () => {
     })
 
     it('caps a far jump instead of stalling the reader', () => {
-        expect(getStickyScrollDuration(20_000)).toBe(2400)
+        expect(getStickyScrollDuration(20_000)).toBe(4500)
     })
 })
