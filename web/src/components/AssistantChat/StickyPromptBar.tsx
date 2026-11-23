@@ -77,6 +77,14 @@ type PinnedPrompt = {
     position: number
     /** Prompt count in the session-wide outline index. */
     total: number
+    /**
+     * The turn the reader is actually on. When that turn's own question is
+     * visible in the message area, the bar shows the previous message instead,
+     * so the displayed item and the step base differ.
+     */
+    stepItem: ConversationOutlineItem
+    /** 1-based index of `stepItem`. */
+    stepPosition: number
 }
 
 /** The turn the reader is stepping from. */
@@ -94,14 +102,6 @@ type StickyPromptBarProps = {
     revision: number | string
     /** Search jumps and the outline drawer own the top edge while open. */
     hidden?: boolean
-    /**
-     * Turn to keep pinned after a jump, even while its bubble is still on
-     * screen. A jump lands the prompt bubble just below the bar so the reader
-     * can see the message itself; geometry alone would hide the bar as
-     * "visible", removing the step and locate controls. The thread clears the
-     * hold on the next manual scroll.
-     */
-    heldItem?: ConversationOutlineItem | null
     onLocate: (item: ConversationOutlineItem) => void
     onStep: (direction: -1 | 1, current: StickyPromptStep) => void
 }
@@ -137,6 +137,8 @@ export function StickyPromptBar(props: StickyPromptBarProps) {
         const unchanged = current?.item === next?.item
             && current?.position === next?.position
             && current?.total === next?.total
+            && current?.stepItem === next?.stepItem
+            && current?.stepPosition === next?.stepPosition
         if (unchanged) {
             return
         }
@@ -172,31 +174,35 @@ export function StickyPromptBar(props: StickyPromptBarProps) {
         })
 
         const total = Math.max(props.items.length, items.length)
-        // A landed jump keeps its turn on the bar even while the prompt bubble
-        // is visible below it. Without the hold the bar would hide as
-        // "visible" and the reader would lose the step/locate controls right
-        // after using them.
-        const heldItem = props.heldItem
-        const heldIndex = heldItem ? indexById.get(heldItem.id) : undefined
-        if (heldItem && heldIndex !== undefined) {
-            // Prefer the live index entry: the held object can predate a
-            // window merge that refreshed its label.
-            publish({ item: props.items[heldIndex] ?? heldItem, position: heldIndex + 1, total })
-            return
-        }
         const turn = resolvePinnedPrompt(rects, viewportTop)
         if (turn.kind === 'pinned') {
             const item = items[turn.index]
-            publish({
-                item,
-                // The outline index is session-wide, so the pinned item's
-                // position and the total stay stable while the window swaps.
-                position: (indexById.get(item.id) ?? turn.index) + 1,
-                total
-            })
+            // The outline index is session-wide, so the pinned item's position
+            // and the total stay stable while the window swaps.
+            const position = (indexById.get(item.id) ?? turn.index) + 1
+            publish({ item, position, total, stepItem: item, stepPosition: position })
             return
         }
         if (turn.kind === 'visible') {
+            // The reader is looking at this question itself. The bar stands
+            // for the last message scrolled past the top edge, so show the
+            // previous message; stepping still starts from the visible turn,
+            // which makes the up arrow land on exactly what the bar shows.
+            const current = items[turn.index]
+            const currentIndex = indexById.get(current.id)
+            if (currentIndex !== undefined && currentIndex > 0) {
+                const previous = props.items[currentIndex - 1]
+                if (previous) {
+                    publish({
+                        item: previous,
+                        position: currentIndex,
+                        total,
+                        stepItem: current,
+                        stepPosition: currentIndex + 1
+                    })
+                    return
+                }
+            }
             publish(null)
             return
         }
@@ -209,12 +215,18 @@ export function StickyPromptBar(props: StickyPromptBarProps) {
         if (firstPosition !== undefined && firstPosition > 0) {
             const previous = props.items[firstPosition - 1]
             if (previous) {
-                publish({ item: previous, position: firstPosition, total })
+                publish({
+                    item: previous,
+                    position: firstPosition,
+                    total,
+                    stepItem: previous,
+                    stepPosition: firstPosition
+                })
                 return
             }
         }
         publish(null)
-    }, [itemByAnchorId, indexById, props.contentRef, props.heldItem, props.items, props.viewportRef, publish])
+    }, [itemByAnchorId, indexById, props.contentRef, props.items, props.viewportRef, publish])
 
     useEffect(() => {
         const viewport = props.viewportRef.current
@@ -254,13 +266,13 @@ export function StickyPromptBar(props: StickyPromptBarProps) {
         if (!current) {
             return
         }
-        props.onStep(direction, { item: current.item, position: current.position })
+        props.onStep(direction, { item: current.stepItem, position: current.stepPosition })
     }, [props.onStep, sync])
 
     const visible = pinned !== null && props.hidden !== true
     const createdAt = pinned ? new Date(pinned.item.createdAt) : null
-    const canGoPrevious = Boolean(pinned && pinned.position > 1)
-    const canGoNext = Boolean(pinned && pinned.position < pinned.total)
+    const canGoPrevious = Boolean(pinned && pinned.stepPosition > 1)
+    const canGoNext = Boolean(pinned && pinned.stepPosition < pinned.total)
     const locateLabel = t('session.stickyPrompt.locate')
 
     return (
