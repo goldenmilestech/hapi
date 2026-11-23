@@ -1305,9 +1305,6 @@ export function HappyThread(props: {
     const [searchTargetRetryVersion, setSearchTargetRetryVersion] = useState(0)
     const [isLocatingSearchTarget, setIsLocatingSearchTarget] = useState(false)
     const [isRequestingNewer, setIsRequestingNewer] = useState(false)
-    // The turn a jump landed on. The bar keeps showing it while its bubble is
-    // visible below the bar, until the reader scrolls or jumps elsewhere.
-    const [stickyHoldItem, setStickyHoldItem] = useState<ConversationOutlineItem | null>(null)
     const [showScrollToBottom, setShowScrollToBottom] = useState(false)
     const pullToLoadStateRef = useRef<PullToLoadState>('idle')
     const shareTurnIdRef = useRef(0)
@@ -1544,7 +1541,6 @@ export function HappyThread(props: {
         // A step target belongs to the session it was picked in; switching
         // sessions must not make the next step continue from the old outline.
         stickyStepTargetRef.current = null
-        setStickyHoldItem(null)
     }, [props.sessionId])
 
     useLayoutEffect(() => {
@@ -1666,9 +1662,6 @@ export function HappyThread(props: {
         outlineJumpInProgressRef.current = false
         outlineJumpTargetRef.current = null
         stickyStepTargetRef.current = null
-        // The reader is taking the viewport back; the bar follows geometry
-        // again instead of holding the turn the jump landed on.
-        setStickyHoldItem(null)
         if (outlineJumpEndTimerRef.current !== null) {
             window.clearTimeout(outlineJumpEndTimerRef.current)
             outlineJumpEndTimerRef.current = null
@@ -3156,9 +3149,6 @@ export function HappyThread(props: {
         // An explicit outline row replaces whatever turn a bar step was
         // heading to, so a later step starts from the reader's actual view.
         stickyStepTargetRef.current = null
-        // The bar follows the selection immediately, including while the
-        // context loads; the landing keeps the bubble visible below it.
-        setStickyHoldItem(item)
         // A running step animation must not keep writing scrollTop under the
         // context load this selection starts.
         cancelStickyScrollAnimation()
@@ -3242,7 +3232,6 @@ export function HappyThread(props: {
                 finishOutlineJump({ force: true })
             }, fallbackMs)
         } else {
-            setStickyHoldItem(null)
             finishOutlineJump({ force: true })
         }
         props.onOutlineItemClick?.(item)
@@ -3300,7 +3289,6 @@ export function HappyThread(props: {
         const isCurrent = () => outlineSelectTokenRef.current === selectToken
 
         // Show the destination turn immediately, including during the load.
-        setStickyHoldItem(item)
         autoScrollEnabledRef.current = false
         atBottomRef.current = false
         onViewModeChangeRef.current('history')
@@ -3321,8 +3309,9 @@ export function HappyThread(props: {
         }
 
         // Land the prompt itself below the bar: the bubble and any attachments
-        // stay readable, and the answer starts after it. The bar keeps the
-        // same turn through `stickyHoldItem` while the bubble is on screen.
+        // stay readable, and the answer starts after it. Once the question is
+        // visible the bar switches to the previous message, so it never
+        // repeats what the message area already shows.
         // Recompute the delta from live geometry, resolving the row by id, so
         // a re-render or context load cannot leave a stale element behind.
         const findAnchor = () => {
@@ -3381,7 +3370,6 @@ export function HappyThread(props: {
                 return
             }
             if (!target || !findAnchor()) {
-                setStickyHoldItem(null)
                 finishOutlineJump({ force: true })
                 return
             }
@@ -3737,7 +3725,6 @@ export function HappyThread(props: {
                     items={props.outlineItems}
                     revision={`${appliedMessagesVersion}:${appliedHistoryVersion}`}
                     hidden={props.outlineOpen || hasSearchTarget}
-                    heldItem={stickyHoldItem}
                     onLocate={handleStickyPromptLocate}
                     onStep={handleStickyPromptStep}
                 />
