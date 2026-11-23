@@ -4,7 +4,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ConversationOutlineItem } from '@/chat/outline'
 import { getConversationMessageAnchorId } from '@/chat/outline'
 import { I18nProvider } from '@/lib/i18n-context'
-import { StickyPromptBar, STICKY_PROMPT_BAR_HEIGHT_PX, STICKY_PROMPT_READING_GAP_PX } from './StickyPromptBar'
+import {
+    StickyPromptBar,
+    STICKY_PROMPT_BAR_HEIGHT_PX,
+    STICKY_PROMPT_READING_GAP_PX,
+    type StickyPromptStep
+} from './StickyPromptBar'
 
 const ITEMS: ConversationOutlineItem[] = [
     {
@@ -77,7 +82,7 @@ function Harness(props: {
     renderItems?: readonly ConversationOutlineItem[]
     hidden?: boolean
     onLocate: (item: ConversationOutlineItem) => void
-    onNavigate: (item: ConversationOutlineItem) => void
+    onStep: (direction: -1 | 1, current: StickyPromptStep) => void
 }) {
     const viewportRef = useRef<HTMLDivElement | null>(null)
     const contentRef = useRef<HTMLDivElement | null>(null)
@@ -116,7 +121,7 @@ function Harness(props: {
                 revision={0}
                 hidden={props.hidden}
                 onLocate={props.onLocate}
-                onNavigate={props.onNavigate}
+                onStep={props.onStep}
             />
         </div>
     )
@@ -130,7 +135,7 @@ function mount(props?: {
     renderItems?: readonly ConversationOutlineItem[]
 }) {
     const onLocate = vi.fn()
-    const onNavigate = vi.fn()
+    const onStep = vi.fn()
     render(
         <I18nProvider>
             <Harness
@@ -138,13 +143,13 @@ function mount(props?: {
                 renderItems={props?.renderItems}
                 hidden={props?.hidden}
                 onLocate={onLocate}
-                onNavigate={onNavigate}
+                onStep={onStep}
             />
         </I18nProvider>
     )
     const bar = screen.getByTestId('sticky-prompt-bar')
     const scroll = () => fireEvent.scroll(screen.getByTestId('viewport'))
-    return { bar, scroll, onLocate, onNavigate }
+    return { bar, scroll, onLocate, onStep }
 }
 
 async function expectVisible(bar: HTMLElement, visible: boolean) {
@@ -207,8 +212,8 @@ describe('StickyPromptBar', () => {
         expect(onLocate).toHaveBeenCalledTimes(2)
     })
 
-    it('steps to the previous and next rendered prompt', async () => {
-        const { bar, scroll, onNavigate } = mount()
+    it('reports the step direction and the pinned turn', async () => {
+        const { bar, scroll, onStep } = mount()
         setPromptRect(ITEMS[0]!, -300, -260)
         setPromptRect(ITEMS[1]!, -120, -80)
         setPromptRect(ITEMS[2]!, 420, 460)
@@ -216,17 +221,19 @@ describe('StickyPromptBar', () => {
         await expectVisible(bar, true)
 
         fireEvent.click(within(bar).getByRole('button', { name: 'Next question' }))
-        expect(onNavigate).toHaveBeenLastCalledWith(ITEMS[2])
+        expect(onStep).toHaveBeenLastCalledWith(1, { item: ITEMS[1], position: 2 })
 
         fireEvent.click(within(bar).getByRole('button', { name: 'Previous question' }))
-        expect(onNavigate).toHaveBeenLastCalledWith(ITEMS[0])
+        expect(onStep).toHaveBeenLastCalledWith(-1, { item: ITEMS[1], position: 2 })
     })
 
-    it('steps into a prompt outside the rendered window through the session outline', async () => {
+    it('keeps stepping enabled into a prompt outside the rendered window', async () => {
         // The loaded window only holds the last three prompts; the first two
         // are still lazy and only exist in the session-wide outline index.
+        // The bar cannot see them, but stepping stays enabled so the thread
+        // can resolve and load the next turn.
         const rendered = EXTENDED_ITEMS.slice(2)
-        const { bar, scroll, onNavigate } = mount({ items: EXTENDED_ITEMS, renderItems: rendered })
+        const { bar, scroll, onStep } = mount({ items: EXTENDED_ITEMS, renderItems: rendered })
         setPromptRect(EXTENDED_ITEMS[2]!, -300, -260)
         setPromptRect(EXTENDED_ITEMS[3]!, 320, 360)
         setPromptRect(EXTENDED_ITEMS[4]!, 620, 660)
@@ -237,7 +244,7 @@ describe('StickyPromptBar', () => {
         const previous = within(bar).getByRole('button', { name: 'Previous question' })
         expect(previous).toBeEnabled()
         fireEvent.click(previous)
-        expect(onNavigate).toHaveBeenCalledWith(EXTENDED_ITEMS[1])
+        expect(onStep).toHaveBeenCalledWith(-1, { item: EXTENDED_ITEMS[2], position: 3 })
     })
 
     it('keeps a bar for the previous prompt when the window starts mid-answer', async () => {
@@ -245,7 +252,7 @@ describe('StickyPromptBar', () => {
         // their tops are all below the reading line. The bar must still say
         // which turn the visible content belongs to and offer to load it.
         const rendered = EXTENDED_ITEMS.slice(2)
-        const { bar, scroll, onLocate, onNavigate } = mount({ items: EXTENDED_ITEMS, renderItems: rendered })
+        const { bar, scroll, onLocate, onStep } = mount({ items: EXTENDED_ITEMS, renderItems: rendered })
         setPromptRect(EXTENDED_ITEMS[2]!, 320, 360)
         setPromptRect(EXTENDED_ITEMS[3]!, 620, 660)
         setPromptRect(EXTENDED_ITEMS[4]!, 920, 960)
@@ -256,9 +263,9 @@ describe('StickyPromptBar', () => {
         expect(within(bar).getByText('2 / 5')).toBeInTheDocument()
 
         fireEvent.click(within(bar).getByRole('button', { name: 'Previous question' }))
-        expect(onNavigate).toHaveBeenLastCalledWith(EXTENDED_ITEMS[0])
+        expect(onStep).toHaveBeenLastCalledWith(-1, { item: EXTENDED_ITEMS[1], position: 2 })
         fireEvent.click(within(bar).getByRole('button', { name: 'Next question' }))
-        expect(onNavigate).toHaveBeenLastCalledWith(EXTENDED_ITEMS[2])
+        expect(onStep).toHaveBeenLastCalledWith(1, { item: EXTENDED_ITEMS[1], position: 2 })
 
         const locateButtons = within(bar).getAllByRole('button', { name: 'Jump to this question' })
         fireEvent.click(locateButtons[0]!)
