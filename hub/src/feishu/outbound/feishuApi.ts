@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 const FEISHU_API_BASE = 'https://open.feishu.cn/open-apis'
 const REQUEST_TIMEOUT_MS = 10_000
+const FILE_UPLOAD_TIMEOUT_MS = 120_000
 /** Refresh before the documented two-hour expiry; clock skew is worse than an extra call. */
 const TOKEN_REFRESH_MARGIN_MS = 2 * 60 * 1000
 const DIRECTORY_CACHE_TTL_MS = 10 * 60 * 1000
@@ -57,6 +58,14 @@ type SendResponse = {
     data?: {
         message_id?: string
         chat_id?: string
+    }
+}
+
+type FileUploadResponse = {
+    code?: number
+    msg?: string
+    data?: {
+        file_key?: string
     }
 }
 
@@ -258,16 +267,51 @@ export class FeishuBotApi {
     private async requestRaw(
         url: string,
         init: RequestInit,
-        endpoint: string
+        endpoint: string,
+        timeoutMs = REQUEST_TIMEOUT_MS
     ): Promise<{ response: Response; payload: unknown }> {
         const response = await this.fetchImpl(url, {
             ...init,
-            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+            signal: AbortSignal.timeout(timeoutMs)
         })
         return {
             response,
             payload: parseJson(await response.text(), endpoint)
         }
+    }
+
+    /** Authenticated multipart request with one token-refresh retry. */
+    private async requestMultipart(
+        path: string,
+        form: FormData,
+        endpoint: string
+    ): Promise<unknown> {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+            const token = await this.getTenantAccessToken(attempt > 0)
+            const { response, payload } = await this.requestRaw(
+                `${this.baseUrl}${path}`,
+                {
+                    method: 'POST',
+                    headers: { authorization: `Bearer ${token}` },
+                    body: form
+                },
+                endpoint,
+                FILE_UPLOAD_TIMEOUT_MS
+            )
+            const envelope = payload as FeishuEnvelope
+            if (TOKEN_INVALID_CODES.has(Number(envelope.code)) && attempt === 0) {
+                continue
+            }
+            if (!response.ok || envelope.code !== 0) {
+                throw new FeishuApiError(
+                    envelope.msg || `Feishu ${endpoint} failed (HTTP ${response.status})`,
+                    envelope.code,
+                    response.status
+                )
+            }
+            return payload
+        }
+        throw new FeishuApiError('Feishu token refresh failed')
     }
 
     /** Authenticated JSON request with one token-refresh retry. */
@@ -329,6 +373,80 @@ export class FeishuBotApi {
                     content: JSON.stringify({ text: input.text }),
                     // Feishu de-duplicates sends carrying the same uuid within
                     // one hour. Every logical message gets a fresh one.
+                    uuid: input.idempotencyKey ?? randomUUID()
+                })
+            },
+            'im/v1/messages'
+        ) as SendResponse
+
+        const messageId = payload.data?.message_id?.trim()
+        if (!messageId) {
+            throw new FeishuApiError('Feishu send response did not include a message id')
+        }
+        return {
+            messageId,
+            chatId: payload.data?.chat_id?.trim() || null
+        }
+    }
+
+    async uploadFile(input: {
+        fileName: string
+        data: Uint8Array
+        fileType?: string
+    }): Promise<{ fileKey: string }> {
+        const fileName = input.fileName.trim()
+        if (!fileName) {
+            throw new FeishuApiError('Feishu file name is required')
+        }
+        if (input.data.byteLength === 0) {
+            throw new FeishuApiError('Feishu file is empty')
+        }
+
+        const form = new FormData()
+        form.append('file_type', input.fileType ?? 'stream')
+        form.append('file_name', fileName)
+        form.append(
+            'file',
+            new Blob([input.data], { type: 'application/octet-stream' }),
+            fileName
+        )
+        const payload = await this.requestMultipart(
+            '/im/v1/files',
+            form,
+            'im/v1/files'
+        ) as FileUploadResponse
+        const fileKey = payload.data?.file_key?.trim()
+        if (!fileKey) {
+            throw new FeishuApiError('Feishu file upload response did not include a file_key')
+        }
+        return { fileKey }
+    }
+
+    async sendFile(input: {
+        receiveIdType: 'open_id' | 'email' | 'chat_id'
+        receiveId: string
+        fileKey: string
+        idempotencyKey?: string
+    }): Promise<{ messageId: string; chatId: string | null }> {
+        const receiveId = input.receiveId.trim()
+        const fileKey = input.fileKey.trim()
+        if (!receiveId) {
+            throw new FeishuApiError('Feishu receive id is required')
+        }
+        if (!fileKey) {
+            throw new FeishuApiError('Feishu file key is required')
+        }
+
+        const query = new URLSearchParams({ receive_id_type: input.receiveIdType })
+        const payload = await this.request(
+            `/im/v1/messages?${query.toString()}`,
+            {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    receive_id: receiveId,
+                    msg_type: 'file',
+                    content: JSON.stringify({ file_key: fileKey }),
                     uuid: input.idempotencyKey ?? randomUUID()
                 })
             },

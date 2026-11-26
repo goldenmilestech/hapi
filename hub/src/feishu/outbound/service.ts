@@ -2,12 +2,13 @@ import { randomUUID } from 'node:crypto'
 import type { Store } from '../../store'
 import type {
     FeishuSendApprovalSummary,
+    FeishuSendFile,
     FeishuSendReceipt,
     FeishuSendRequest,
     FeishuSendStatus,
     FeishuSendStatusResponse
 } from '@hapi/protocol/apiTypes'
-import { FEISHU_SEND_TEXT_MAX_CHARS } from '@hapi/protocol/apiTypes'
+import { FEISHU_SEND_FILE_MAX_BYTES, FEISHU_SEND_TEXT_MAX_CHARS } from '@hapi/protocol/apiTypes'
 import type { FeishuSendConfig } from '../config'
 import {
     FeishuApiError,
@@ -32,6 +33,7 @@ export const FEISHU_SEND_REQUEST_PREFIX = 'feishu:'
 export type FeishuSendErrorCode =
     | 'disabled'
     | 'invalid_text'
+    | 'invalid_file'
     | 'no_sender'
     | 'ambiguous_sender'
     | 'recipient_not_found'
@@ -87,6 +89,7 @@ export type FeishuSendApprovalRecord = {
     /** Exact text the user is approving; group sends already include the @ sender. */
     text: string
     preview: string
+    file?: FeishuSendFile
     status: ApprovalStatus
     createdAt: number
     expiresAt: number
@@ -110,6 +113,8 @@ export type DecideFeishuSendResult = {
 export type FeishuSendApi = Pick<
     FeishuBotApi,
     'sendText'
+    | 'sendFile'
+    | 'uploadFile'
     | 'getUser'
     | 'findOpenIdsByEmail'
     | 'getChat'
@@ -159,6 +164,37 @@ function sanitizeOutboundText(text: string): string {
     return text
 }
 
+function formatFileSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`
+    const units = ['KB', 'MB', 'GB']
+    let value = bytes / 1024
+    let index = 0
+    while (value >= 1024 && index < units.length - 1) {
+        value /= 1024
+        index += 1
+    }
+    return `${value.toFixed(1)} ${units[index]}`
+}
+
+function formatFileText(file: FeishuSendFile): string {
+    return `发送文件：${file.fileName}（${formatFileSize(file.size)}）`
+}
+
+function assertValidFile(file: FeishuSendFile): void {
+    if (!file.fileKey.trim() || !file.fileName.trim()) {
+        throw new FeishuSendError('飞书文件信息不完整。', 'invalid_file')
+    }
+    if (file.size <= 0) {
+        throw new FeishuSendError('飞书文件不能为空。', 'invalid_file')
+    }
+    if (file.size > FEISHU_SEND_FILE_MAX_BYTES) {
+        throw new FeishuSendError(
+            `飞书文件超过 ${formatFileSize(FEISHU_SEND_FILE_MAX_BYTES)} 上限。`,
+            'invalid_file'
+        )
+    }
+}
+
 /** Group messages always name the human on whose behalf the bot speaks. */
 export function formatGroupText(sender: { openId: string }, text: string): string {
     return `${text}\n\n—— 由 <at user_id="${sender.openId}"></at> 通过 HAPI 发送`
@@ -176,6 +212,7 @@ function approvalSummary(record: FeishuSendApprovalRecord): FeishuSendApprovalSu
         senderLabel: record.senderLabel,
         text: record.text,
         preview: record.preview,
+        ...(record.file ? { file: record.file } : {}),
         expiresAt: record.expiresAt
     }
 }
@@ -219,7 +256,13 @@ export class FeishuSendService {
     }): Promise<CreateFeishuSendResult> {
         this.sweep()
         this.consumeRateLimit(input.namespace)
-        const text = sanitizeOutboundText(input.request.text)
+        const file = 'file' in input.request ? input.request.file : undefined
+        if (file) {
+            assertValidFile(file)
+        }
+        const text = 'text' in input.request
+            ? sanitizeOutboundText(input.request.text)
+            : sanitizeOutboundText(formatFileText(input.request.file))
         const sender = await this.resolveSender(input.namespace)
 
         if (input.request.kind === 'dm') {
@@ -233,7 +276,8 @@ export class FeishuSendService {
                     receiveId: target.receiveId,
                     targetLabel: target.label,
                     sender,
-                    text
+                    text,
+                    file
                 })
                 return { status: 'sent', requestId, receipt }
             }
@@ -245,10 +289,14 @@ export class FeishuSendService {
                 receiveId: target.receiveId,
                 targetLabel: target.label,
                 sender,
-                text
+                text,
+                file
             })
         }
 
+        if (file) {
+            throw new FeishuSendError('群聊暂不支持发送文件。', 'invalid_file')
+        }
         const group = await this.resolveGroupTarget(input.request.chat)
         await this.assertSenderInChat(group, sender)
         return this.queueApproval({
@@ -261,6 +309,37 @@ export class FeishuSendService {
             sender,
             text: formatGroupText(sender, text)
         })
+    }
+
+    async uploadFile(input: {
+        namespace: string
+        fileName: string
+        data: Uint8Array
+        size: number
+    }): Promise<FeishuSendFile> {
+        this.consumeRateLimit(input.namespace)
+        const fileName = input.fileName.trim()
+        if (!fileName) {
+            throw new FeishuSendError('文件名不能为空。', 'invalid_file')
+        }
+        if (input.size <= 0) {
+            throw new FeishuSendError('文件不能为空。', 'invalid_file')
+        }
+        if (input.size > FEISHU_SEND_FILE_MAX_BYTES) {
+            throw new FeishuSendError(
+                `文件超过 ${formatFileSize(FEISHU_SEND_FILE_MAX_BYTES)} 上限。`,
+                'invalid_file'
+            )
+        }
+        const uploaded = await this.api.uploadFile({
+            fileName,
+            data: input.data
+        })
+        return {
+            fileKey: uploaded.fileKey,
+            fileName,
+            size: input.size
+        }
     }
 
     getStatus(input: {
@@ -326,7 +405,8 @@ export class FeishuSendService {
                 receiveId: record.receiveId,
                 targetLabel: record.targetLabel,
                 sender: { openId: record.senderOpenId, name: record.senderLabel },
-                text: record.text
+                text: record.text,
+                ...(record.file ? { file: record.file } : {})
             })
             record.status = 'sent'
             record.receipt = receipt
@@ -367,6 +447,7 @@ export class FeishuSendService {
         targetLabel: string
         sender: Sender
         text: string
+        file?: FeishuSendFile
     }): CreateFeishuSendResult {
         const pending = Array.from(this.approvals.values()).filter(
             (record) => record.sessionId === input.sessionId && record.status === 'pending'
@@ -392,6 +473,7 @@ export class FeishuSendService {
             senderLabel: input.sender.name ?? input.sender.openId,
             text: input.text,
             preview: truncate(input.text, APPROVAL_PREVIEW_CHARS),
+            ...(input.file ? { file: input.file } : {}),
             status: 'pending',
             createdAt,
             expiresAt: createdAt + this.options.config.approvalTtlSeconds * 1000
@@ -415,12 +497,19 @@ export class FeishuSendService {
         targetLabel: string
         sender: { openId: string; name: string | null }
         text: string
+        file?: FeishuSendFile
     }): Promise<FeishuSendReceipt> {
-        const sent = await this.api.sendText({
-            receiveIdType: record.receiveIdType,
-            receiveId: record.receiveId,
-            text: record.text
-        })
+        const sent = record.file
+            ? await this.api.sendFile({
+                receiveIdType: record.receiveIdType,
+                receiveId: record.receiveId,
+                fileKey: record.file.fileKey
+            })
+            : await this.api.sendText({
+                receiveIdType: record.receiveIdType,
+                receiveId: record.receiveId,
+                text: record.text
+            })
         const receipt: FeishuSendReceipt = {
             requestId: record.requestId,
             messageId: sent.messageId,

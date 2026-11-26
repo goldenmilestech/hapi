@@ -1,9 +1,13 @@
 import axios, { type AxiosInstance } from 'axios'
-import type {
-    FeishuSendReceipt,
-    FeishuSendRequest,
-    FeishuSendResponse,
-    FeishuSendStatusResponse
+import { readFile, stat } from 'node:fs/promises'
+import { basename, resolve } from 'node:path'
+import {
+    FEISHU_SEND_FILE_MAX_BYTES,
+    type FeishuSendFile,
+    type FeishuSendReceipt,
+    type FeishuSendRequest,
+    type FeishuSendResponse,
+    type FeishuSendStatusResponse
 } from '@hapi/protocol/apiTypes'
 import {
     authHeaders,
@@ -65,6 +69,8 @@ async function request(
         ...(body === undefined ? {} : { data: body }),
         headers: authHeaders(jwt),
         timeout,
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
         validateStatus: () => true
     })
     try {
@@ -89,6 +95,79 @@ function errorFromResponse(status: number, data: unknown): FeishuSendClientError
         : `飞书发送请求失败（HTTP ${status}）`
     const code = typeof record.code === 'string' ? record.code : undefined
     return new FeishuSendClientError(message, status, code)
+}
+
+const FILE_NAME_CONTROL_RE = /[\u0000-\u001f\u007f]/g
+
+function sanitizeFileName(name: string): string {
+    return name
+        .replace(/[\\/]/g, '_')
+        .replace(FILE_NAME_CONTROL_RE, '')
+        .trim()
+        .slice(0, 255)
+}
+
+export async function readFeishuFile(filePath: string): Promise<{
+    fileName: string
+    data: Uint8Array
+    size: number
+}> {
+    const absolute = resolve(process.cwd(), filePath)
+    let info
+    try {
+        info = await stat(absolute)
+    } catch {
+        throw new FeishuSendClientError(`找不到文件：${filePath}`)
+    }
+    if (!info.isFile()) {
+        throw new FeishuSendClientError(`不是文件：${filePath}`)
+    }
+    if (info.size <= 0) {
+        throw new FeishuSendClientError(`文件为空：${filePath}`)
+    }
+    if (info.size > FEISHU_SEND_FILE_MAX_BYTES) {
+        throw new FeishuSendClientError(
+            `文件超过 ${FEISHU_SEND_FILE_MAX_BYTES} 字节上限：${filePath}`
+        )
+    }
+    const data = new Uint8Array(await readFile(absolute))
+    const fileName = sanitizeFileName(basename(absolute))
+    if (!fileName) {
+        throw new FeishuSendClientError(`文件名无效：${filePath}`)
+    }
+    return { fileName, data, size: data.byteLength }
+}
+
+export async function uploadFeishuFile(input: {
+    sessionId: string
+    fileName: string
+    data: Uint8Array
+} & FeishuSendClientOptions): Promise<FeishuSendFile> {
+    const form = new FormData()
+    form.append(
+        'file',
+        new Blob([input.data], { type: 'application/octet-stream' }),
+        input.fileName
+    )
+    const { status, data } = await request(
+        input,
+        'post',
+        `/api/sessions/${encodeURIComponent(input.sessionId)}/feishu/files`,
+        form,
+        120_000
+    )
+    if (status < 200 || status >= 300) {
+        throw errorFromResponse(status, data)
+    }
+    const record = data as Partial<FeishuSendFile> | null
+    if (!record?.fileKey || !record.fileName || typeof record.size !== 'number') {
+        throw new FeishuSendClientError('飞书文件上传接口返回了无法识别的结果')
+    }
+    return {
+        fileKey: record.fileKey,
+        fileName: record.fileName,
+        size: record.size
+    }
 }
 
 export async function createFeishuSend(input: {
@@ -143,6 +222,10 @@ function formatTime(ms: number): string {
 
 export function formatFeishuReceipt(receipt: FeishuSendReceipt): string {
     return `飞书消息已发送给 ${receipt.targetLabel}（message_id=${receipt.messageId}，${formatTime(receipt.sentAt)}）。`
+}
+
+export function formatFeishuFileReceipt(receipt: FeishuSendReceipt, fileName: string): string {
+    return `飞书文件 ${fileName} 已发送给 ${receipt.targetLabel}（message_id=${receipt.messageId}，${formatTime(receipt.sentAt)}）。`
 }
 
 export function formatFeishuSendOutcome(result: FeishuSendStatusResponse): string {

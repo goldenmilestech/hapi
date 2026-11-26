@@ -264,11 +264,16 @@ export async function runHappyMcpStdioBridge(argv: string[]): Promise<void> {
       );
     }
 
-    const feishuSendInputSchema: z.ZodTypeAny = z.discriminatedUnion('kind', [
+    const feishuSendInputSchema: z.ZodTypeAny = z.union([
       z.object({
         kind: z.literal('dm'),
         to: z.string().describe('Recipient: "me", open_id, email, or exact display name'),
         text: z.string().describe('Plain text; do not include <at> tags'),
+      }),
+      z.object({
+        kind: z.literal('dm'),
+        to: z.string().describe('Recipient: "me", open_id, email, or exact display name'),
+        file: z.string().describe('Local file path on this machine; file sends are DM-only'),
       }),
       z.object({
         kind: z.literal('group'),
@@ -282,8 +287,9 @@ export async function runHappyMcpStdioBridge(argv: string[]): Promise<void> {
         'feishu_send_message',
         {
           description:
-            'Send a Feishu message through the Hapi bot. DMing the session owner ("to":"me") sends immediately; ' +
-            'other DMs and all group messages require the user to approve an in-chat card. Group messages name and @-mention the sender.',
+            'Send a Feishu message or file through the Hapi bot. DMing the session owner ("to":"me") sends immediately; ' +
+            'other DMs and all group messages require the user to approve an in-chat card. Set "file" to a local path to send a file (DM-only). ' +
+            'Group messages name and @-mention the sender.',
           title: 'Send Feishu Message',
           inputSchema: feishuSendInputSchema,
         },

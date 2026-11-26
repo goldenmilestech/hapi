@@ -1775,16 +1775,36 @@ export type AgentActivityResponse = {
 /** Maximum user-visible characters in one bot-sent Feishu message. */
 export const FEISHU_SEND_TEXT_MAX_CHARS = 8_000
 
+/** Maximum bytes for one bot-sent Feishu file. */
+export const FEISHU_SEND_FILE_MAX_BYTES = 30 * 1024 * 1024
+
+/** A file already uploaded to Feishu; the hub only stores the file_key. */
+export const FeishuSendFileSchema = z.object({
+    fileKey: z.string().trim().min(1).max(512),
+    fileName: z.string().trim().min(1).max(255),
+    size: z.number().int().nonnegative().max(FEISHU_SEND_FILE_MAX_BYTES)
+})
+
+export type FeishuSendFile = z.infer<typeof FeishuSendFileSchema>
+
 /**
  * Agent-initiated Feishu message. `to` accepts an open_id, an email, a known
  * display name, or `me`; `chat` accepts a chat_id or a group name. The hub
  * resolves names and rejects ambiguous matches instead of guessing.
+ *
+ * File sends are DM-only: Feishu file messages have no text body, so group
+ * sends (which must carry the sender mention) stay text-only for now.
  */
-export const FeishuSendRequestSchema = z.discriminatedUnion('kind', [
+export const FeishuSendRequestSchema = z.union([
     z.object({
         kind: z.literal('dm'),
         to: z.string().trim().min(1).max(320),
         text: z.string().min(1).max(FEISHU_SEND_TEXT_MAX_CHARS)
+    }),
+    z.object({
+        kind: z.literal('dm'),
+        to: z.string().trim().min(1).max(320),
+        file: FeishuSendFileSchema
     }),
     z.object({
         kind: z.literal('group'),
@@ -1813,6 +1833,7 @@ export type FeishuSendApprovalSummary = {
     senderLabel: string
     text: string
     preview: string
+    file?: FeishuSendFile
     expiresAt: number
 }
 

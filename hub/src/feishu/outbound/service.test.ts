@@ -14,8 +14,16 @@ type SentMessage = {
     text: string
 }
 
+type SentFile = {
+    receiveIdType: 'open_id' | 'email' | 'chat_id'
+    receiveId: string
+    fileKey: string
+    idempotencyKey?: string
+}
+
 class FakeApi implements FeishuSendApi {
     readonly sent: SentMessage[] = []
+    readonly sentFiles: SentFile[] = []
     members = new Set(['ou_owner', 'ou_guest'])
     ownerId: string | null = 'ou_owner'
     truncated = false
@@ -28,6 +36,19 @@ class FakeApi implements FeishuSendApi {
         this.sent.push(input)
         return {
             messageId: `om_${this.sent.length}`,
+            chatId: input.receiveIdType === 'chat_id' ? input.receiveId : null
+        }
+    }
+
+    async uploadFile(input: { fileName: string; data: Uint8Array }): Promise<{ fileKey: string }> {
+        void input
+        return { fileKey: 'file_1' }
+    }
+
+    async sendFile(input: SentFile): Promise<{ messageId: string; chatId: string | null }> {
+        this.sentFiles.push(input)
+        return {
+            messageId: `om_file_${this.sentFiles.length}`,
             chatId: input.receiveIdType === 'chat_id' ? input.receiveId : null
         }
     }
@@ -150,6 +171,71 @@ describe('FeishuSendService', () => {
             kind: 'dm',
             targetLabel: expect.stringContaining('本人')
         })
+    })
+
+    it('uploads a file and sends it to the owner immediately', async () => {
+        const api = new FakeApi()
+        const service = serviceWithApi(api)
+        const file = await service.uploadFile({
+            namespace: 'default',
+            fileName: 'report.zip',
+            data: new Uint8Array([1, 2]),
+            size: 2
+        })
+
+        const result = await service.createSendRequest({
+            namespace: 'default',
+            sessionId: 'session-1',
+            request: { kind: 'dm', to: 'me', file }
+        })
+
+        expect(result.status).toBe('sent')
+        if (result.status !== 'sent') throw new Error('expected sent')
+        expect(result.receipt.messageId).toBe('om_file_1')
+        expect(api.sentFiles).toEqual([{
+            receiveIdType: 'open_id',
+            receiveId: 'ou_owner',
+            fileKey: 'file_1'
+        }])
+    })
+
+    it('requires approval for a file DM to someone else and sends after approval', async () => {
+        const api = new FakeApi()
+        const service = serviceWithApi(api)
+        const file = await service.uploadFile({
+            namespace: 'default',
+            fileName: 'report.zip',
+            data: new Uint8Array([1, 2]),
+            size: 2
+        })
+
+        const result = await service.createSendRequest({
+            namespace: 'default',
+            sessionId: 'session-1',
+            request: { kind: 'dm', to: 'ou_guest', file }
+        })
+        expect(result.status).toBe('pending_approval')
+        if (result.status !== 'pending_approval') throw new Error('expected approval')
+        expect(result.approval.text).toContain('report.zip')
+        expect(result.approval.file).toMatchObject({
+            fileKey: 'file_1',
+            fileName: 'report.zip',
+            size: 2
+        })
+        expect(api.sentFiles).toHaveLength(0)
+
+        const decided = await service.decide({
+            namespace: 'default',
+            sessionId: 'session-1',
+            requestId: result.requestId,
+            approved: true
+        })
+        expect(decided.status).toBe('sent')
+        expect(api.sentFiles).toEqual([{
+            receiveIdType: 'open_id',
+            receiveId: 'ou_guest',
+            fileKey: 'file_1'
+        }])
     })
 
     it('requires approval for a DM to someone else and sends after approval', async () => {
