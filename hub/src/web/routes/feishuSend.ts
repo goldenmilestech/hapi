@@ -1,13 +1,27 @@
 import { Hono, type Context } from 'hono'
-import { FeishuSendRequestSchema, type FeishuSendResponse, type FeishuSendStatusResponse } from '@hapi/protocol/apiTypes'
+import { bodyLimit } from 'hono/body-limit'
+import { FEISHU_SEND_FILE_MAX_BYTES, FeishuSendRequestSchema, type FeishuSendResponse, type FeishuSendStatusResponse } from '@hapi/protocol/apiTypes'
 import type { SyncEngine } from '../../sync/syncEngine'
 import { FeishuSendError, type FeishuSendService } from '../../feishu/outbound/service'
 import type { WebAppEnv } from '../middleware/auth'
 import { requireSessionFromParam, requireSyncEngine } from './guards'
 
+/** Multipart boundaries and headers need a little room above the file itself. */
+const FEISHU_FILE_MULTIPART_OVERHEAD_BYTES = 1_000_000
+const FILE_NAME_CONTROL_RE = /[\u0000-\u001f\u007f]/g
+
+function sanitizeFileName(name: string): string {
+    return name
+        .replace(/[\\/]/g, '_')
+        .replace(FILE_NAME_CONTROL_RE, '')
+        .trim()
+        .slice(0, 255)
+}
+
 export function feishuSendErrorStatus(code: FeishuSendError['code']): 400 | 403 | 404 | 409 | 422 | 429 | 502 | 503 {
     switch (code) {
         case 'invalid_text':
+        case 'invalid_file':
             return 400
         case 'sender_not_in_chat':
             return 403
@@ -52,6 +66,60 @@ export function createFeishuSendRoutes(options: {
     getFeishuSendService: () => FeishuSendService | null
 }): Hono<WebAppEnv> {
     const app = new Hono<WebAppEnv>()
+
+    app.post('/sessions/:id/feishu/files', bodyLimit({
+        maxSize: FEISHU_SEND_FILE_MAX_BYTES + FEISHU_FILE_MULTIPART_OVERHEAD_BYTES,
+        onError: (c) => c.json({ error: 'File too large', code: 'file_too_large' }, 413)
+    }), async (c) => {
+        const engine = requireSyncEngine(c, options.getSyncEngine)
+        if (engine instanceof Response) {
+            return engine
+        }
+        if (c.get('sessionId')) {
+            return c.json({ error: 'Share tokens cannot upload Feishu files' }, 403)
+        }
+        const service = options.getFeishuSendService()
+        if (!service) {
+            return c.json({ error: 'Feishu bot is not configured on this hub' }, 503)
+        }
+        const sessionResult = requireSessionFromParam(c, engine)
+        if (sessionResult instanceof Response) {
+            return sessionResult
+        }
+
+        const form = await c.req.formData().catch(() => null)
+        if (!form) {
+            return c.json({ error: 'Invalid form data' }, 400)
+        }
+        const file = form.get('file')
+        if (!(file instanceof File)) {
+            return c.json({ error: 'Missing file', code: 'invalid_file' }, 400)
+        }
+        if (file.size === 0) {
+            return c.json({ error: 'File must not be empty', code: 'invalid_file' }, 400)
+        }
+        if (file.size > FEISHU_SEND_FILE_MAX_BYTES) {
+            return c.json({ error: 'File too large', code: 'file_too_large' }, 413)
+        }
+        const fileName = sanitizeFileName(file.name)
+        if (!fileName) {
+            return c.json({ error: 'Invalid file name', code: 'invalid_file' }, 400)
+        }
+
+        try {
+            const data = new Uint8Array(await file.arrayBuffer())
+            const uploaded = await service.uploadFile({
+                namespace: c.get('namespace'),
+                fileName,
+                data,
+                size: file.size
+            })
+            c.header('Cache-Control', 'no-store')
+            return c.json(uploaded)
+        } catch (error) {
+            return errorResponse(c, error)
+        }
+    })
 
     app.post('/sessions/:id/feishu/sends', async (c) => {
         const engine = requireSyncEngine(c, options.getSyncEngine)

@@ -49,10 +49,14 @@ import {
 import { SpawnPeerError, spawnPeer } from "@/modules/spawnPeer/spawnPeer";
 import {
     createFeishuSend,
+    formatFeishuFileReceipt,
     formatFeishuReceipt,
     formatFeishuSendOutcome,
     getFeishuSendStatus,
+    readFeishuFile,
+    uploadFeishuFile,
 } from "@/modules/feishu/feishuSend";
+import type { FeishuSendRequest } from "@hapi/protocol/apiTypes";
 import {
     getFeishuApprovalTracker,
     trackFeishuApproval,
@@ -455,13 +459,22 @@ function createHapiMcpServer(
         }
     });
 
-    const feishuSendInputSchema = z.discriminatedUnion('kind', [
+    const feishuSendInputSchema = z.union([
         z.object({
             kind: z.literal('dm'),
             to: z.string().trim().min(1).describe(
                 'Recipient: "me" for the session owner, or a Feishu open_id (ou_...), email, or exact display name. Anyone other than the session owner requires the user\'s approval.'
             ),
             text: z.string().min(1).describe('Plain text. Do not include <at> tags; Hapi adds the group sender mention.'),
+        }),
+        z.object({
+            kind: z.literal('dm'),
+            to: z.string().trim().min(1).describe(
+                'Recipient: "me" for the session owner, or a Feishu open_id (ou_...), email, or exact display name. Anyone other than the session owner requires the user\'s approval.'
+            ),
+            file: z.string().trim().min(1).describe(
+                'Local path to a file on this machine. File sends are DM-only; use instead of text.'
+            ),
         }),
         z.object({
             kind: z.literal('group'),
@@ -485,21 +498,47 @@ function createHapiMcpServer(
 
     registerTool('feishu_send_message', {
         description:
-            'Send a Feishu message through the Hapi bot. '
+            'Send a Feishu message or file through the Hapi bot. '
             + 'A DM to the session owner ("to":"me") sends immediately. '
             + 'DMing anyone else and every group message requires the user to approve an in-chat approval card. '
+            + 'Set "file" to a local path to send a file instead of text; file sends are DM-only. '
             + 'Group messages are prefixed with the sender and @-mention them, and are refused when the sender is not in the group.',
         title: 'Send Feishu Message',
         inputSchema: feishuSendInputSchema,
-    }, async (args: { kind: 'dm'; to: string; text: string } | { kind: 'group'; chat: string; text: string }) => {
+    }, async (args:
+        | { kind: 'dm'; to: string; text: string }
+        | { kind: 'dm'; to: string; file: string }
+        | { kind: 'group'; chat: string; text: string }
+    ) => {
         logger.debug('[hapiMCP] feishu_send_message:', args.kind);
         try {
+            let request: FeishuSendRequest;
+            let sentFileName: string | undefined;
+            if ('file' in args) {
+                const file = await readFeishuFile(args.file);
+                const uploaded = await uploadFeishuFile({
+                    sessionId: client.sessionId,
+                    fileName: file.fileName,
+                    data: file.data,
+                });
+                sentFileName = uploaded.fileName;
+                request = { kind: 'dm', to: args.to, file: uploaded };
+            } else if (args.kind === 'dm') {
+                request = { kind: 'dm', to: args.to, text: args.text };
+            } else {
+                request = { kind: 'group', chat: args.chat, text: args.text };
+            }
+
             const result = await createFeishuSend({
                 sessionId: client.sessionId,
-                request: args,
+                request,
             });
             if (result.status === 'sent') {
-                return feishuSendText(formatFeishuReceipt(result.receipt));
+                return feishuSendText(
+                    sentFileName
+                        ? formatFeishuFileReceipt(result.receipt, sentFileName)
+                        : formatFeishuReceipt(result.receipt)
+                );
             }
             const tracker = trackFeishuApproval(client, result.approval);
             const terminal = await tracker.waitFor(FEISHU_APPROVAL_WAIT_MS);
@@ -510,7 +549,7 @@ function createHapiMcpServer(
                 );
             }
             return feishuSendText(
-                `Approval requested to send to ${result.approval.targetLabel}; request_id=${result.requestId}. `
+                `Approval requested to send ${sentFileName ? `file ${sentFileName}` : 'message'} to ${result.approval.targetLabel}; request_id=${result.requestId}. `
                 + 'The message will be sent automatically after the user approves. '
                 + 'The approval card and the receipt are visible in this session; use feishu_send_status to check later.'
             );

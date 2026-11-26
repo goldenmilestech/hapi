@@ -9,8 +9,8 @@ must be approved in HAPI first.
 
 | Target | Approval | Message shape |
 |---|---|---|
-| DM to the session owner (`to: "me"`) | Not required | The text as written |
-| DM to anyone else | Required, one message at a time | The text as written |
+| DM to the session owner (`to: "me"`) | Not required | The text or file as written |
+| DM to anyone else | Required, one message at a time | The text or file as written |
 | Group chat | Required, one message at a time | `<text>` followed by `—— 由 <at user_id="…"></at> 通过 HAPI 发送` |
 
 Group sends are refused when the hub cannot resolve a human sender for the
@@ -59,8 +59,14 @@ The CLI exposes two MCP tools:
 // DM to the owner, no approval
 { "kind": "dm", "to": "me", "text": "Nightly build finished." }
 
+// DM a local file to the owner, no approval
+{ "kind": "dm", "to": "me", "file": "/tmp/report.zip" }
+
 // DM to someone else, approval required
 { "kind": "dm", "to": "alice@example.com", "text": "Could you review PR 42?" }
+
+// DM a local file to someone else, approval required
+{ "kind": "dm", "to": "alice@example.com", "file": "./report.zip" }
 
 // Group, approval required; the sender mention is added by the hub
 { "kind": "group", "chat": "Release coordination", "text": "v1.2.3 is live." }
@@ -71,6 +77,14 @@ The CLI exposes two MCP tools:
 rejected with the candidate list instead of guessing. If the MCP call returns
 `request_id=…`, the approval is still pending; `feishu_send_status` reports
 the final state, and the hub sends automatically once approved.
+
+`file` is a path on the machine running the agent, not on the hub. The CLI
+reads it, uploads it through the hub, and the hub uploads it to Feishu before
+creating the send request. File sends are DM-only, are limited to 30 MB, use
+the basename as the Feishu file name, and are mutually exclusive with `text`.
+The approval card shows the file name and size; the Feishu message is a file
+message with no separate text body. Group sends stay text-only because Feishu
+file messages cannot carry the sender mention.
 
 Group text must not contain `<at>` tags. Mentions are appended by the hub so a
 model cannot mention arbitrary users or `@all`.
@@ -86,6 +100,7 @@ model cannot mention arbitrary users or `@all`.
 | `sender_check_unavailable` | Member check failed or was truncated; the send is refused |
 | `chat_not_found` / `chat_ambiguous` | Group lookup failed; use a chat_id |
 | `rate_limited` | Too many requests, or five pending approvals already exist for the session |
+| `invalid_file` | The file is empty, too large, has an invalid name, or a file was sent to a group |
 | `expired` | Nobody approved before the TTL elapsed; nothing was sent |
 
 ## Notes

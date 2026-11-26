@@ -95,6 +95,39 @@ describe('FeishuBotApi', () => {
         expect(calls.some((call) => call.url.includes('/im/v1/chats?'))).toBe(true)
     })
 
+    it('uploads a file and sends a file message', async () => {
+        const { fetchImpl, calls } = fakeFetch((url) => {
+            if (url.includes('tenant_access_token')) {
+                return jsonResponse({ code: 0, tenant_access_token: 't', expire: 7200 })
+            }
+            if (url.includes('/im/v1/files')) {
+                return jsonResponse({ code: 0, data: { file_key: 'file_1' } })
+            }
+            return jsonResponse({ code: 0, data: { message_id: 'om_file', chat_id: null } })
+        })
+        const api = new FeishuBotApi({ appId: 'app', appSecret: 'secret' }, fetchImpl)
+
+        const uploaded = await api.uploadFile({
+            fileName: 'report.zip',
+            data: new Uint8Array([1, 2, 3])
+        })
+        expect(uploaded).toEqual({ fileKey: 'file_1' })
+
+        const sent = await api.sendFile({
+            receiveIdType: 'open_id',
+            receiveId: 'ou_x',
+            fileKey: 'file_1'
+        })
+        expect(sent).toEqual({ messageId: 'om_file', chatId: null })
+
+        const uploadCall = calls.find((call) => call.url.includes('/im/v1/files'))
+        expect(uploadCall?.init?.body).toBeInstanceOf(FormData)
+        const sendCall = calls.find((call) => call.url.includes('/im/v1/messages'))
+        const body = JSON.parse(String(sendCall?.init?.body)) as Record<string, unknown>
+        expect(body.msg_type).toBe('file')
+        expect(JSON.parse(String(body.content))).toEqual({ file_key: 'file_1' })
+    })
+
     it('surfaces Feishu error codes', async () => {
         const { fetchImpl } = fakeFetch((url) => {
             if (url.includes('tenant_access_token')) {

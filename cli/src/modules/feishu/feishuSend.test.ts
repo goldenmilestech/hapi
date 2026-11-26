@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
     FeishuSendClientError,
     createFeishuSend,
     formatFeishuReceipt,
-    formatFeishuSendOutcome
+    formatFeishuSendOutcome,
+    readFeishuFile,
+    uploadFeishuFile
 } from './feishuSend'
 
 function fakeHttp(requestResponse: { status: number; data: unknown }) {
@@ -65,6 +70,42 @@ describe('Feishu send CLI client', () => {
             code: 'no_sender',
             message: '没有发送人'
         } satisfies Partial<FeishuSendClientError>)
+    })
+
+    it('reads a local file and uploads it to the hub', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'hapi-feishu-'))
+        try {
+            const filePath = join(dir, 'report.zip')
+            await writeFile(filePath, new Uint8Array([1, 2, 3]))
+            const file = await readFeishuFile(filePath)
+            expect(file.fileName).toBe('report.zip')
+            expect(file.size).toBe(3)
+
+            const http = fakeHttp({
+                status: 200,
+                data: { fileKey: 'file_1', fileName: 'report.zip', size: 3 }
+            })
+            const uploaded = await uploadFeishuFile({
+                sessionId: 'session-1',
+                fileName: file.fileName,
+                data: file.data,
+                apiUrl: 'http://hub.local',
+                accessToken: 'token',
+                http: http as never
+            })
+            expect(uploaded).toEqual({
+                fileKey: 'file_1',
+                fileName: 'report.zip',
+                size: 3
+            })
+            expect(http.request).toHaveBeenCalledWith(expect.objectContaining({
+                method: 'post',
+                url: 'http://hub.local/api/sessions/session-1/feishu/files',
+                data: expect.any(FormData)
+            }))
+        } finally {
+            await rm(dir, { recursive: true, force: true })
+        }
     })
 
     it('formats receipts and terminal outcomes', () => {

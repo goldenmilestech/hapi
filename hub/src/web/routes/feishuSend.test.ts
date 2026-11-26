@@ -9,11 +9,19 @@ import { createFeishuSendRoutes } from './feishuSend'
 import { createPermissionsRoutes } from './permissions'
 
 const sent: Array<{ receiveIdType: string; receiveId: string; text: string }> = []
+const sentFiles: Array<{ receiveIdType: string; receiveId: string; fileKey: string }> = []
 
 const api: FeishuSendApi = {
     async sendText(input) {
         sent.push(input)
         return { messageId: `om_${sent.length}`, chatId: null }
+    },
+    async uploadFile(input) {
+        return { fileKey: `file_${input.fileName}` }
+    },
+    async sendFile(input) {
+        sentFiles.push(input)
+        return { messageId: `om_file_${sentFiles.length}`, chatId: null }
     },
     async getUser(openId) {
         return {
@@ -99,6 +107,25 @@ beforeAll(async () => {
 })
 
 describe('Feishu send routes', () => {
+    it('uploads a file through the hub and returns its file_key', async () => {
+        const { app } = createApp()
+        const form = new FormData()
+        form.set('file', new File([new Uint8Array([1, 2, 3])], 'report.zip', {
+            type: 'application/zip'
+        }))
+
+        const response = await app.request('/api/sessions/session-1/feishu/files', {
+            method: 'POST',
+            body: form
+        })
+        expect(response.status).toBe(200)
+        expect(await response.json()).toMatchObject({
+            fileKey: 'file_report.zip',
+            fileName: 'report.zip',
+            size: 3
+        })
+    })
+
     it('creates an approval and sends it when the permission endpoint is approved', async () => {
         sent.length = 0
         const { app, session } = createApp()
