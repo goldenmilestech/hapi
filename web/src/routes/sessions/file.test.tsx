@@ -7,9 +7,11 @@ import { encodeBase64 } from '@/lib/utils'
 import FilePage from './file'
 
 const goBackMock = vi.fn()
+const navigateMock = vi.hoisted(() => vi.fn())
 const copyMock = vi.hoisted(() => vi.fn())
 const getGitDiffFileMock = vi.hoisted(() => vi.fn())
 const readSessionFileMock = vi.hoisted(() => vi.fn())
+const searchSessionFilesMock = vi.hoisted(() => vi.fn())
 
 const sampleMarkdown = '# Heading\n\n| Col A | Col B |\n| --- | --- |\n| one | two |'
 const filePath = 'docs/README.md'
@@ -24,6 +26,7 @@ vi.mock('@tanstack/react-router', () => ({
         path: encodedPath,
         staged: undefined,
     }),
+    useNavigate: () => navigateMock,
 }))
 
 vi.mock('@/lib/app-context', () => ({
@@ -31,6 +34,7 @@ vi.mock('@/lib/app-context', () => ({
         api: {
             getGitDiffFile: getGitDiffFileMock,
             readSessionFile: readSessionFileMock,
+            searchSessionFiles: searchSessionFilesMock,
         },
     }),
 }))
@@ -82,6 +86,8 @@ describe('FilePage markdown preview', () => {
             size: fileSize,
             modified: fileModified,
         })
+        searchSessionFilesMock.mockReset()
+        searchSessionFilesMock.mockResolvedValue({ success: true, files: [] })
         window.localStorage.clear()
         window.sessionStorage.clear()
     })
@@ -187,5 +193,103 @@ describe('FilePage markdown preview', () => {
         })
         const secondScrollRegion = document.querySelector('[data-hapi-file-scroll="true"]') as HTMLElement
         expect(secondScrollRegion.scrollTop).toBe(123)
+    })
+})
+
+describe('FilePage missing file fallback', () => {
+    const missingError = "ENOENT: no such file or directory, realpath '/Users/ada/repo/docs/README.md'"
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+        getGitDiffFileMock.mockResolvedValue({ success: true, stdout: '' })
+        readSessionFileMock.mockResolvedValue({ success: false, error: missingError })
+        searchSessionFilesMock.mockReset()
+        searchSessionFilesMock.mockResolvedValue({ success: true, files: [] })
+        window.localStorage.clear()
+        window.sessionStorage.clear()
+    })
+
+    it('opens the only same-name file automatically', async () => {
+        searchSessionFilesMock.mockResolvedValue({
+            success: true,
+            files: [
+                {
+                    fileName: 'README.md',
+                    filePath: 'packages/app/docs',
+                    fullPath: 'packages/app/docs/README.md',
+                    fileType: 'file',
+                    modified: 300,
+                },
+            ],
+        })
+
+        renderWithProviders()
+
+        await waitFor(() => {
+            expect(navigateMock).toHaveBeenCalledWith({
+                to: '/sessions/$sessionId/file',
+                params: { sessionId: 'session-1' },
+                search: { path: encodeBase64('packages/app/docs/README.md') },
+                replace: true,
+            })
+        })
+    })
+
+    it('lists several same-name files by modified time and opens the selected one', async () => {
+        searchSessionFilesMock.mockResolvedValue({
+            success: true,
+            files: [
+                {
+                    fileName: 'README.md',
+                    filePath: 'docs/old',
+                    fullPath: 'docs/old/README.md',
+                    fileType: 'file',
+                    modified: 100,
+                },
+                {
+                    fileName: 'README.md',
+                    filePath: 'docs/new',
+                    fullPath: 'docs/new/README.md',
+                    fileType: 'file',
+                    modified: 500,
+                },
+                {
+                    fileName: 'GUIDE.md',
+                    filePath: 'docs',
+                    fullPath: 'docs/GUIDE.md',
+                    fileType: 'file',
+                    modified: 900,
+                },
+            ],
+        })
+
+        const { container } = renderWithProviders()
+
+        await waitFor(() => {
+            const candidates = Array.from(container.querySelectorAll('[data-hapi-file-candidate]'))
+            expect(candidates.map((element) => element.getAttribute('data-hapi-file-candidate'))).toEqual([
+                'docs/new/README.md',
+                'docs/old/README.md',
+            ])
+        })
+        expect(screen.getByText('File not found: docs/README.md')).toBeInTheDocument()
+        expect(screen.getByText('Same-name files in this workspace (2):')).toBeInTheDocument()
+        expect(navigateMock).not.toHaveBeenCalled()
+
+        fireEvent.click(container.querySelector('[data-hapi-file-candidate="docs/new/README.md"]') as HTMLElement)
+
+        expect(navigateMock).toHaveBeenCalledWith({
+            to: '/sessions/$sessionId/file',
+            params: { sessionId: 'session-1' },
+            search: { path: encodeBase64('docs/new/README.md') },
+        })
+    })
+
+    it('keeps the read error when the workspace has no same-name file', async () => {
+        renderWithProviders()
+
+        await screen.findByText('No same-name files found in this workspace.')
+        expect(screen.getByText(/Failed to read file/)).toBeInTheDocument()
+        expect(navigateMock).not.toHaveBeenCalled()
     })
 })

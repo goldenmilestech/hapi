@@ -175,6 +175,7 @@ git push fork main
 
 | `feat/sticky-prompt-bar`（2026-11-19） | 会话提问吸顶条：提问滚出视口顶部后，消息区顶部显示全宽条（提问原文、会话内序号、时间、定位/上一条/下一条按钮）；点击提问或定位按钮回到原消息并用既有 pending-target 动画高亮；上/下一条、定位和大纲跳转都把提问气泡落在吸顶条下方（`getStickyRevealDelta`，条高 + 间距 - 4px 重叠）；当前提问仍可见时条改为显示**上一条**消息（`stepItem`/`stepPosition` 与显示项分离，上一条箭头正好落到条上显示的那条，下一条箭头进到下一轮）；连续点击从本次跳转目标续跳；目标未加载时按页生长窗口再按距离缓动滚动（`animateStickyScroll`）；加载窗口从某条回答中间开始时，条显示窗口前一条提问，可用定位或上一条加载；大纲面板或搜索跳转占顶时让位 | `web/src/components/AssistantChat/StickyPromptBar.tsx`、`StickyPromptBar.test.ts`、`StickyPromptBar.test.tsx`、`web/src/components/AssistantChat/HappyThread.tsx`、`HappyThread.test.tsx`、`web/src/index.css`、`web/src/lib/locales/` |
 | `fix/history-window-forward`（2026-11-19） | 历史上下文窗口的前向阅读：底部常驻「加载后续消息」按钮，滚到窗口底部继续下滑（滚轮/上滑触摸）也会触发下一页；前向加载期间顶部不再显示「加载中」，改在底部显示；窗口外的新消息不再直接拼接到历史窗口尾部（`ingestIncomingMessages` 按 `contextNewest` 过滤），由前向分页按顺序加载 | `web/src/lib/message-window-store.ts`、`message-window-store.test.ts`、`web/src/components/AssistantChat/HappyThread.tsx`、`web/src/lib/locales/` |
+| `fix/session-file-name-fallback`（2026-11-27） | 裸文件名文件链接兜底：聊天里自动链接的 `proposal.md` 等裸名字按工作区根目录解析，文件实际在子目录时读取报 ENOENT；文件页现在按同名在工作区搜索，唯一命中自动打开，多个命中按最近修改列出候选，绝对路径不自动跳转只列候选，搜索失败或找不到时保留原错误 | `web/src/routes/sessions/file.tsx`、`web/src/components/FileFallbackCandidates.tsx`、`web/src/lib/file-name-fallback.ts`、`web/src/lib/locales/` |
 
 新增定制时在合并进 `main` 的同一个提交里更新此表，上游同步时按表逐项验证。
 
@@ -195,3 +196,4 @@ git push fork main
 - 2026-11-23：吸顶条定位/大纲跳转改为落在条下方（`getStickyRevealDelta` = 条高 40 + 间距 12），提问气泡与定位高亮不再藏在吸顶条后面；上/下一条与定位改为自绘的按距离缓动滚动（`getStickyScrollDuration`，260ms–2400ms，`animateStickyScroll`），不再使用原生 smooth（远距离被压成几百毫秒、观感像瞬移），也不会被加载/前插产生的额外 `scrollend` 或 resize recenter 提前 instant settle；`prefers-reduced-motion` 时直接落地。
 - 2026-11-23：吸顶条上/下一条也改为把提问气泡落在条下方；落点再上移 4px（`STICKY_REVEAL_OVERLAP_PX`），避免刚好落在阅读线上时因亚像素舍入被判定为 above-first、条回退到上一回合；缓动放慢到 0.6ms/px、上限 4.5s，前插页面时保留 `historyAnchorRef` 让行锚点修正在加载期间保持阅读位置。
 - 2026-11-23：吸顶条改为「当前提问可见时展示上一条消息」：`resolvePinnedPrompt` 的 visible 状态不再隐藏条，而是显示当前回合的前一条（去掉此前的 `heldItem`）；条内部把显示项（`item`/`position`）与步进基准（`stepItem`/`stepPosition`）分开，上一条箭头落到条上显示的那条、下一条进到下一轮；第一条提问自身可见时没有上一条，条隐藏。
+- 2026-11-27：裸文件名文件链接兜底（`fix/session-file-name-fallback`）：聊天自动链接把 `proposal.md` 这类裸名字按工作区根目录解析，文件在子目录时 runner `realpath` 抛 ENOENT；文件页在 ENOENT 时用既有 `/sessions/:id/files?query=<basename>` 搜索同名文件，唯一命中自动 `replace` 打开，多个命中按修改时间列出候选，绝对路径只列候选不自动跳转；搜索失败或没有同名文件时保留原错误。纯 web 改动，不改 hub/CLI 协议。

@@ -626,6 +626,11 @@ export default {
   'file.error.readFailedWithDetail': 'Не удалось прочитать файл: {error}',
   'file.error.diffUnavailable': 'Изменения недоступны.',
   'file.error.diffUnavailableWithDetail': 'Изменения недоступны: {error}',
+  'file.fallback.notFound': 'Файл не найден: {path}',
+  'file.fallback.matches': 'Файлы с тем же именем в рабочей области ({count}):',
+  'file.fallback.searching': 'Поиск файлов с тем же именем в рабочей области…',
+  'file.fallback.noMatches': 'В рабочей области не найдено файлов с тем же именем.',
+  'file.fallback.searchUnavailable': 'Не удалось выполнить поиск файлов с тем же именем в рабочей области.',
 
   // Встроенные медиа
   'media.displayed.image': 'Показано изображение',
