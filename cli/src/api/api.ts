@@ -159,6 +159,7 @@ export class ApiClient {
             modelReasoningEffort: raw.modelReasoningEffort,
             effort: raw.effort,
             serviceTier: raw.serviceTier,
+            contextLimit: raw.contextLimit ?? null,
             permissionMode: raw.permissionMode,
             collaborationMode: raw.collaborationMode
         }
@@ -216,6 +217,7 @@ export class ApiClient {
             modelReasoningEffort: raw.modelReasoningEffort,
             effort: raw.effort,
             serviceTier: raw.serviceTier,
+            contextLimit: raw.contextLimit ?? null,
             permissionMode: raw.permissionMode,
             collaborationMode: raw.collaborationMode
         }
