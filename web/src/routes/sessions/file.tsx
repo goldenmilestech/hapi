@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useParams, useSearch } from '@tanstack/react-router'
+import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import type { GitCommandResponse } from '@/types/api'
 import { FileIcon } from '@/components/FileIcon'
 import { CopyIcon, CheckIcon, WrapIcon } from '@/components/icons'
@@ -11,9 +11,17 @@ import { formatDiffError, formatReadFileError } from '@/lib/files-i18n'
 import { queryKeys } from '@/lib/query-keys'
 import { langAlias, useShikiHighlighter } from '@/lib/shiki'
 import { useTranslation } from '@/lib/use-translation'
-import { decodeBase64 } from '@/lib/utils'
+import { decodeBase64, encodeBase64 } from '@/lib/utils'
 import { ImagePreview } from '@/components/ImagePreview'
+import { FileFallbackCandidates } from '@/components/FileFallbackCandidates'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
+import { useSessionFileSearch } from '@/hooks/queries/useSessionFileSearch'
+import {
+    fileNameOf,
+    isAbsoluteFilePath,
+    isMissingFileError,
+    rankFileNameCandidates,
+} from '@/lib/file-name-fallback'
 import { ExpandableErrorMessage } from '@/components/ExpandableErrorMessage'
 import { formatFileMetadata } from '@/lib/file-metadata'
 import {
@@ -221,6 +229,7 @@ export default function FilePage() {
     const goBack = useAppGoBack()
     const { sessionId } = useParams({ from: '/sessions/$sessionId/file' })
     const search = useSearch({ from: '/sessions/$sessionId/file' })
+    const navigate = useNavigate()
     const { session } = useSession(api, sessionId)
     const encodedPath = typeof search.path === 'string' ? search.path : ''
     const staged = search.staged
@@ -262,6 +271,60 @@ export default function FilePage() {
     const diffFailed = diffQuery.data?.success === false
 
     const fileContentResult = fileQuery.data
+    const fileError = fileContentResult && !fileContentResult.success
+        ? (fileContentResult.error ?? 'Failed to read file')
+        : null
+    const missingFileError = isMissingFileError(fileError)
+    // Bare names autolinked from chat (`proposal.md`) resolve against the
+    // workspace root; recover by offering same-name files from the workspace.
+    const fallbackFileName = useMemo(() => fileNameOf(filePath), [filePath])
+    const fallbackSearch = useSessionFileSearch(api, sessionId, fallbackFileName, {
+        limit: 500,
+        enabled: Boolean(api && sessionId && filePath && missingFileError)
+    })
+    const fallbackCandidates = useMemo(
+        () => (missingFileError
+            ? rankFileNameCandidates(fallbackSearch.files, filePath)
+                .filter((entry) => entry.fullPath !== filePath)
+            : []),
+        [fallbackSearch.files, filePath, missingFileError]
+    )
+    const fallbackRouteSearch = useMemo(
+        () => ({
+            ...(search.origin ? { origin: search.origin } : {}),
+            ...(search.tab ? { tab: search.tab } : {}),
+            ...(search.query ? { query: search.query } : {})
+        }),
+        [search.origin, search.query, search.tab]
+    )
+    const fallbackAutoOpenedRef = useRef<string | null>(null)
+    const fallbackAutoOpenPath = missingFileError
+        && !isAbsoluteFilePath(filePath)
+        && fallbackCandidates.length === 1
+        && fallbackCandidates[0]!.fullPath !== filePath
+        ? fallbackCandidates[0]!.fullPath
+        : null
+
+    useEffect(() => {
+        if (!fallbackAutoOpenPath) return
+        const guardKey = `${sessionId}:${filePath}:${fallbackAutoOpenPath}`
+        if (fallbackAutoOpenedRef.current === guardKey) return
+        fallbackAutoOpenedRef.current = guardKey
+        void navigate({
+            to: '/sessions/$sessionId/file',
+            params: { sessionId },
+            search: { ...fallbackRouteSearch, path: encodeBase64(fallbackAutoOpenPath) },
+            replace: true
+        })
+    }, [fallbackAutoOpenPath, fallbackRouteSearch, filePath, navigate, sessionId])
+
+    const openFallbackCandidate = useCallback((candidatePath: string) => {
+        void navigate({
+            to: '/sessions/$sessionId/file',
+            params: { sessionId },
+            search: { ...fallbackRouteSearch, path: encodeBase64(candidatePath) }
+        })
+    }, [fallbackRouteSearch, navigate, sessionId])
     const decodedContentResult = fileContentResult?.success && fileContentResult.content
         ? decodeBase64(fileContentResult.content)
         : { text: '', ok: true }
@@ -387,9 +450,6 @@ export default function FilePage() {
     }, [diffSuccess, diffFailed, diffContent, imageMimeType])
 
     const loading = diffQuery.isLoading || fileQuery.isLoading
-    const fileError = fileContentResult && !fileContentResult.success
-        ? (fileContentResult.error ?? 'Failed to read file')
-        : null
     const missingPath = !filePath
     const diffErrorMessage = diffError ? formatDiffError(diffError, t) : null
     const fileErrorMessage = fileError ? formatReadFileError(fileError, t) : null
@@ -497,12 +557,32 @@ export default function FilePage() {
                     ) : loading ? (
                         <FileContentSkeleton label={t('loading.file')} />
                     ) : fileErrorMessage ? (
-                        <ExpandableErrorMessage
-                            message={fileErrorMessage}
-                            expandLabel={t('file.page.expandError')}
-                            collapseLabel={t('file.page.collapseError')}
-                            className="text-sm text-[var(--app-hint)]"
-                        />
+                        missingFileError ? (
+                            <div className="space-y-3">
+                                <FileFallbackCandidates
+                                    requestedPath={filePath}
+                                    candidates={fallbackCandidates}
+                                    isSearching={fallbackSearch.isLoading}
+                                    searchError={fallbackSearch.error}
+                                    onSelect={openFallbackCandidate}
+                                />
+                                {fallbackCandidates.length === 0 && !fallbackSearch.isLoading ? (
+                                    <ExpandableErrorMessage
+                                        message={fileErrorMessage}
+                                        expandLabel={t('file.page.expandError')}
+                                        collapseLabel={t('file.page.collapseError')}
+                                        className="text-sm text-[var(--app-hint)]"
+                                    />
+                                ) : null}
+                            </div>
+                        ) : (
+                            <ExpandableErrorMessage
+                                message={fileErrorMessage}
+                                expandLabel={t('file.page.expandError')}
+                                collapseLabel={t('file.page.collapseError')}
+                                className="text-sm text-[var(--app-hint)]"
+                            />
+                        )
                     ) : displayMode === 'diff' && diffContent ? (
                         <DiffDisplay diffContent={diffContent} />
                     ) : displayMode === 'diff' && diffError ? null

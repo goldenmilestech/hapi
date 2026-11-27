@@ -733,6 +733,11 @@ export default {
   'file.error.readFailedWithDetail': '读取文件失败：{error}',
   'file.error.diffUnavailable': 'Diff 不可用。',
   'file.error.diffUnavailableWithDetail': 'Diff 不可用：{error}',
+  'file.fallback.notFound': '未找到文件：{path}',
+  'file.fallback.matches': '工作区中的同名文件（{count} 个）：',
+  'file.fallback.searching': '正在工作区中查找同名文件…',
+  'file.fallback.noMatches': '工作区中没有找到同名文件。',
+  'file.fallback.searchUnavailable': '无法在工作区中搜索同名文件。',
 
   // 内联媒体
   'media.displayed.image': '展示图片',
