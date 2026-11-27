@@ -27,6 +27,17 @@ function normalizePath(path: string): string {
     return path.trim().replace(/\\/g, '/').replace(/^\.\//, '')
 }
 
+/** Normalize the requested path, stripping the workspace root when absolute. */
+function normalizeRequestedPath(path: string, workspacePath: string | null | undefined): string {
+    const normalized = normalizePath(path)
+    if (!workspacePath || !isAbsoluteFilePath(normalized)) return normalized
+    const root = normalizePath(workspacePath).replace(/\/+$/, '')
+    if (root && normalized.startsWith(`${root}/`)) {
+        return normalized.slice(root.length + 1)
+    }
+    return normalized
+}
+
 /**
  * Number of trailing path segments shared with the requested path. A bare
  * requested name scores 0; `docs/README.md` prefers `.../docs/README.md` over
@@ -54,14 +65,31 @@ function trailingSegmentMatchLength(candidatePath: string, requestedPath: string
  * Keep files whose basename matches the requested name and rank them so the
  * most likely target comes first: exact case, then deepest shared directory
  * suffix, then most recently modified, then path order.
+ *
+ * When the requested path includes directories, candidates must also contain
+ * that whole request path; otherwise a bare same-name filter surfaces hundreds
+ * of unrelated `spec.md` files. No containment match means no suggestion.
  */
 export function rankFileNameCandidates(
     files: readonly FileSearchItem[],
-    requestedPath: string
+    requestedPath: string,
+    options: { workspacePath?: string | null } = {}
 ): FileSearchItem[] {
     const requestedName = fileNameOf(requestedPath)
     if (!requestedName) return []
     const requestedNameLower = requestedName.toLowerCase()
+    const requested = normalizeRequestedPath(requestedPath, options.workspacePath)
+    const requestedHasDirectory = !isAbsoluteFilePath(requested) && requested.includes('/')
+    const requestedLower = requested.toLowerCase()
+
+    const byName = (file: FileSearchItem): boolean => {
+        const candidateName = fileNameOf(file.fullPath)
+        return candidateName === requestedName || candidateName.toLowerCase() === requestedNameLower
+    }
+    const containsRequest = (file: FileSearchItem, lower: boolean): boolean => {
+        const candidate = normalizePath(file.fullPath)
+        return (lower ? candidate.toLowerCase() : candidate).includes(lower ? requestedLower : requested)
+    }
 
     const seen = new Set<string>()
     const ranked: Array<{
@@ -74,18 +102,35 @@ export function rankFileNameCandidates(
     for (const file of files) {
         if (!file || file.fileType !== 'file' || !file.fullPath) continue
         if (seen.has(file.fullPath)) continue
-        const candidateName = fileNameOf(file.fullPath)
-        const exactCase = candidateName === requestedName
-        if (!exactCase && candidateName.toLowerCase() !== requestedNameLower) continue
+        if (!byName(file)) continue
+        if (requestedHasDirectory && !containsRequest(file, false)) continue
         seen.add(file.fullPath)
         ranked.push({
             item: file,
-            exactCase: exactCase ? 1 : 0,
-            suffix: trailingSegmentMatchLength(file.fullPath, requestedPath),
+            exactCase: fileNameOf(file.fullPath) === requestedName ? 1 : 0,
+            suffix: trailingSegmentMatchLength(file.fullPath, requested),
             modified: typeof file.modified === 'number' && Number.isFinite(file.modified)
                 ? file.modified
                 : 0
         })
+    }
+
+    // Filesystems can differ by case; retry containment case-insensitively when
+    // the exact spelling found nothing.
+    if (requestedHasDirectory && ranked.length === 0) {
+        for (const file of files) {
+            if (!file || file.fileType !== 'file' || !file.fullPath) continue
+            if (seen.has(file.fullPath) || !byName(file) || !containsRequest(file, true)) continue
+            seen.add(file.fullPath)
+            ranked.push({
+                item: file,
+                exactCase: fileNameOf(file.fullPath) === requestedName ? 1 : 0,
+                suffix: trailingSegmentMatchLength(file.fullPath, requested),
+                modified: typeof file.modified === 'number' && Number.isFinite(file.modified)
+                    ? file.modified
+                    : 0
+            })
+        }
     }
 
     ranked.sort((a, b) => {

@@ -235,28 +235,28 @@ describe('FilePage missing file fallback', () => {
         })
     })
 
-    it('lists several same-name files by modified time and opens the selected one', async () => {
+    it('lists several matching files by modified time and opens the selected one', async () => {
         searchSessionFilesMock.mockResolvedValue({
             success: true,
             files: [
                 {
                     fileName: 'README.md',
-                    filePath: 'docs/old',
-                    fullPath: 'docs/old/README.md',
+                    filePath: 'apps/docs',
+                    fullPath: 'apps/docs/README.md',
                     fileType: 'file',
                     modified: 100,
                 },
                 {
                     fileName: 'README.md',
-                    filePath: 'docs/new',
-                    fullPath: 'docs/new/README.md',
+                    filePath: 'packages/docs',
+                    fullPath: 'packages/docs/README.md',
                     fileType: 'file',
                     modified: 500,
                 },
                 {
-                    fileName: 'GUIDE.md',
-                    filePath: 'docs',
-                    fullPath: 'docs/GUIDE.md',
+                    fileName: 'README.md',
+                    filePath: 'apps/other',
+                    fullPath: 'apps/other/README.md',
                     fileType: 'file',
                     modified: 900,
                 },
@@ -268,27 +268,27 @@ describe('FilePage missing file fallback', () => {
         await waitFor(() => {
             const candidates = Array.from(container.querySelectorAll('[data-hapi-file-candidate]'))
             expect(candidates.map((element) => element.getAttribute('data-hapi-file-candidate'))).toEqual([
-                'docs/new/README.md',
-                'docs/old/README.md',
+                'packages/docs/README.md',
+                'apps/docs/README.md',
             ])
         })
         expect(screen.getByText('File not found: docs/README.md')).toBeInTheDocument()
-        expect(screen.getByText('Same-name files in this workspace (2):')).toBeInTheDocument()
+        expect(screen.getByText('Matching files in this workspace (2):')).toBeInTheDocument()
         expect(navigateMock).not.toHaveBeenCalled()
 
-        fireEvent.click(container.querySelector('[data-hapi-file-candidate="docs/new/README.md"]') as HTMLElement)
+        fireEvent.click(container.querySelector('[data-hapi-file-candidate="packages/docs/README.md"]') as HTMLElement)
 
         expect(navigateMock).toHaveBeenCalledWith({
             to: '/sessions/$sessionId/file',
             params: { sessionId: 'session-1' },
-            search: { path: encodeBase64('docs/new/README.md') },
+            search: { path: encodeBase64('packages/docs/README.md') },
         })
     })
 
-    it('keeps the read error when the workspace has no same-name file', async () => {
+    it('keeps the read error when the workspace has no matching file', async () => {
         renderWithProviders()
 
-        await screen.findByText('No same-name files found in this workspace.')
+        await screen.findByText('No matching files found in this workspace.')
         expect(screen.getByText(/Failed to read file/)).toBeInTheDocument()
         expect(navigateMock).not.toHaveBeenCalled()
     })
