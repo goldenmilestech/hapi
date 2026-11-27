@@ -65,7 +65,7 @@ describe('rankFileNameCandidates', () => {
         expect(ranked.map((entry) => entry.fullPath)).toEqual(['docs/proposal.md'])
     })
 
-    it('prefers candidates sharing the longest trailing directory suffix', () => {
+    it('keeps only candidates containing a directory-qualified request', () => {
         const ranked = rankFileNameCandidates([
             file('other/docs/README.md', 1),
             file('docs/README.md', 2),
@@ -75,7 +75,38 @@ describe('rankFileNameCandidates', () => {
         expect(ranked.map((entry) => entry.fullPath)).toEqual([
             'docs/README.md',
             'other/docs/README.md',
-            'other/README.md',
+        ])
+    })
+
+    it('drops unrelated same-name files for a specific directory request', () => {
+        const ranked = rankFileNameCandidates([
+            file('openspec/changes/work-item-state-change-status-update/specs/work-item-state-change-status-update/spec.md', 1),
+            file('openspec/changes/work-item-burndown/specs/work-item-burndown/spec.md', 2),
+            file('openspec/specs/workload-distribution-analysis/spec.md', 3),
+        ], 'specs/work-item-state-change-status-update/spec.md')
+
+        expect(ranked.map((entry) => entry.fullPath)).toEqual([
+            'openspec/changes/work-item-state-change-status-update/specs/work-item-state-change-status-update/spec.md',
+        ])
+    })
+
+    it('returns nothing when no same-name file contains the directory request', () => {
+        expect(rankFileNameCandidates([
+            file('openspec/changes/foo/specs/bar/spec.md', 1),
+        ], 'specs/missing/spec.md')).toEqual([])
+    })
+
+    it('strips the workspace root from an absolute request before matching', () => {
+        const ranked = rankFileNameCandidates([
+            file('openspec/changes/foo/specs/bar/spec.md', 1),
+            file('openspec/changes/baz/specs/bar/spec.md', 2),
+        ], '/Users/ada/repo/plane/specs/bar/spec.md', {
+            workspacePath: '/Users/ada/repo/plane',
+        })
+
+        expect(ranked.map((entry) => entry.fullPath)).toEqual([
+            'openspec/changes/baz/specs/bar/spec.md',
+            'openspec/changes/foo/specs/bar/spec.md',
         ])
     })
 

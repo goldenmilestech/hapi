@@ -736,9 +736,9 @@ export default {
   'file.error.diffUnavailable': 'Diff unavailable.',
   'file.error.diffUnavailableWithDetail': 'Diff unavailable: {error}',
   'file.fallback.notFound': 'File not found: {path}',
-  'file.fallback.matches': 'Same-name files in this workspace ({count}):',
+  'file.fallback.matches': 'Matching files in this workspace ({count}):',
   'file.fallback.searching': 'Searching the workspace for files with the same name…',
-  'file.fallback.noMatches': 'No same-name files found in this workspace.',
+  'file.fallback.noMatches': 'No matching files found in this workspace.',
   'file.fallback.searchUnavailable': 'Could not search the workspace for same-name files.',
 
   // Inline media

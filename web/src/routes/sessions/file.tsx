@@ -231,6 +231,7 @@ export default function FilePage() {
     const search = useSearch({ from: '/sessions/$sessionId/file' })
     const navigate = useNavigate()
     const { session } = useSession(api, sessionId)
+    const workspacePath = session?.metadata?.path ?? null
     const encodedPath = typeof search.path === 'string' ? search.path : ''
     const staged = search.staged
     const markdownLinkSearch = useMemo(
@@ -284,10 +285,10 @@ export default function FilePage() {
     })
     const fallbackCandidates = useMemo(
         () => (missingFileError
-            ? rankFileNameCandidates(fallbackSearch.files, filePath)
+            ? rankFileNameCandidates(fallbackSearch.files, filePath, { workspacePath })
                 .filter((entry) => entry.fullPath !== filePath)
             : []),
-        [fallbackSearch.files, filePath, missingFileError]
+        [fallbackSearch.files, filePath, missingFileError, workspacePath]
     )
     const fallbackRouteSearch = useMemo(
         () => ({
